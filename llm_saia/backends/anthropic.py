@@ -35,6 +35,8 @@ class AnthropicBackend(SAIABackend):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
+        if not response.content:
+            raise ValueError("API returned empty content")
         block = response.content[0]
         if not isinstance(block, TextBlock):
             raise ValueError(f"Expected TextBlock, got {type(block)}")
@@ -110,9 +112,13 @@ def _python_type_to_json_schema(python_type: type) -> dict[str, Any]:
         return {"type": "array", "items": _python_type_to_json_schema(args[0])}
     elif origin is dict:
         return {"type": "object"}
-    else:
-        # Fallback for Any or unknown types
+    elif python_type is Any:
         return {"type": "string"}
+    else:
+        raise TypeError(
+            f"Unsupported type for JSON schema: {python_type}. "
+            "Supported types: str, int, float, bool, list[T], dict, Any."
+        )
 
 
 def _parse_tool_result(data: object, schema: type[T]) -> T:
