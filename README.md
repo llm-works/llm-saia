@@ -71,6 +71,33 @@ backend = AnthropicBackend(api_key="sk-...")
 backend = AnthropicBackend(model="claude-sonnet-4-20250514")
 ```
 
+### OpenClaw
+
+Use any LLM supported by [OpenClaw](https://openclaw.ai/) - Claude, OpenRouter, Ollama, and more.
+
+```python
+from llm_saia.backends.openclaw import OpenClawBackend
+
+# Connect to local OpenClaw gateway (default: http://127.0.0.1:18789)
+backend = OpenClawBackend()
+
+# Or specify custom gateway URL and token
+backend = OpenClawBackend(
+    gateway_url="http://192.168.1.100:18789",
+    token="your-gateway-token"
+)
+
+# Environment variables also supported:
+# OPENCLAW_GATEWAY_URL - Gateway URL
+# OPENCLAW_GATEWAY_TOKEN - Authentication token
+```
+
+Benefits of using OpenClaw:
+- **Multi-model**: Switch between Claude, Llama, Mixtral without code changes
+- **Local models**: Run entirely offline with Ollama
+- **OpenRouter**: Auto-route to most cost-effective model
+- **Unified config**: Use your existing OpenClaw setup
+
 ## Why SAIA?
 
 - **Framework-agnostic**: Switch backends without changing application code

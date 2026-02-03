@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Core types: `VerbResult`, `VerifyResult`, `Critique`, `Evidence`
 - Backend protocol: `SAIABackend` abstract base class
 - Anthropic backend with structured output via tool_use
+- OpenClaw backend for multi-model support (Claude, OpenRouter, Ollama)
 - LLM verbs:
   - `ask` - Query an artifact with a question
   - `constrain` - Parse response into structured schema
