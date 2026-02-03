@@ -2,7 +2,7 @@
 
 import dataclasses
 import types
-from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 
@@ -108,6 +108,9 @@ def python_type_to_json_schema(python_type: type) -> dict[str, Any]:
 def parse_json_to_dataclass(data: object, schema: type[T]) -> T:
     """Parse JSON data into a dataclass instance.
 
+    Extra fields in the data that are not defined in the schema are ignored.
+    This allows flexibility when LLMs return additional fields beyond the schema.
+
     Args:
         data: The JSON data (should be a dict).
         schema: The dataclass type to instantiate.
@@ -117,4 +120,8 @@ def parse_json_to_dataclass(data: object, schema: type[T]) -> T:
     """
     if not isinstance(data, dict):
         raise TypeError(f"Expected dict, got {type(data)}")
-    return schema(**data)
+    # Filter to only fields defined in the dataclass (ignore extra LLM output)
+    # Cast needed because type[T] doesn't guarantee dataclass to mypy
+    field_names = {f.name for f in dataclasses.fields(cast(type, schema))}
+    filtered_data = {k: v for k, v in data.items() if k in field_names}
+    return schema(**filtered_data)

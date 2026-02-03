@@ -169,3 +169,27 @@ class TestParseJsonToDataclass:
 
         with pytest.raises(TypeError):
             parse_json_to_dataclass({}, Required)
+
+    def test_parse_ignores_extra_fields(self) -> None:
+        """Extra fields from LLM response should be ignored, not cause errors."""
+
+        @dataclass
+        class Simple:
+            name: str
+            value: int
+
+        # Simulate LLM returning extra fields beyond the schema
+        data = {
+            "name": "test",
+            "value": 42,
+            "_note": "This is an extra field from the LLM",
+            "confidence": 0.95,
+        }
+        result = parse_json_to_dataclass(data, Simple)
+
+        assert isinstance(result, Simple)
+        assert result.name == "test"
+        assert result.value == 42
+        # Extra fields should not be present
+        assert not hasattr(result, "_note")
+        assert not hasattr(result, "confidence")
