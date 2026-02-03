@@ -51,6 +51,10 @@ class MockBackend(SAIABackend):
             return self._structured_responses[schema]
         raise ValueError(f"No mock response configured for {schema}")
 
+    async def close(self) -> None:
+        """No-op for mock backend."""
+        pass
+
 
 @pytest.fixture
 def mock_backend() -> MockBackend:

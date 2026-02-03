@@ -193,11 +193,3 @@ class OpenClawBackend(SAIABackend):
             if self._client is not None:
                 await self._client.aclose()
                 self._client = None
-
-    async def __aenter__(self) -> "OpenClawBackend":
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        """Async context manager exit."""
-        await self.close()

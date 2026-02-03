@@ -1,13 +1,17 @@
 """Backend protocol that any LLM framework must implement."""
 
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
 
 class SAIABackend(ABC):
-    """Interface that any LLM framework must implement."""
+    """Interface that any LLM framework must implement.
+
+    Backends should also implement async context manager protocol (__aenter__/__aexit__)
+    for proper resource cleanup.
+    """
 
     @abstractmethod
     async def complete(self, prompt: str) -> str:
@@ -33,3 +37,19 @@ class SAIABackend(ABC):
             An instance of the schema type populated from the LLM response.
         """
         ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close the backend and release resources.
+
+        Should be idempotent (safe to call multiple times).
+        """
+        ...
+
+    async def __aenter__(self) -> "SAIABackend":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Async context manager exit."""
+        await self.close()

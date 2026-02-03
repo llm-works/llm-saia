@@ -85,17 +85,17 @@ async def main() -> None:
         print_gateway_setup_instructions()
         sys.exit(1)
 
-    saia = SAIA(backend=backend)
-    print("Connected to OpenClaw gateway")
-    print("=" * 50)
+    async with backend:
+        saia = SAIA(backend=backend)
+        print("Connected to OpenClaw gateway")
+        print("=" * 50)
 
-    claim = "Python is slower than C for all computational tasks"
-    response = await demo_ask(saia, claim)
-    await demo_verify(saia, response)
-    await demo_critique(saia, claim)
-    await demo_decompose(saia)
+        claim = "Python is slower than C for all computational tasks"
+        response = await demo_ask(saia, claim)
+        await demo_verify(saia, response)
+        await demo_critique(saia, claim)
+        await demo_decompose(saia)
 
-    await backend.close()
     print("\n" + "=" * 50)
     print("Done!")
 

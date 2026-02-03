@@ -73,11 +73,3 @@ class AnthropicBackend(SAIABackend):
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.close()
-
-    async def __aenter__(self) -> "AnthropicBackend":
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        """Async context manager exit."""
-        await self.close()
