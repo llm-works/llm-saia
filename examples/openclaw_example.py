@@ -16,16 +16,18 @@ Usage:
 import asyncio
 import sys
 
+import httpx
+
 from llm_saia import SAIA
 from llm_saia.backends.openclaw import OpenClawBackend
 
 
-async def check_gateway(backend: OpenClawBackend) -> bool:
+async def check_gateway(gateway_url: str) -> bool:
     """Check if OpenClaw gateway is reachable."""
     try:
-        client = await backend._get_client()
-        response = await client.get("/health")
-        return response.status_code == 200
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{gateway_url}/health")
+            return response.status_code == 200
     except Exception:
         return False
 
@@ -79,9 +81,8 @@ async def main() -> None:
     """Run the OpenClaw example."""
     backend = OpenClawBackend()
 
-    if not await check_gateway(backend):
+    if not await check_gateway(backend.gateway_url):
         print_gateway_setup_instructions()
-        await backend.close()
         sys.exit(1)
 
     saia = SAIA(backend=backend)

@@ -23,6 +23,7 @@ Usage:
     result = await saia.verify("claim", "factually accurate")
 """
 
+import asyncio
 import os
 from typing import Any, TypeVar
 
@@ -72,18 +73,27 @@ class OpenClawBackend(SAIABackend):
         self._token = token or os.environ.get("OPENCLAW_GATEWAY_TOKEN")
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
+
+    @property
+    def gateway_url(self) -> str:
+        """Return the gateway URL (for health checks)."""
+        return self._gateway_url
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create the HTTP client."""
+        """Get or create the HTTP client (thread-safe)."""
         if self._client is None:
-            headers: dict[str, str] = {"Content-Type": "application/json"}
-            if self._token:
-                headers["Authorization"] = f"Bearer {self._token}"
-            self._client = httpx.AsyncClient(
-                base_url=self._gateway_url,
-                headers=headers,
-                timeout=self._timeout,
-            )
+            async with self._client_lock:
+                # Double-check inside lock to avoid race condition
+                if self._client is None:
+                    headers: dict[str, str] = {"Content-Type": "application/json"}
+                    if self._token:
+                        headers["Authorization"] = f"Bearer {self._token}"
+                    self._client = httpx.AsyncClient(
+                        base_url=self._gateway_url,
+                        headers=headers,
+                        timeout=self._timeout,
+                    )
         return self._client
 
     async def _invoke_tool(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:

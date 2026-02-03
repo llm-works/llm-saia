@@ -1,11 +1,14 @@
 """Anthropic Claude backend implementation."""
 
-import dataclasses
-from typing import Any, TypeVar, get_type_hints
+from typing import TypeVar
 
 import anthropic
 from anthropic.types import TextBlock, ToolParam, ToolUseBlock
 
+from llm_saia.backends._schema import (
+    dataclass_to_json_schema,
+    parse_json_to_dataclass,
+)
 from llm_saia.core.protocols import SAIABackend
 
 T = TypeVar("T")
@@ -44,11 +47,12 @@ class AnthropicBackend(SAIABackend):
 
     async def complete_structured(self, prompt: str, schema: type[T]) -> T:
         """LLM completion with structured output using tool_use."""
-        tool_schema = _dataclass_to_tool_schema(schema)
+        json_schema = dataclass_to_json_schema(schema)
         tool_param: ToolParam = {
-            "name": tool_schema["name"],
-            "description": tool_schema["description"],
-            "input_schema": tool_schema["input_schema"],
+            "name": json_schema["name"],
+            "description": json_schema["description"],
+            # Anthropic uses "input_schema" while our shared util uses "schema"
+            "input_schema": json_schema["schema"],
         }
 
         response = await self._client.messages.create(
@@ -56,73 +60,12 @@ class AnthropicBackend(SAIABackend):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
             tools=[tool_param],
-            tool_choice={"type": "tool", "name": tool_schema["name"]},
+            tool_choice={"type": "tool", "name": json_schema["name"]},
         )
 
         # Extract the tool use block
         for block in response.content:
             if isinstance(block, ToolUseBlock):
-                return _parse_tool_result(block.input, schema)
+                return parse_json_to_dataclass(block.input, schema)
 
         raise ValueError(f"No tool_use block in response: {response.content}")
-
-
-def _dataclass_to_tool_schema(schema: type) -> dict[str, Any]:
-    """Convert a dataclass to an Anthropic tool schema."""
-    if not dataclasses.is_dataclass(schema):
-        raise TypeError(f"Schema must be a dataclass, got {type(schema)}")
-
-    hints = get_type_hints(schema)
-    properties: dict[str, Any] = {}
-    required: list[str] = []
-
-    for field in dataclasses.fields(schema):
-        field_type = hints[field.name]
-        properties[field.name] = _python_type_to_json_schema(field_type)
-
-        # Check if field has a default
-        if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
-            required.append(field.name)
-
-    return {
-        "name": schema.__name__,
-        "description": schema.__doc__ or f"Structured output for {schema.__name__}",
-        "input_schema": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        },
-    }
-
-
-def _python_type_to_json_schema(python_type: type) -> dict[str, Any]:
-    """Convert Python type hints to JSON schema."""
-    origin = getattr(python_type, "__origin__", None)
-
-    if python_type is str:
-        return {"type": "string"}
-    elif python_type is int:
-        return {"type": "integer"}
-    elif python_type is float:
-        return {"type": "number"}
-    elif python_type is bool:
-        return {"type": "boolean"}
-    elif origin is list:
-        args = getattr(python_type, "__args__", (Any,))
-        return {"type": "array", "items": _python_type_to_json_schema(args[0])}
-    elif origin is dict:
-        return {"type": "object"}
-    elif python_type is Any:
-        return {"type": "string"}
-    else:
-        raise TypeError(
-            f"Unsupported type for JSON schema: {python_type}. "
-            "Supported types: str, int, float, bool, list[T], dict, Any."
-        )
-
-
-def _parse_tool_result(data: object, schema: type[T]) -> T:
-    """Parse tool result into dataclass instance."""
-    if not isinstance(data, dict):
-        raise TypeError(f"Expected dict, got {type(data)}")
-    return schema(**data)

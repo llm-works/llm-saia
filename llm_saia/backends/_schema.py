@@ -1,7 +1,8 @@
 """Shared schema conversion utilities for backends."""
 
 import dataclasses
-from typing import Any, TypeVar, get_type_hints
+import types
+from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 
@@ -41,30 +42,57 @@ def dataclass_to_json_schema(schema: type) -> dict[str, Any]:
     }
 
 
+def _unwrap_optional(python_type: type) -> type | None:
+    """Unwrap Optional[T] or T | None to T. Returns None if not an Optional."""
+    origin = get_origin(python_type)
+    if origin is not Union and origin is not types.UnionType:
+        return None
+
+    args = [a for a in get_args(python_type) if a is not type(None)]
+    if len(args) == 1:
+        inner_type: type = args[0]
+        return inner_type
+
+    raise TypeError(
+        f"Union types with multiple non-None types not supported: {python_type}. "
+        "Use Optional[T] for nullable fields."
+    )
+
+
+# Mapping of Python primitive types to JSON schema types
+_PRIMITIVE_TYPE_MAP: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+}
+
+
 def python_type_to_json_schema(python_type: type) -> dict[str, Any]:
     """Convert Python type hints to JSON schema."""
-    origin = getattr(python_type, "__origin__", None)
+    # Handle Optional[T] / T | None
+    unwrapped = _unwrap_optional(python_type)
+    if unwrapped is not None:
+        return python_type_to_json_schema(unwrapped)
 
-    if python_type is str:
-        return {"type": "string"}
-    elif python_type is int:
-        return {"type": "integer"}
-    elif python_type is float:
-        return {"type": "number"}
-    elif python_type is bool:
-        return {"type": "boolean"}
-    elif origin is list:
-        args = getattr(python_type, "__args__", (Any,))
+    # Handle primitives
+    if python_type in _PRIMITIVE_TYPE_MAP:
+        return {"type": _PRIMITIVE_TYPE_MAP[python_type]}
+
+    # Handle generic types
+    origin = get_origin(python_type)
+    if origin is list:
+        args = get_args(python_type) or (Any,)
         return {"type": "array", "items": python_type_to_json_schema(args[0])}
-    elif origin is dict:
+    if origin is dict:
         return {"type": "object"}
-    elif python_type is Any:
+    if python_type is Any:
         return {"type": "string"}
-    else:
-        raise TypeError(
-            f"Unsupported type for JSON schema: {python_type}. "
-            "Supported types: str, int, float, bool, list[T], dict, Any."
-        )
+
+    raise TypeError(
+        f"Unsupported type for JSON schema: {python_type}. "
+        "Supported types: str, int, float, bool, list[T], dict, Any, Optional[T]."
+    )
 
 
 def parse_json_to_dataclass(data: object, schema: type[T]) -> T:

@@ -1,7 +1,7 @@
 """Tests for shared schema conversion utilities."""
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional, Union
 
 import pytest
 
@@ -39,6 +39,27 @@ class TestPythonTypeToJsonSchema:
     def test_any(self) -> None:
         schema = python_type_to_json_schema(Any)
         assert schema["type"] == "string"
+
+    def test_optional_type(self) -> None:
+        # Optional[str] should unwrap to string
+        schema = python_type_to_json_schema(Optional[str])  # noqa: UP045 - testing Optional syntax
+        assert schema["type"] == "string"
+
+    def test_optional_list(self) -> None:
+        # Optional[list[int]] should unwrap to array of integers
+        schema = python_type_to_json_schema(Optional[list[int]])  # noqa: UP045 - testing Optional
+        assert schema["type"] == "array"
+        assert schema["items"]["type"] == "integer"
+
+    def test_union_with_none_syntax(self) -> None:
+        # str | None should behave like Optional[str]
+        schema = python_type_to_json_schema(str | None)
+        assert schema["type"] == "string"
+
+    def test_union_multiple_types_raises(self) -> None:
+        # Union[str, int] (without None) should raise
+        with pytest.raises(TypeError, match="Union types with multiple non-None"):
+            python_type_to_json_schema(Union[str, int])  # noqa: UP007 - testing Union syntax
 
     def test_unsupported_type(self) -> None:
         with pytest.raises(TypeError, match="Unsupported type"):
