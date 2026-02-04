@@ -130,8 +130,13 @@ class OpenAIBackend(SAIABackend):
 
     def _parse_response(self, data: dict[str, Any]) -> AgentResponse:
         """Parse OpenAI API response into AgentResponse."""
-        choice = data["choices"][0]
-        message = choice["message"]
+        choices = data.get("choices")
+        if not choices:
+            raise ValueError(f"API response missing 'choices': {data}")
+        choice = choices[0]
+        message = choice.get("message")
+        if not message:
+            raise ValueError(f"API response missing 'message': {choice}")
         usage = data.get("usage", {})
 
         tool_calls: list[ToolCall] = []
@@ -176,7 +181,12 @@ class OpenAIBackend(SAIABackend):
         )
         response.raise_for_status()
 
-        return self._parse_response(response.json())
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(f"API returned invalid JSON: {e}") from e
+
+        return self._parse_response(data)
 
     async def close(self) -> None:
         """Close the HTTP client."""
