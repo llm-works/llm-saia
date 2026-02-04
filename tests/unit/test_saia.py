@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from llm_saia import SAIA
-from llm_saia.core.types import Critique, VerifyResult
+from llm_saia.core.types import ChooseResult, ClassifyResult, ConfirmResult, Critique, VerifyResult
 from llm_saia.verbs.decompose import DecomposeResult
 from tests.unit.conftest import MockBackend
 
@@ -26,7 +26,7 @@ class TestSAIA:
 
         assert result == "the answer"
 
-    async def test_constrain(self, mock_backend: MockBackend) -> None:
+    async def test_parse(self, mock_backend: MockBackend) -> None:
         @dataclass
         class Output:
             data: str
@@ -34,9 +34,49 @@ class TestSAIA:
         saia = SAIA(backend=mock_backend)
         mock_backend.set_structured_response(Output, Output(data="parsed"))
 
-        result = await saia.constrain("raw", Output)
+        result = await saia.parse("raw", Output)
 
         assert result.data == "parsed"
+
+    async def test_constrain(self, mock_backend: MockBackend) -> None:
+        saia = SAIA(backend=mock_backend)
+        mock_backend.set_complete_response("constrained output")
+
+        result = await saia.constrain("text", ["rule1", "rule2"])
+
+        assert result == "constrained output"
+
+    async def test_classify(self, mock_backend: MockBackend) -> None:
+        saia = SAIA(backend=mock_backend)
+
+        result = await saia.classify("text", ["cat_a", "cat_b"])
+
+        assert isinstance(result, ClassifyResult)
+        assert result.category == "test_category"
+
+    async def test_confirm(self, mock_backend: MockBackend) -> None:
+        saia = SAIA(backend=mock_backend)
+
+        result = await saia.confirm("claim")
+
+        assert isinstance(result, ConfirmResult)
+        assert result.confirmed is True
+
+    async def test_choose(self, mock_backend: MockBackend) -> None:
+        saia = SAIA(backend=mock_backend)
+
+        result = await saia.choose(["option_a", "option_b"])
+
+        assert isinstance(result, ChooseResult)
+        assert result.choice == "option_a"
+
+    async def test_instruct(self, mock_backend: MockBackend) -> None:
+        saia = SAIA(backend=mock_backend)
+        mock_backend.set_complete_response("Done.")
+
+        result = await saia.instruct("Complete the task")
+
+        assert result == "Done."
 
     async def test_verify(self, mock_backend: MockBackend) -> None:
         saia = SAIA(backend=mock_backend)

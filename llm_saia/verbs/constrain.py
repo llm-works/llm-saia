@@ -1,28 +1,13 @@
-"""CONSTRAIN verb: Parse response into structured schema."""
+"""CONSTRAIN verb: Enforce rules and boundaries on text."""
 
-from typing import TypeVar
-
-from llm_saia.core.protocols import SAIABackend
-
-T = TypeVar("T")
+from llm_saia.core.types import LoopConfig
+from llm_saia.verbs._base import _Verb
 
 
-async def constrain(backend: SAIABackend, response: str, schema: type[T]) -> T:
-    """CONSTRAIN verb: Parse response into structured schema.
+class Constrain(_Verb):
+    """Enforce rules and boundaries on text."""
 
-    Args:
-        backend: The LLM backend to use.
-        response: The unstructured response to parse.
-        schema: A dataclass type to parse the response into.
-
-    Returns:
-        An instance of the schema type populated from the response.
-    """
-    prompt = f"""Parse the following response into the requested structured format.
-Extract the relevant information and format it according to the schema.
-
-Response to parse:
-{response}
-
-Extract and structure the information."""
-    return await backend.complete_structured(prompt, schema)
+    async def __call__(self, text: str, rules: list[str], loop: LoopConfig | None = None) -> str:
+        rules_str = "\n".join(f"- {r}" for r in rules)
+        prompt = f"Rewrite this text to comply with these rules:\n{rules_str}\n\nText:\n{text}"
+        return await self._complete(prompt, loop)

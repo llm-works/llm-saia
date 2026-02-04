@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar
 
+from llm_saia.core.types import AgentResponse, Message, ToolDef
+
 T = TypeVar("T")
 
 
@@ -43,6 +45,27 @@ class SAIABackend(ABC):
         """Close the backend and release resources.
 
         Should be idempotent (safe to call multiple times).
+        """
+        ...
+
+    @abstractmethod
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDef],
+        system: str | None = None,
+        max_tokens: int = 4096,
+    ) -> AgentResponse:
+        """LLM completion with tool calling support.
+
+        Args:
+            messages: Conversation history.
+            tools: Available tools the LLM can call.
+            system: Optional system prompt.
+            max_tokens: Maximum tokens for this call.
+
+        Returns:
+            AgentResponse with content, tool calls, and token usage.
         """
         ...
 

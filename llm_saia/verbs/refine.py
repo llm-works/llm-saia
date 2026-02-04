@@ -2,29 +2,16 @@
 
 from typing import Any
 
-from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.types import LoopConfig
+from llm_saia.verbs._base import _Verb
 
 
-async def refine(backend: SAIABackend, artifact: Any, feedback: str) -> str:
-    """REFINE verb: Improve artifact based on feedback.
+class Refine(_Verb):
+    """Improve artifact based on feedback."""
 
-    Args:
-        backend: The LLM backend to use.
-        artifact: The artifact to refine.
-        feedback: Feedback describing how to improve the artifact.
-
-    Returns:
-        The refined artifact as a string.
-    """
-    prompt = f"""Improve the following artifact based on the feedback provided.
-Make targeted improvements that address the feedback while preserving
-the artifact's core purpose and strengths.
-
-Original artifact:
-{artifact}
-
-Feedback:
-{feedback}
-
-Refined artifact:"""
-    return await backend.complete(prompt)
+    async def __call__(self, artifact: Any, feedback: str, loop: LoopConfig | None = None) -> str:
+        prompt = (
+            f"Improve this artifact based on the feedback.\n\n"
+            f"Artifact: {artifact}\n\nFeedback: {feedback}"
+        )
+        return await self._complete(prompt, loop)

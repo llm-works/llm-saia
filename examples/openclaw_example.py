@@ -4,6 +4,12 @@
 This example demonstrates using SAIA verbs through the OpenClaw gateway,
 which supports multiple LLM providers (Claude, OpenRouter, Ollama, etc.).
 
+Also demonstrates the fluent loop config API:
+- with_single_call() - single LLM call, no looping
+- with_max_iterations(n) - limit tool-calling rounds
+- with_timeout_secs(s) - set timeout
+- with_max_tokens(n) - set token budget
+
 Prerequisites:
     1. Install OpenClaw: npm install -g openclaw@latest
     2. Run onboarding: openclaw onboard
@@ -20,6 +26,7 @@ import httpx
 
 from llm_saia import SAIA
 from llm_saia.backends.openclaw import OpenClawBackend
+from llm_saia.core.types import LoopConfig
 
 
 async def check_gateway(gateway_url: str) -> bool:
@@ -51,9 +58,10 @@ async def demo_ask(saia: SAIA, claim: str) -> str:
 
 
 async def demo_verify(saia: SAIA, text: str) -> None:
-    """Demo the VERIFY verb."""
-    print("\n[VERIFY] Checking factual accuracy...")
-    result = await saia.verify(text, "factually accurate and nuanced")
+    """Demo the VERIFY verb with single-call mode."""
+    print("\n[VERIFY] Checking factual accuracy (single-call mode)...")
+    # Use with_single_call() for quick verification without tool looping
+    result = await saia.with_single_call().verify(text, "factually accurate and nuanced")
     print(f"Passed: {result.passed}")
     print(f"Reason: {result.reason}")
 
@@ -68,13 +76,25 @@ async def demo_critique(saia: SAIA, claim: str) -> None:
 
 
 async def demo_decompose(saia: SAIA) -> None:
-    """Demo the DECOMPOSE verb."""
-    print("\n[DECOMPOSE] Breaking down a task...")
+    """Demo the DECOMPOSE verb with timeout."""
+    print("\n[DECOMPOSE] Breaking down a task (with 30s timeout)...")
     task = "Build a REST API with authentication and database integration"
-    subtasks = await saia.decompose(task)
+    # Use with_timeout_secs() to limit response time
+    subtasks = await saia.with_timeout_secs(30).decompose(task)
     print("Subtasks:")
     for i, subtask in enumerate(subtasks, 1):
         print(f"  {i}. {subtask}")
+
+
+async def demo_fluent_api(saia: SAIA) -> None:
+    """Demo the fluent loop config API."""
+    print("\n[FLUENT API] Demonstrating loop config modifiers...")
+
+    print(f"\nDefault config: {saia.loop_config}")
+    print(f"Single-call config: {saia.with_single_call().loop_config}")
+    print(f"Max 10 iterations: {saia.with_max_iterations(10).loop_config}")
+    print(f"With 60s timeout: {saia.with_timeout_secs(60).loop_config}")
+    print(f"With 50k token budget: {saia.with_max_tokens(50000).loop_config}")
 
 
 async def main() -> None:
@@ -86,8 +106,14 @@ async def main() -> None:
         sys.exit(1)
 
     async with backend:
-        saia = SAIA(backend=backend)
+        # Create SAIA with custom default loop config
+        saia = SAIA(
+            backend=backend,
+            loop=LoopConfig(max_iterations=5, max_total_tokens=100000),
+        )
+
         print("Connected to OpenClaw gateway")
+        print(f"Default loop config: {saia.loop_config}")
         print("=" * 50)
 
         claim = "Python is slower than C for all computational tasks"
@@ -95,6 +121,7 @@ async def main() -> None:
         await demo_verify(saia, response)
         await demo_critique(saia, claim)
         await demo_decompose(saia)
+        await demo_fluent_api(saia)
 
     print("\n" + "=" * 50)
     print("Done!")

@@ -34,6 +34,7 @@ from llm_saia.backends._schema import (
     parse_json_to_dataclass,
 )
 from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.types import AgentResponse, Message, ToolCall, ToolDef
 
 T = TypeVar("T")
 
@@ -186,6 +187,83 @@ class OpenClawBackend(SAIABackend):
             raise ValueError(f"No JSON in OpenClaw response: {result}")
 
         return parse_json_to_dataclass(json_data, schema)
+
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDef],
+        system: str | None = None,
+        max_tokens: int = 4096,
+    ) -> AgentResponse:
+        """LLM completion with tool calling support via OpenClaw gateway."""
+        openclaw_messages = self._convert_messages(messages)
+        openclaw_tools = self._convert_tools(tools)
+
+        args: dict[str, Any] = {
+            "action": "tools",
+            "messages": openclaw_messages,
+            "tools": openclaw_tools,
+            "max_tokens": max_tokens,
+        }
+        if system:
+            args["system"] = system
+
+        result = await self._invoke_tool("llm-task", args)
+        return self._parse_tool_response(result)
+
+    def _convert_tools(self, tools: list[ToolDef]) -> list[dict[str, Any]]:
+        """Convert SAIA tools to OpenClaw format."""
+        return [
+            {"name": t.name, "description": t.description, "parameters": t.parameters}
+            for t in tools
+        ]
+
+    def _parse_tool_response(self, result: dict[str, Any]) -> AgentResponse:
+        """Parse OpenClaw response into AgentResponse."""
+        content = result.get("content") or result.get("text") or ""
+        raw_tool_calls = result.get("tool_calls") or []
+
+        tool_calls = [
+            ToolCall(
+                id=tc.get("id", ""),
+                name=tc.get("name", ""),
+                arguments=tc.get("arguments", {}),
+            )
+            for tc in raw_tool_calls
+        ]
+
+        # Extract token usage if available
+        usage = result.get("usage", {})
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+
+        return AgentResponse(
+            content=str(content),
+            tool_calls=tool_calls,
+            stop_reason=result.get("stop_reason"),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    def _convert_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
+        """Convert SAIA messages to OpenClaw message format."""
+        result: list[dict[str, Any]] = []
+
+        for msg in messages:
+            converted: dict[str, Any] = {
+                "role": msg.role,
+                "content": msg.content,
+            }
+            if msg.tool_calls:
+                converted["tool_calls"] = [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in msg.tool_calls
+                ]
+            if msg.tool_call_id:
+                converted["tool_call_id"] = msg.tool_call_id
+            result.append(converted)
+
+        return result
 
     async def close(self) -> None:
         """Close the HTTP client."""

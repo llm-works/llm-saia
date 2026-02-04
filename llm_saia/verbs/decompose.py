@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass
 
-from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.types import LoopConfig
+from llm_saia.verbs._base import _Verb
 
 
 @dataclass
@@ -12,23 +13,10 @@ class DecomposeResult:
     subtasks: list[str]
 
 
-async def decompose(backend: SAIABackend, task: str) -> list[str]:
-    """DECOMPOSE verb: Break down task into subtasks.
+class Decompose(_Verb):
+    """Break down task into subtasks."""
 
-    Args:
-        backend: The LLM backend to use.
-        task: The task description to decompose.
-
-    Returns:
-        List of subtask descriptions.
-    """
-    prompt = f"""Break down the following task into concrete, actionable subtasks.
-Each subtask should be specific and independently executable.
-Order subtasks logically (dependencies first).
-
-Task:
-{task}
-
-Provide a list of subtasks."""
-    result = await backend.complete_structured(prompt, DecomposeResult)
-    return result.subtasks
+    async def __call__(self, task: str, loop: LoopConfig | None = None) -> list[str]:
+        prompt = f"Break down this task into subtasks:\n\n{task}"
+        result = await self._complete_structured(prompt, DecomposeResult, loop)
+        return result.subtasks

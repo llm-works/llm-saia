@@ -2,28 +2,18 @@
 
 from typing import Any
 
-from llm_saia.core.protocols import SAIABackend
-from llm_saia.core.types import VerifyResult
+from llm_saia.core.types import LoopConfig, VerifyResult
+from llm_saia.verbs._base import _Verb
 
 
-async def verify(backend: SAIABackend, artifact: Any, predicate: str) -> VerifyResult:
-    """VERIFY verb: Check if artifact satisfies predicate.
+class Verify(_Verb):
+    """Check if artifact satisfies predicate."""
 
-    Args:
-        backend: The LLM backend to use.
-        artifact: The artifact to verify.
-        predicate: The condition to check (e.g., "factually accurate").
-
-    Returns:
-        VerifyResult with passed (bool) and reason (str).
-    """
-    prompt = f"""Evaluate whether this artifact satisfies the given predicate.
-Be rigorous and objective in your assessment.
-
-Artifact:
-{artifact}
-
-Predicate: {predicate}
-
-Evaluate whether the artifact satisfies the predicate."""
-    return await backend.complete_structured(prompt, VerifyResult)
+    async def __call__(
+        self, artifact: Any, predicate: str, loop: LoopConfig | None = None
+    ) -> VerifyResult:
+        prompt = (
+            f"Verify that this artifact satisfies the predicate.\n\n"
+            f"Artifact: {artifact}\n\nPredicate: {predicate}"
+        )
+        return await self._complete_structured(prompt, VerifyResult, loop)

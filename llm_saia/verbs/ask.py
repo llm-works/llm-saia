@@ -2,26 +2,13 @@
 
 from typing import Any
 
-from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.types import LoopConfig
+from llm_saia.verbs._base import _Verb
 
 
-async def ask(backend: SAIABackend, artifact: Any, question: str) -> str:
-    """ASK verb: Query an artifact with a question.
+class Ask(_Verb):
+    """Query an artifact with a question."""
 
-    Args:
-        backend: The LLM backend to use.
-        artifact: The artifact to query (will be converted to string).
-        question: The question to ask about the artifact.
-
-    Returns:
-        The LLM's response to the question.
-    """
-    prompt = f"""Given the following artifact, answer the question.
-
-Artifact:
-{artifact}
-
-Question: {question}
-
-Answer:"""
-    return await backend.complete(prompt)
+    async def __call__(self, artifact: Any, question: str, loop: LoopConfig | None = None) -> str:
+        prompt = f"Given this artifact:\n{artifact}\n\nAnswer this question: {question}"
+        return await self._complete(prompt, loop)
