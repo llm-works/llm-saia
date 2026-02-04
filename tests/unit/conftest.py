@@ -1,5 +1,7 @@
 """Pytest configuration and fixtures."""
 
+from __future__ import annotations
+
 from typing import Any, TypeVar
 
 import pytest
@@ -13,6 +15,7 @@ from llm_saia.core.types import (
     Critique,
     Evidence,
     Message,
+    RunConfig,
     ToolDef,
     VerifyResult,
 )
@@ -48,6 +51,11 @@ class MockBackend(SAIABackend):
         self._complete_response: str = "mock response"
         self._tool_responses: list[AgentResponse] = []
         self._structured_responses: dict[type, Any] = _default_structured_responses()
+        self._run: RunConfig | None = None
+
+    def set_run_config(self, run: RunConfig) -> None:
+        """Set the run configuration."""
+        self._run = run
 
     def set_complete_response(self, response: str) -> None:
         """Set the response for complete() calls."""
@@ -74,7 +82,6 @@ class MockBackend(SAIABackend):
         messages: list[Message],
         tools: list[ToolDef],
         system: str | None = None,
-        max_tokens: int = 4096,
     ) -> AgentResponse:
         """Return predetermined response with optional tool calls."""
         self.last_prompt = messages[-1].content if messages else ""

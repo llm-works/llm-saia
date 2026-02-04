@@ -1,5 +1,7 @@
 """Anthropic Claude backend implementation."""
 
+from __future__ import annotations
+
 from typing import Any, TypeVar, cast
 
 import anthropic
@@ -10,9 +12,11 @@ from llm_saia.backends._schema import (
     parse_json_to_dataclass,
 )
 from llm_saia.core.protocols import SAIABackend
-from llm_saia.core.types import AgentResponse, Message, ToolCall, ToolDef
+from llm_saia.core.types import AgentResponse, Message, RunConfig, ToolCall, ToolDef
 
 T = TypeVar("T")
+
+DEFAULT_MAX_TOKENS = 4096
 
 
 class AnthropicBackend(SAIABackend):
@@ -31,12 +35,24 @@ class AnthropicBackend(SAIABackend):
         """
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        self._run: RunConfig | None = None
+
+    @property
+    def _max_tokens(self) -> int:
+        """Get max tokens from run config or default."""
+        if self._run and self._run.max_call_tokens > 0:
+            return self._run.max_call_tokens
+        return DEFAULT_MAX_TOKENS
+
+    def set_run_config(self, run: RunConfig) -> None:
+        """Set the run configuration for token limits."""
+        self._run = run
 
     async def complete(self, prompt: str) -> str:
         """Basic LLM completion."""
         response = await self._client.messages.create(
             model=self._model,
-            max_tokens=4096,
+            max_tokens=self._max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
         if not response.content:
@@ -58,7 +74,7 @@ class AnthropicBackend(SAIABackend):
 
         response = await self._client.messages.create(
             model=self._model,
-            max_tokens=4096,
+            max_tokens=self._max_tokens,
             messages=[{"role": "user", "content": prompt}],
             tools=[tool_param],
             tool_choice={"type": "tool", "name": json_schema["name"]},
@@ -76,7 +92,6 @@ class AnthropicBackend(SAIABackend):
         messages: list[Message],
         tools: list[ToolDef],
         system: str | None = None,
-        max_tokens: int = 4096,
     ) -> AgentResponse:
         """LLM completion with tool calling support."""
         anthropic_messages = self._convert_messages(messages)
@@ -84,7 +99,7 @@ class AnthropicBackend(SAIABackend):
 
         kwargs: dict[str, Any] = {
             "model": self._model,
-            "max_tokens": max_tokens,
+            "max_tokens": self._max_tokens,
             "messages": anthropic_messages,
             "tools": tool_params,
         }

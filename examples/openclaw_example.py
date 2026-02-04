@@ -4,7 +4,7 @@
 This example demonstrates using SAIA verbs through the OpenClaw gateway,
 which supports multiple LLM providers (Claude, OpenRouter, Ollama, etc.).
 
-Also demonstrates the fluent loop config API:
+Also demonstrates the fluent run config API:
 - with_single_call() - single LLM call, no looping
 - with_max_iterations(n) - limit tool-calling rounds
 - with_timeout_secs(s) - set timeout
@@ -16,17 +16,21 @@ Prerequisites:
     3. Start gateway: openclaw gateway
 
 Usage:
-    python examples/openclaw_example.py
+    ./examples/openclaw_example.py
 """
 
 import asyncio
 import sys
+from pathlib import Path
 
 import httpx
 
+# Add project root to path for direct execution
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from llm_saia import SAIA
 from llm_saia.backends.openclaw import OpenClawBackend
-from llm_saia.core.types import LoopConfig
+from llm_saia.core.types import RunConfig
 
 
 async def check_gateway(gateway_url: str) -> bool:
@@ -87,14 +91,14 @@ async def demo_decompose(saia: SAIA) -> None:
 
 
 async def demo_fluent_api(saia: SAIA) -> None:
-    """Demo the fluent loop config API."""
-    print("\n[FLUENT API] Demonstrating loop config modifiers...")
+    """Demo the fluent run config API."""
+    print("\n[FLUENT API] Demonstrating run config modifiers...")
 
-    print(f"\nDefault config: {saia.loop_config}")
-    print(f"Single-call config: {saia.with_single_call().loop_config}")
-    print(f"Max 10 iterations: {saia.with_max_iterations(10).loop_config}")
-    print(f"With 60s timeout: {saia.with_timeout_secs(60).loop_config}")
-    print(f"With 50k token budget: {saia.with_max_tokens(50000).loop_config}")
+    print(f"\nDefault config: {saia.run_config}")
+    print(f"Single-call config: {saia.with_single_call().run_config}")
+    print(f"Max 10 iterations: {saia.with_max_iterations(10).run_config}")
+    print(f"With 60s timeout: {saia.with_timeout_secs(60).run_config}")
+    print(f"With 50k token budget: {saia.with_max_tokens(50000).run_config}")
 
 
 async def main() -> None:
@@ -106,14 +110,14 @@ async def main() -> None:
         sys.exit(1)
 
     async with backend:
-        # Create SAIA with custom default loop config
+        # Create SAIA with custom default run config
         saia = SAIA(
             backend=backend,
-            loop=LoopConfig(max_iterations=5, max_total_tokens=100000),
+            run=RunConfig(max_iterations=5, max_total_tokens=100000),
         )
 
         print("Connected to OpenClaw gateway")
-        print(f"Default loop config: {saia.loop_config}")
+        print(f"Default run config: {saia.run_config}")
         print("=" * 50)
 
         claim = "Python is slower than C for all computational tasks"

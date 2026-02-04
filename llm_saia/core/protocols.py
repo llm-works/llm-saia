@@ -1,9 +1,11 @@
 """Backend protocol that any LLM framework must implement."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar
 
-from llm_saia.core.types import AgentResponse, Message, ToolDef
+from llm_saia.core.types import AgentResponse, Message, RunConfig, ToolDef
 
 T = TypeVar("T")
 
@@ -13,6 +15,9 @@ class SAIABackend(ABC):
 
     Backends should also implement async context manager protocol (__aenter__/__aexit__)
     for proper resource cleanup.
+
+    Backends receive RunConfig in constructor and use it for token limits.
+    Use with_run_config() to create a new backend with different settings.
     """
 
     @abstractmethod
@@ -54,7 +59,6 @@ class SAIABackend(ABC):
         messages: list[Message],
         tools: list[ToolDef],
         system: str | None = None,
-        max_tokens: int = 4096,
     ) -> AgentResponse:
         """LLM completion with tool calling support.
 
@@ -62,14 +66,22 @@ class SAIABackend(ABC):
             messages: Conversation history.
             tools: Available tools the LLM can call.
             system: Optional system prompt.
-            max_tokens: Maximum tokens for this call.
 
         Returns:
             AgentResponse with content, tool calls, and token usage.
         """
         ...
 
-    async def __aenter__(self) -> "SAIABackend":
+    @abstractmethod
+    def set_run_config(self, run: RunConfig) -> None:
+        """Set the run configuration for token limits.
+
+        Args:
+            run: Run configuration with token limits.
+        """
+        ...
+
+    async def __aenter__(self) -> SAIABackend:
         """Async context manager entry."""
         return self
 

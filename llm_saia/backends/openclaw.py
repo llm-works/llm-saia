@@ -23,6 +23,8 @@ Usage:
     result = await saia.verify("claim", "factually accurate")
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 from typing import Any, TypeVar
@@ -34,12 +36,13 @@ from llm_saia.backends._schema import (
     parse_json_to_dataclass,
 )
 from llm_saia.core.protocols import SAIABackend
-from llm_saia.core.types import AgentResponse, Message, ToolCall, ToolDef
+from llm_saia.core.types import AgentResponse, Message, RunConfig, ToolCall, ToolDef
 
 T = TypeVar("T")
 
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:18789"
 DEFAULT_TIMEOUT = 60.0
+DEFAULT_MAX_TOKENS = 4096
 
 
 class OpenClawBackend(SAIABackend):
@@ -75,11 +78,23 @@ class OpenClawBackend(SAIABackend):
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+        self._run: RunConfig | None = None
 
     @property
     def gateway_url(self) -> str:
         """Return the gateway URL (for health checks)."""
         return self._gateway_url
+
+    @property
+    def _max_tokens(self) -> int:
+        """Get max tokens from run config or default."""
+        if self._run and self._run.max_call_tokens > 0:
+            return self._run.max_call_tokens
+        return DEFAULT_MAX_TOKENS
+
+    def set_run_config(self, run: RunConfig) -> None:
+        """Set the run configuration for token limits."""
+        self._run = run
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client (thread-safe)."""
@@ -140,6 +155,7 @@ class OpenClawBackend(SAIABackend):
             {
                 "action": "text",
                 "prompt": prompt,
+                "max_tokens": self._max_tokens,
             },
         )
 
@@ -173,6 +189,7 @@ class OpenClawBackend(SAIABackend):
                 "action": "json",
                 "prompt": prompt,
                 "schema": json_schema["schema"],
+                "max_tokens": self._max_tokens,
             },
         )
 
@@ -193,7 +210,6 @@ class OpenClawBackend(SAIABackend):
         messages: list[Message],
         tools: list[ToolDef],
         system: str | None = None,
-        max_tokens: int = 4096,
     ) -> AgentResponse:
         """LLM completion with tool calling support via OpenClaw gateway."""
         openclaw_messages = self._convert_messages(messages)
@@ -203,7 +219,7 @@ class OpenClawBackend(SAIABackend):
             "action": "tools",
             "messages": openclaw_messages,
             "tools": openclaw_tools,
-            "max_tokens": max_tokens,
+            "max_tokens": self._max_tokens,
         }
         if system:
             args["system"] = system

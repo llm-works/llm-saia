@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 
-from llm_saia.core.types import LoopConfig
 from llm_saia.verbs._base import _Verb
 
 
@@ -16,7 +15,7 @@ class DecomposeResult:
 class Decompose(_Verb):
     """Break down task into subtasks."""
 
-    async def __call__(self, task: str, loop: LoopConfig | None = None) -> list[str]:
+    async def __call__(self, task: str) -> list[str]:
         prompt = f"Break down this task into subtasks:\n\n{task}"
-        result = await self._complete_structured(prompt, DecomposeResult, loop)
+        result = await self._complete_structured(prompt, DecomposeResult)
         return result.subtasks

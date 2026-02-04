@@ -8,16 +8,20 @@ This example demonstrates a simple investigation workflow:
 4. REFINE the claim based on critique
 
 Usage:
-    export ANTHROPIC_API_KEY=your_key
-    python examples/investigate.py
+    ./examples/investigate.py
 """
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import Any
 
+# Add project root to path for direct execution
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from llm_saia import SAIA
-from llm_saia.backends.anthropic import AnthropicBackend
-from llm_saia.core.types import Critique, LoopConfig, VerifyResult
+from llm_saia.backends.openai import OpenAIBackend
+from llm_saia.core.types import Critique, RunConfig, VerifyResult
 
 
 async def gather_evidence(saia: SAIA, claim: str) -> str:
@@ -86,14 +90,14 @@ async def investigate_claim(saia: SAIA, claim: str) -> None:
 
 async def main() -> None:
     """Run the example."""
-    async with AnthropicBackend() as backend:
-        # Create SAIA with custom loop config
+    async with OpenAIBackend() as backend:
+        # Create SAIA with custom run config
         saia = SAIA(
             backend=backend,
-            loop=LoopConfig(max_iterations=3, max_call_tokens=4096),
+            run=RunConfig(max_iterations=3, max_call_tokens=4096),
         )
 
-        print(f"Loop config: {saia.loop_config}")
+        print(f"Run config: {saia.run_config}")
 
         claim = "Python is slower than C for all computational tasks"
         await investigate_claim(saia, claim)

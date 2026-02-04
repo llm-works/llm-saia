@@ -1,6 +1,6 @@
 """CHOOSE verb: Force a choice between options."""
 
-from llm_saia.core.types import ChooseResult, LoopConfig
+from llm_saia.core.types import ChooseResult
 from llm_saia.verbs._base import _Verb
 
 
@@ -12,7 +12,6 @@ class Choose(_Verb):
         options: list[str],
         context: str | None = None,
         criteria: str | None = None,
-        loop: LoopConfig | None = None,
     ) -> ChooseResult:
         opts = "\n".join(f"- {o}" for o in options)
         prompt = f"Choose one of these options:\n{opts}"
@@ -20,4 +19,4 @@ class Choose(_Verb):
             prompt += f"\n\nContext: {context}"
         if criteria:
             prompt += f"\n\nCriteria: {criteria}"
-        return await self._complete_structured(prompt, ChooseResult, loop)
+        return await self._complete_structured(prompt, ChooseResult)

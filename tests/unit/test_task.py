@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from llm_saia import SAIA
-from llm_saia.core.types import AgentResponse, ConfirmResult, LoopConfig, ToolCall, ToolDef
+from llm_saia.core.types import AgentResponse, ConfirmResult, RunConfig, ToolCall, ToolDef
 from tests.unit.conftest import MockBackend
 
 pytestmark = pytest.mark.unit
@@ -133,7 +133,12 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task stops after max iterations."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = SAIA(
+            backend=mock_backend,
+            tools=sample_tools,
+            executor=dummy_executor,
+            run=RunConfig(max_iterations=3),
+        )
 
         for _ in range(5):
             mock_backend.queue_tool_response(
@@ -143,7 +148,7 @@ class TestTask:
             ConfirmResult, ConfirmResult(confirmed=False, reason="Not done")
         )
 
-        result = await saia.complete(task="Impossible task", loop=LoopConfig(max_iterations=3))
+        result = await saia.complete(task="Impossible task")
 
         assert result.completed is False
         assert result.iterations == 3
@@ -221,7 +226,12 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task stops after soft timeout."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = SAIA(
+            backend=mock_backend,
+            tools=sample_tools,
+            executor=dummy_executor,
+            run=RunConfig(timeout_secs=0.001),
+        )
 
         # Queue enough responses for multiple iterations
         for _ in range(10):
@@ -232,8 +242,7 @@ class TestTask:
             ConfirmResult, ConfirmResult(confirmed=False, reason="Not done")
         )
 
-        # Very short timeout to trigger quickly
-        result = await saia.complete(task="Long task", loop=LoopConfig(timeout_secs=0.001))
+        result = await saia.complete(task="Long task")
 
         assert result.completed is False
         # Should have done at least 1 iteration before timeout
@@ -243,7 +252,12 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task with max_iterations=0 runs until complete."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = SAIA(
+            backend=mock_backend,
+            tools=sample_tools,
+            executor=dummy_executor,
+            run=RunConfig(max_iterations=0),
+        )
 
         # Queue 5 "not done" responses, then one "done"
         for _ in range(5):
@@ -274,7 +288,119 @@ class TestTask:
 
         mock_backend.complete_structured = patched_complete_structured  # type: ignore
 
-        result = await saia.complete(task="Long running task", loop=LoopConfig(max_iterations=0))
+        result = await saia.complete(task="Long running task")
 
         assert result.completed is True
         assert result.iterations == 6  # 5 "not done" + 1 "done"
+
+    async def test_task_terminal_tool_completes_immediately(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Task completes immediately when LLM calls the terminal tool."""
+        # Add terminal tool to the tool list
+        terminal_tool_def = ToolDef(
+            name="task_complete",
+            description="Call when task is complete",
+            parameters={
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+            },
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = SAIA(
+            backend=mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="task_complete",
+        )
+
+        # LLM calls the terminal tool
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Task finished!",
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="task_complete",
+                        arguments={"summary": "Successfully completed the search"},
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is True
+        assert result.iterations == 1
+        assert result.terminal_tool == "task_complete"
+        assert result.terminal_data == {"summary": "Successfully completed the search"}
+
+    async def test_task_terminal_tool_not_executed(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Terminal tool is not executed - invocation signals completion."""
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Executed {name}"
+
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = SAIA(
+            backend=mock_backend,
+            tools=tools_with_terminal,
+            executor=tracking_executor,
+            terminal_tool="finish",
+        )
+
+        # LLM calls both a work tool and terminal tool in same batch
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Done",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                stop_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        assert result.completed is True
+        # Neither tool was executed - terminal tool detection happens before execution
+        assert executed_tools == []
+        assert result.terminal_tool == "finish"
+
+    async def test_task_without_terminal_tool_uses_confirm(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Without terminal_tool configured, task uses Confirm verb for completion."""
+        saia = SAIA(
+            backend=mock_backend,
+            tools=sample_tools,
+            executor=dummy_executor,
+            # No terminal_tool set
+        )
+
+        mock_backend.queue_tool_response(
+            AgentResponse(content="Task done!", tool_calls=[], stop_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ConfirmResult, ConfirmResult(confirmed=True, reason="Task is complete")
+        )
+
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is True
+        assert result.terminal_tool is None
+        assert result.terminal_data is None

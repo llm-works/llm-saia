@@ -20,9 +20,9 @@ from llm_saia.verbs import (
     Constrain,
     Critique_,
     Decompose,
+    Extract,
     Ground,
     Instruct,
-    Parse,
     Refine,
     Synthesize,
     VerbConfig,
@@ -58,18 +58,30 @@ class TestAsk:
         assert result == "custom answer"
 
 
-class TestParse:
-    async def test_parse_uses_structured_output(self, mock_backend: MockBackend) -> None:
+class TestExtract:
+    async def test_extract_uses_structured_output(self, mock_backend: MockBackend) -> None:
         @dataclass
         class TestSchema:
             value: str
 
-        mock_backend.set_structured_response(TestSchema, TestSchema(value="parsed"))
-        parse = Parse(make_config(mock_backend))
-        result = await parse("raw response", TestSchema)
+        mock_backend.set_structured_response(TestSchema, TestSchema(value="extracted"))
+        extract = Extract(make_config(mock_backend))
+        result = await extract("raw content", TestSchema)
 
-        assert result.value == "parsed"
-        assert "raw response" in mock_backend.last_prompt
+        assert result.value == "extracted"
+        assert "raw content" in mock_backend.last_prompt
+
+    async def test_extract_includes_instructions(self, mock_backend: MockBackend) -> None:
+        @dataclass
+        class TestSchema:
+            value: str
+
+        mock_backend.set_structured_response(TestSchema, TestSchema(value="extracted"))
+        extract = Extract(make_config(mock_backend))
+        result = await extract("content", TestSchema, instructions="Focus on names")
+
+        assert result.value == "extracted"
+        assert "Focus on names" in mock_backend.last_prompt
 
 
 class TestConstrain:

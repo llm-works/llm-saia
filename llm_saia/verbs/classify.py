@@ -1,6 +1,6 @@
 """CLASSIFY verb: Classify text into categories."""
 
-from llm_saia.core.types import ClassifyResult, LoopConfig
+from llm_saia.core.types import ClassifyResult
 from llm_saia.verbs._base import _Verb
 
 
@@ -12,10 +12,9 @@ class Classify(_Verb):
         text: str,
         categories: list[str],
         criteria: str | None = None,
-        loop: LoopConfig | None = None,
     ) -> ClassifyResult:
         cats = ", ".join(categories)
         prompt = f"Classify this text into one of: {cats}\n\nText: {text}"
         if criteria:
             prompt += f"\n\nCriteria: {criteria}"
-        return await self._complete_structured(prompt, ClassifyResult, loop)
+        return await self._complete_structured(prompt, ClassifyResult)

@@ -60,7 +60,10 @@ class TestOpenClawBackendComplete:
             assert result == "Hello, world!"
             mock_client.post.assert_called_once_with(
                 "/tools/invoke",
-                json={"tool": "llm-task", "args": {"action": "text", "prompt": "test prompt"}},
+                json={
+                    "tool": "llm-task",
+                    "args": {"action": "text", "prompt": "test prompt", "max_tokens": 4096},
+                },
             )
 
     async def test_complete_extracts_from_output(self) -> None:

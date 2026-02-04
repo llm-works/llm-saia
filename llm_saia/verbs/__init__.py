@@ -9,10 +9,10 @@ from llm_saia.verbs.confirm import Confirm
 from llm_saia.verbs.constrain import Constrain
 from llm_saia.verbs.critique import Critique_
 from llm_saia.verbs.decompose import Decompose
+from llm_saia.verbs.extract import Extract
 from llm_saia.verbs.ground import Ground
 from llm_saia.verbs.instruct import Instruct
 from llm_saia.verbs.memory import recall, store
-from llm_saia.verbs.parse import Parse
 from llm_saia.verbs.refine import Refine
 from llm_saia.verbs.synthesize import Synthesize
 from llm_saia.verbs.verify import Verify
@@ -32,7 +32,7 @@ __all__ = [
     "Decompose",
     "Ground",
     "Instruct",
-    "Parse",
+    "Extract",
     "Refine",
     "Synthesize",
     "Verify",

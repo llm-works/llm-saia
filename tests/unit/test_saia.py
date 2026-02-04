@@ -26,17 +26,17 @@ class TestSAIA:
 
         assert result == "the answer"
 
-    async def test_parse(self, mock_backend: MockBackend) -> None:
+    async def test_extract(self, mock_backend: MockBackend) -> None:
         @dataclass
         class Output:
             data: str
 
         saia = SAIA(backend=mock_backend)
-        mock_backend.set_structured_response(Output, Output(data="parsed"))
+        mock_backend.set_structured_response(Output, Output(data="extracted"))
 
-        result = await saia.parse("raw", Output)
+        result = await saia.extract("raw content", Output)
 
-        assert result.data == "parsed"
+        assert result.data == "extracted"
 
     async def test_constrain(self, mock_backend: MockBackend) -> None:
         saia = SAIA(backend=mock_backend)
