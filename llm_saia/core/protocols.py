@@ -16,8 +16,8 @@ class SAIABackend(ABC):
     Backends should also implement async context manager protocol (__aenter__/__aexit__)
     for proper resource cleanup.
 
-    Backends receive RunConfig in constructor and use it for token limits.
-    Use with_run_config() to create a new backend with different settings.
+    Backends receive RunConfig via set_run_config() and use it for token limits.
+    Use SAIA.with_run_config() to create a SAIA instance with different settings.
     """
 
     @abstractmethod

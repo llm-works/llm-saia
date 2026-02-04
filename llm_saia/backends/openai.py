@@ -7,8 +7,15 @@ Usage:
     from llm_saia import SAIA
     from llm_saia.backends.openai import OpenAIBackend
 
+    # Local server (no auth needed)
     backend = OpenAIBackend()  # defaults to http://localhost:8000
-    backend = OpenAIBackend(base_url="https://api.openai.com", model="gpt-4")
+
+    # OpenAI API (requires api_key or OPENAI_API_KEY env var)
+    backend = OpenAIBackend(
+        base_url="https://api.openai.com",
+        model="gpt-4",
+        api_key="sk-...",  # or set OPENAI_API_KEY env var
+    )
 
     saia = SAIA(backend=backend)
 """
@@ -16,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, TypeVar, cast
 
 import httpx
@@ -40,10 +48,13 @@ class OpenAIBackend(SAIABackend):
         base_url: str = DEFAULT_BASE_URL,
         model: str = DEFAULT_MODEL,
         timeout: float = DEFAULT_TIMEOUT,
+        api_key: str | None = None,
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._api_key = api_key or os.getenv("OPENAI_API_KEY")
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
         self._run: RunConfig | None = None
 
     @property
@@ -171,6 +182,8 @@ class OpenAIBackend(SAIABackend):
         if msg.role == "user":
             return {"role": "user", "content": msg.content}
         if msg.role == "tool_result":
+            if not msg.tool_call_id:
+                raise ValueError("tool_call_id is required for tool_result messages")
             return {"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content}
         # assistant
         entry: dict[str, Any] = {"role": "assistant", "content": msg.content}
