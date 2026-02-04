@@ -65,6 +65,7 @@ class _Verb(ABC):
         start_time = time.monotonic()
         iteration = 0
         total_tokens = 0
+        last_assistant_content = ""
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
             if config.max_call_tokens > 0:
@@ -79,6 +80,7 @@ class _Verb(ABC):
                     messages, self._config.tools, self._config.system
                 )
             total_tokens += response.input_tokens + response.output_tokens
+            last_assistant_content = response.content
             messages.append(self._to_message(response))
 
             if response.tool_calls:
@@ -87,8 +89,7 @@ class _Verb(ABC):
             else:
                 return await self._finalize(prompt, response.content, schema)
 
-        last_content = messages[-1].content if messages else ""
-        return await self._finalize(prompt, last_content, schema)
+        return await self._finalize(prompt, last_assistant_content, schema)
 
     def _should_stop(
         self, config: LoopConfig, iteration: int, start_time: float, total_tokens: int
