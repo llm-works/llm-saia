@@ -14,13 +14,12 @@ Usage:
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any
 
 # Add project root to path for direct execution
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from examples import OpenAIBackend
 from llm_saia import SAIA
-from llm_saia.backends.openai import OpenAIBackend
 from llm_saia.core.types import Critique, RunConfig, VerifyResult
 
 
@@ -60,20 +59,7 @@ async def refine_claim(saia: SAIA, claim: str, critique: Critique) -> str:
     return refined
 
 
-def store_result(saia: SAIA, claim: str, refined: str, verification: Any, critique: Any) -> None:
-    """Store investigation result in memory."""
-    saia.store(
-        "investigation_result",
-        {
-            "original_claim": claim,
-            "refined_claim": refined,
-            "verification": verification,
-            "critique": critique,
-        },
-    )
-
-
-async def investigate_claim(saia: SAIA, claim: str) -> None:
+async def investigate_claim(saia: SAIA, claim: str) -> dict[str, object]:
     """Run investigation workflow on a claim."""
     print(f"Investigating claim: {claim}\n")
     print("=" * 60)
@@ -82,16 +68,21 @@ async def investigate_claim(saia: SAIA, claim: str) -> None:
     verification = await verify_evidence(saia, evidence)
     critique = await critique_claim(saia, claim)
     refined = await refine_claim(saia, claim, critique)
-    store_result(saia, claim, refined, verification, critique)
 
     print("\n" + "=" * 60)
-    print("Investigation complete. Result stored in memory.")
+    print("Investigation complete.")
+
+    return {
+        "original_claim": claim,
+        "refined_claim": refined,
+        "verification": verification,
+        "critique": critique,
+    }
 
 
 async def main() -> None:
     """Run the example."""
     async with OpenAIBackend() as backend:
-        # Create SAIA with custom run config
         saia = SAIA(
             backend=backend,
             run=RunConfig(max_iterations=3, max_call_tokens=4096),
@@ -100,10 +91,8 @@ async def main() -> None:
         print(f"Run config: {saia.run_config}")
 
         claim = "Python is slower than C for all computational tasks"
-        await investigate_claim(saia, claim)
-
-        results = saia.recall("investigation")
-        print(f"\nRecalled {len(results)} result(s) from memory")
+        result = await investigate_claim(saia, claim)
+        print(f"\nResult: {result}")
 
 
 if __name__ == "__main__":

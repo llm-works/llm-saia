@@ -1,4 +1,8 @@
-"""Shared schema conversion utilities for backends."""
+"""Schema conversion utilities for structured output.
+
+SAIA handles structured output by building prompts with JSON schema
+instructions and parsing responses into dataclasses.
+"""
 
 import dataclasses
 import types

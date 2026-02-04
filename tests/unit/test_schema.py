@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 
 import pytest
 
-from llm_saia.backends._schema import (
+from llm_saia.core.schema import (
     dataclass_to_json_schema,
     parse_json_to_dataclass,
     python_type_to_json_schema,

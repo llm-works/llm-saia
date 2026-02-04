@@ -109,18 +109,12 @@ class TestTask:
         )
 
         # First call returns not confirmed, second returns confirmed
-        confirm_calls = [
-            ConfirmResult(confirmed=False, reason="Work not finished"),
-            ConfirmResult(confirmed=True, reason="Done"),
-        ]
-        original = mock_backend.complete_structured
-
-        async def patched(prompt: str, schema: type) -> Any:
-            if schema == ConfirmResult and confirm_calls:
-                return confirm_calls.pop(0)
-            return await original(prompt, schema)
-
-        mock_backend.complete_structured = patched  # type: ignore
+        mock_backend.queue_structured_response(
+            ConfirmResult, ConfirmResult(confirmed=False, reason="Work not finished")
+        )
+        mock_backend.queue_structured_response(
+            ConfirmResult, ConfirmResult(confirmed=True, reason="Done")
+        )
 
         result = await saia.complete(task="Complete a task")
 
@@ -268,25 +262,14 @@ class TestTask:
             AgentResponse(content="Done!", tool_calls=[], stop_reason="end_turn")
         )
 
-        # Start with "not confirmed", then flip to confirmed after 5 iterations
-        call_count = 0
-
-        def get_confirmation() -> ConfirmResult:
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 5:
-                return ConfirmResult(confirmed=False, reason="Keep going")
-            return ConfirmResult(confirmed=True, reason="Complete")
-
-        # Monkey-patch to return different results
-        original_method = mock_backend.complete_structured
-
-        async def patched_complete_structured(prompt: str, schema: type) -> Any:
-            if schema == ConfirmResult:
-                return get_confirmation()
-            return await original_method(prompt, schema)
-
-        mock_backend.complete_structured = patched_complete_structured  # type: ignore
+        # Queue 5 "not confirmed" responses, then one "confirmed"
+        for _ in range(5):
+            mock_backend.queue_structured_response(
+                ConfirmResult, ConfirmResult(confirmed=False, reason="Keep going")
+            )
+        mock_backend.queue_structured_response(
+            ConfirmResult, ConfirmResult(confirmed=True, reason="Complete")
+        )
 
         result = await saia.complete(task="Long running task")
 

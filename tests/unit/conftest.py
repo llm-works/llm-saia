@@ -2,42 +2,45 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, TypeVar
 
 import pytest
 
-from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.backend import SAIABackend
 from llm_saia.core.types import (
     AgentResponse,
-    ChooseResult,
-    ClassifyResult,
-    ConfirmResult,
-    Critique,
-    Evidence,
     Message,
-    RunConfig,
     ToolDef,
-    VerifyResult,
 )
 
 T = TypeVar("T")
 
 
-def _default_structured_responses() -> dict[type, Any]:
-    """Default structured responses for mock backend."""
+def _default_structured_responses() -> dict[str, dict[str, Any]]:
+    """Default structured responses for mock backend (as JSON-serializable dicts)."""
     return {
-        VerifyResult: VerifyResult(passed=True, reason="test reason"),
-        Critique: Critique(
-            counter_argument="test counter", weaknesses=["weakness 1"], strength=0.5
-        ),
-        Evidence: Evidence(
-            content="test content", source="test source", direction="supports", strength=0.8
-        ),
-        ClassifyResult: ClassifyResult(
-            category="test_category", confidence=0.9, reason="test classification reason"
-        ),
-        ConfirmResult: ConfirmResult(confirmed=True, reason="test confirmation reason"),
-        ChooseResult: ChooseResult(choice="option_a", reason="test choice reason"),
+        "VerifyResult": {"passed": True, "reason": "test reason"},
+        "Critique": {
+            "counter_argument": "test counter",
+            "weaknesses": ["weakness 1"],
+            "strength": 0.5,
+        },
+        "Evidence": {
+            "content": "test content",
+            "source": "test source",
+            "direction": "supports",
+            "strength": 0.8,
+        },
+        "ClassifyResult": {
+            "category": "test_category",
+            "confidence": 0.9,
+            "reason": "test classification reason",
+        },
+        "ConfirmResult": {"confirmed": True, "reason": "test confirmation reason"},
+        "ChooseResult": {"choice": "option_a", "reason": "test choice reason"},
+        # Generic fallbacks
+        "DecomposeResult": {"subtasks": ["task 1", "task 2"]},
     }
 
 
@@ -45,69 +48,117 @@ class MockBackend(SAIABackend):
     """Mock backend for testing that returns predetermined responses."""
 
     def __init__(self) -> None:
-        self.last_prompt: str = ""
         self.last_messages: list[Message] = []
-        self.last_tools: list[ToolDef] = []
-        self._complete_response: str = "mock response"
-        self._tool_responses: list[AgentResponse] = []
-        self._structured_responses: dict[type, Any] = _default_structured_responses()
-        self._run: RunConfig | None = None
+        self.last_system: str | None = None
+        self.last_tools: list[ToolDef] | None = None
+        self.last_response_schema: dict[str, Any] | None = None
+        self._response_content: str = "mock response"
+        self._queued_responses: list[AgentResponse] = []
+        self._structured_responses: dict[str, dict[str, Any]] = _default_structured_responses()
+        self._queued_structured: dict[str, list[dict[str, Any]]] = {}
 
-    def set_run_config(self, run: RunConfig) -> None:
-        """Set the run configuration."""
-        self._run = run
+    @property
+    def last_prompt(self) -> str:
+        """Get the content of the last user message (for backwards compatibility)."""
+        for msg in reversed(self.last_messages):
+            if msg.role == "user":
+                return msg.content
+        return ""
 
     def set_complete_response(self, response: str) -> None:
-        """Set the response for complete() calls."""
-        self._complete_response = response
+        """Set the response content for chat() calls."""
+        self._response_content = response
 
-    def set_structured_response(self, schema: type[T], response: T) -> None:
-        """Set the response for complete_structured() calls."""
-        self._structured_responses[schema] = response
+    def set_structured_response(self, schema: type | str, response: Any) -> None:
+        """Set the response for structured output requests.
 
-    async def complete(self, prompt: str) -> str:
-        """Return predetermined response."""
-        self.last_prompt = prompt
-        return self._complete_response
+        Args:
+            schema: Either a dataclass type or schema name string.
+            response: Either a dataclass instance or a dict.
+        """
+        import dataclasses
 
-    async def complete_structured(self, prompt: str, schema: type[T]) -> T:
-        """Return predetermined structured response."""
-        self.last_prompt = prompt
-        if schema in self._structured_responses:
-            return self._structured_responses[schema]
-        raise ValueError(f"No mock response configured for {schema}")
+        if isinstance(schema, str):
+            self._structured_responses[schema] = response
+        else:
+            # schema is a type, response is an instance
+            schema_name = schema.__name__
+            if dataclasses.is_dataclass(response):
+                self._structured_responses[schema_name] = dataclasses.asdict(response)
+            else:
+                self._structured_responses[schema_name] = response
 
-    async def complete_with_tools(
+    def queue_structured_response(self, schema: type | str, response: Any) -> None:
+        """Queue a structured response to be consumed in order.
+
+        Use this when you need different responses for the same schema type
+        across multiple calls. Queued responses are consumed before falling
+        back to set_structured_response defaults.
+
+        Args:
+            schema: Either a dataclass type or schema name string.
+            response: Either a dataclass instance or a dict.
+        """
+        import dataclasses
+
+        if isinstance(schema, str):
+            schema_name = schema
+        else:
+            schema_name = schema.__name__
+
+        if dataclasses.is_dataclass(response):
+            response_dict = dataclasses.asdict(response)
+        else:
+            response_dict = response
+
+        if schema_name not in self._queued_structured:
+            self._queued_structured[schema_name] = []
+        self._queued_structured[schema_name].append(response_dict)
+
+    def queue_response(self, response: AgentResponse) -> None:
+        """Queue a response for the next chat() call."""
+        self._queued_responses.append(response)
+
+    # Backwards compatibility alias
+    def queue_tool_response(self, response: AgentResponse) -> None:
+        """Queue a response for the next chat() call (alias for queue_response)."""
+        self._queued_responses.append(response)
+
+    def _make_response(self, content: str) -> AgentResponse:
+        """Create a simple AgentResponse with given content."""
+        return AgentResponse(content=content, tool_calls=[], stop_reason="end_turn")
+
+    async def chat(
         self,
         messages: list[Message],
-        tools: list[ToolDef],
         system: str | None = None,
+        tools: list[ToolDef] | None = None,
+        response_schema: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> AgentResponse:
-        """Return predetermined response with optional tool calls."""
-        self.last_prompt = messages[-1].content if messages else ""
+        """Return predetermined response."""
         self.last_messages = messages
+        self.last_system = system
         self.last_tools = tools
+        self.last_response_schema = response_schema
 
-        # Check if we have a queued response
-        if self._tool_responses:
-            return self._tool_responses.pop(0)
+        # Check structured output first (these calls have response_schema set)
+        if response_schema:
+            schema_name = response_schema.get("name", "")
+            # Check queued structured responses first
+            if schema_name in self._queued_structured and self._queued_structured[schema_name]:
+                response_dict = self._queued_structured[schema_name].pop(0)
+                return self._make_response(json.dumps(response_dict))
+            # Fall back to default responses
+            if schema_name in self._structured_responses:
+                return self._make_response(json.dumps(self._structured_responses[schema_name]))
+            return self._make_response("{}")
 
-        # Default: return text response (no tool calls)
-        return AgentResponse(
-            content=self._complete_response,
-            tool_calls=[],
-            stop_reason="end_turn",
-        )
+        # Regular chat calls use queued responses
+        if self._queued_responses:
+            return self._queued_responses.pop(0)
 
-    def queue_tool_response(self, response: AgentResponse) -> None:
-        """Queue a response for complete_with_tools."""
-        if not hasattr(self, "_tool_responses"):
-            self._tool_responses: list[AgentResponse] = []
-        self._tool_responses.append(response)
-
-    async def close(self) -> None:
-        """No-op for mock backend."""
-        pass
+        return self._make_response(self._response_content)
 
 
 @pytest.fixture

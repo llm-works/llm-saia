@@ -70,9 +70,12 @@ class Complete(_Verb):
         self, messages: list[Message], config: RunConfig
     ) -> tuple[AgentResponse, int]:
         """Run one LLM iteration and return response with token count."""
-        self._backend.set_run_config(config)
-        response = await self._backend.complete_with_tools(
-            messages, self._config.tools, self._config.system
+        max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
+        response = await self._backend.chat(
+            messages,
+            system=self._config.system,
+            tools=self._config.tools if self._config.tools else None,
+            max_tokens=max_tokens,
         )
         return response, response.input_tokens + response.output_tokens
 

@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
-from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.backend import SAIABackend
 from llm_saia.core.types import RunConfig, ToolDef
 from llm_saia.verbs import (
     Ask,

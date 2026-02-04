@@ -1,6 +1,6 @@
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
-from llm_saia.core.protocols import SAIABackend
+from llm_saia.core.backend import SAIABackend
 from llm_saia.core.types import (
     AgentResponse,
     ChooseResult,

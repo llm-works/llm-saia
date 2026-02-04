@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
 from llm_saia.core.types import (
     AgentResponse,
     Message,
@@ -18,7 +20,7 @@ from llm_saia.core.types import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from llm_saia.core.protocols import SAIABackend
+    from llm_saia.core.backend import SAIABackend
 
 T = TypeVar("T")
 
@@ -70,12 +72,14 @@ class _Verb(ABC):
         total_tokens = 0
         last_assistant_content = ""
 
-        # Configure backend with run config
-        self._backend.set_run_config(config)
+        max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._backend.complete_with_tools(
-                messages, self._config.tools, self._config.system
+            response = await self._backend.chat(
+                messages,
+                system=self._config.system,
+                tools=self._config.tools if self._config.tools else None,
+                max_tokens=max_tokens,
             )
             total_tokens += response.input_tokens + response.output_tokens
             last_assistant_content = response.content
@@ -125,9 +129,16 @@ class _Verb(ABC):
     ) -> tuple[str, T | None]:
         """Finalize result, optionally parsing structured output."""
         if schema:
-            # Include gathered content so structured output has tool loop context
+            # Request structured output with schema
             structured_prompt = f"{prompt}\n\nBased on the following information:\n{content}"
-            result = await self._backend.complete_structured(structured_prompt, schema)
+            json_schema = dataclass_to_json_schema(schema)
+            response = await self._backend.chat(
+                [Message(role="user", content=structured_prompt)],
+                system=self._config.system,
+                response_schema=json_schema,
+            )
+            data = json.loads(response.content)
+            result = parse_json_to_dataclass(data, schema)
             return content, result
         return content, None
 
@@ -138,7 +149,11 @@ class _Verb(ABC):
         if self._has_tools():
             content, _ = await self._loop(prompt)
             return content
-        return await self._backend.complete(prompt)
+        response = await self._backend.chat(
+            [Message(role="user", content=prompt)],
+            system=self._config.system,
+        )
+        return response.content
 
     async def _complete_structured(self, prompt: str, schema: type[T]) -> T:
         """Complete structured with tools if available, otherwise direct."""
@@ -146,7 +161,15 @@ class _Verb(ABC):
             _, result = await self._loop(prompt, schema=schema)
             if result is not None:
                 return result
-        return await self._backend.complete_structured(prompt, schema)
+        # Direct structured completion
+        json_schema = dataclass_to_json_schema(schema)
+        response = await self._backend.chat(
+            [Message(role="user", content=prompt)],
+            system=self._config.system,
+            response_schema=json_schema,
+        )
+        data = json.loads(response.content)
+        return parse_json_to_dataclass(data, schema)
 
     @abstractmethod
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
