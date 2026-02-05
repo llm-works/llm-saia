@@ -134,10 +134,7 @@ class Complete(Verb):
         """Execute the action decided by the controller."""
         match action.kind:
             case ActionKind.EXECUTE_TOOLS:
-                messages.append(self._to_message(response))
-                if response.tool_calls:
-                    calls = self._filter_tool_calls(response.tool_calls, action.tool_ids_to_execute)
-                    await self._execute_tools(calls, messages)
+                await self._execute_tool_action(action, response, messages)
                 return None
 
             case ActionKind.INSTRUCT:
@@ -148,6 +145,7 @@ class Complete(Verb):
 
             case ActionKind.SKIP:
                 self._add_response_if_needed(messages, response)
+                messages.append(Message(role="user", content="Continue."))
                 return None
 
             case ActionKind.COMPLETE:
@@ -160,6 +158,16 @@ class Complete(Verb):
 
         return None
 
+    async def _execute_tool_action(
+        self, action: Action, response: AgentResponse, messages: list[Message]
+    ) -> None:
+        """Handle EXECUTE_TOOLS action: add response, ack skipped, execute."""
+        messages.append(self._to_message(response))
+        if response.tool_calls:
+            calls = self._filter_tool_calls(response.tool_calls, action.tool_ids_to_execute)
+            self._ack_skipped_tools(response.tool_calls, action.tool_ids_to_execute, messages)
+            await self._execute_tools(calls, messages)
+
     def _filter_tool_calls(
         self, tool_calls: list[ToolCall], tool_ids: list[str] | None
     ) -> list[ToolCall]:
@@ -168,11 +176,40 @@ class Complete(Verb):
             return tool_calls
         return [c for c in tool_calls if c.id in tool_ids]
 
+    def _ack_skipped_tools(
+        self,
+        all_calls: list[ToolCall],
+        execute_ids: list[str] | None,
+        messages: list[Message],
+    ) -> None:
+        """Add synthetic tool_results for tool calls that won't be executed.
+
+        LLM APIs require every tool_call in an assistant message to have a
+        matching tool_result. When we skip executing a tool (e.g., the terminal
+        tool during confirmation), we still need to provide a result.
+        """
+        if execute_ids is None:
+            return
+        skip_ids = {c.id for c in all_calls} - set(execute_ids)
+        for call in all_calls:
+            if call.id in skip_ids:
+                messages.append(
+                    Message(
+                        role="tool_result",
+                        content="Acknowledged. Awaiting confirmation.",
+                        tool_call_id=call.id,
+                    )
+                )
+
     def _add_response_if_needed(self, messages: list[Message], response: AgentResponse) -> None:
         """Add response to messages if not already added."""
         if messages:
             last = messages[-1]
-            if last.role == "assistant" and last.content == response.content:
+            if (
+                last.role == "assistant"
+                and last.content == response.content
+                and last.tool_calls == (response.tool_calls or None)
+            ):
                 return
         messages.append(self._to_message(response))
 

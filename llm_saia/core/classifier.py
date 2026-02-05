@@ -53,10 +53,7 @@ class TaskStateClassifier(Protocol):
 class LLMTaskStateClassifier:
     """Task state classifier using the Classify verb."""
 
-    # Criteria template for classification
-    _CRITERIA_TEMPLATE = (
-        "Original task: {task}\n\n"
-        "Available tools: {tools}\n\n"
+    _CRITERIA_SUFFIX = (
         "Classify the agent's response:\n"
         "- completed: The agent has finished the task and provided a final answer\n"
         "- stuck: The agent is blocked, confused, giving up, or says it cannot proceed\n"
@@ -80,7 +77,9 @@ class LLMTaskStateClassifier:
         from llm_saia.verbs.classify import Classify
 
         tools_desc = ", ".join(tool_names) if tool_names else "none"
-        criteria = self._CRITERIA_TEMPLATE.format(task=task, tools=tools_desc)
+        criteria = (
+            f"Original task: {task}\n\nAvailable tools: {tools_desc}\n\n" + self._CRITERIA_SUFFIX
+        )
 
         classifier = Classify(self._config)
         result = await classifier(

@@ -269,7 +269,7 @@ class DefaultController:
 
         # Exact match, case-insensitive
         status_lower = str(status_value).lower()
-        return status_lower in failure_values
+        return status_lower in {v.lower() for v in failure_values}
 
     def _extract_terminal_output(self, arguments: dict[str, Any], fallback: str) -> str:
         """Extract output from terminal tool arguments.
