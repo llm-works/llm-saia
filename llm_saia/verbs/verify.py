@@ -3,10 +3,10 @@
 from typing import Any
 
 from llm_saia.core.types import VerifyResult
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
-class Verify(_Verb):
+class Verify(Verb):
     """Check if artifact satisfies predicate."""
 
     async def __call__(self, artifact: Any, predicate: str) -> VerifyResult:

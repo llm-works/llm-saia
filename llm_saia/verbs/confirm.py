@@ -1,10 +1,10 @@
 """CONFIRM verb: Get yes/no confirmation of a claim."""
 
 from llm_saia.core.types import ConfirmResult
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
-class Confirm(_Verb):
+class Confirm(Verb):
     """Ask for yes/no confirmation of a claim."""
 
     async def __call__(self, claim: str, context: str | None = None) -> ConfirmResult:

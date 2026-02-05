@@ -11,14 +11,15 @@ from llm_saia.core.types import (
     RunConfig,
     TaskResult,
     ToolCall,
+    VerbConfig,
 )
-from llm_saia.verbs._base import VerbConfig, _Verb
+from llm_saia.core.verb import Verb
 
 # Default run config for complete (unlimited iterations)
 DEFAULT_COMPLETE_RUN = RunConfig(max_iterations=0)
 
 
-class Complete(_Verb):
+class Complete(Verb):
     """Execute a task with tool calling and completion confirmation."""
 
     async def __call__(
@@ -39,6 +40,7 @@ class Complete(_Verb):
             response, tokens = await self._run_iteration(messages, config)
             total_tokens, last_content = total_tokens + tokens, response.content
             self._log_response(response, iteration, total_tokens)
+            self._check_tool_support(response)
             if on_iteration:
                 await on_iteration(iteration, response)
 

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
 @dataclass
@@ -12,7 +12,7 @@ class DecomposeResult:
     subtasks: list[str]
 
 
-class Decompose(_Verb):
+class Decompose(Verb):
     """Break down task into subtasks."""
 
     async def __call__(self, task: str) -> list[str]:

@@ -2,12 +2,12 @@
 
 from typing import Any, TypeVar
 
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 T = TypeVar("T")
 
 
-class Synthesize(_Verb):
+class Synthesize(Verb):
     """Combine multiple artifacts into structured output."""
 
     async def __call__(self, artifacts: list[Any], schema: type[T]) -> T:

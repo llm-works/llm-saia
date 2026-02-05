@@ -50,6 +50,7 @@ class SAIA:
         run: RunConfig | None = None,
         terminal_tool: str | None = None,
         lg: SAIALogger | None = None,
+        warn_tool_support: bool = True,
         *,
         _memory: dict[str, Any] | None = None,
     ):
@@ -61,6 +62,7 @@ class SAIA:
         self._run = run or DEFAULT_RUN
         self._terminal_tool = terminal_tool
         self._lg = lg
+        self._warn_tool_support = warn_tool_support
         self._memory = _memory if _memory is not None else {}
         self._init_verbs()
 
@@ -74,6 +76,7 @@ class SAIA:
             run=self._run,
             terminal_tool=self._terminal_tool,
             lg=self._lg,
+            warn_tool_support=self._warn_tool_support,
         )
         self.ask = Ask(config)
         self.choose = Choose(config)
@@ -105,6 +108,7 @@ class SAIA:
             run=replace(self._run, **kwargs),
             terminal_tool=self._terminal_tool,
             lg=self._lg,
+            warn_tool_support=self._warn_tool_support,
             _memory=self._memory,
         )
 

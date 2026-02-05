@@ -3,10 +3,10 @@
 from typing import Any
 
 from llm_saia.core.types import Critique
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
-class Critique_(_Verb):
+class Critique_(Verb):
     """Generate strongest counter-argument."""
 
     async def __call__(self, artifact: Any) -> Critique:

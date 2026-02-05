@@ -3,10 +3,10 @@
 from typing import Any
 
 from llm_saia.core.types import Evidence
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
-class Ground(_Verb):
+class Ground(Verb):
     """Anchor artifact against sources for evidence."""
 
     async def __call__(self, artifact: Any, sources: list[Any]) -> list[Evidence]:

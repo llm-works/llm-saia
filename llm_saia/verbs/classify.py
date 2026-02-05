@@ -1,10 +1,10 @@
 """CLASSIFY verb: Classify text into categories."""
 
 from llm_saia.core.types import ClassifyResult
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
-class Classify(_Verb):
+class Classify(Verb):
     """Classify text into one of the given categories."""
 
     async def __call__(

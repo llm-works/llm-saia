@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Re-export backend types for convenience
 from llm_saia.core.backend import AgentResponse, Message, ToolCall, ToolDef
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from llm_saia.core.backend import SAIABackend
+    from llm_saia.core.logger import SAIALogger
 
 __all__ = [
     # Backend types (re-exported)
@@ -25,6 +31,8 @@ __all__ = [
     # Task types
     "RunConfig",
     "TaskResult",
+    # Configuration
+    "VerbConfig",
 ]
 
 
@@ -137,3 +145,17 @@ class RunConfig:
             max_retries=max_retries,
             retry_escalation=escalation,
         )
+
+
+@dataclass
+class VerbConfig:
+    """Shared configuration for all verbs."""
+
+    backend: SAIABackend
+    tools: list[ToolDef]
+    executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None
+    system: str | None
+    run: RunConfig | None = None
+    terminal_tool: str | None = None
+    lg: SAIALogger | None = None
+    warn_tool_support: bool = True

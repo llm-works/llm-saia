@@ -11,6 +11,9 @@ INFRA_DEV_CQ_STRICT := true
 # Test coverage threshold (percentage)
 INFRA_PYTEST_COVERAGE_THRESHOLD := 90
 
+# Docstring coverage threshold (percentage)
+INFRA_DEV_DOCSTRING_THRESHOLD := 90
+
 # Include framework (config first)
 include $(infra)/make/Makefile.config
 include $(infra)/make/Makefile.env

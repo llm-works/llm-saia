@@ -1,9 +1,9 @@
 """INSTRUCT verb: Give a directive and get a response."""
 
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 
-class Instruct(_Verb):
+class Instruct(Verb):
     """Give a directive and get a response."""
 
     async def __call__(self, directive: str, context: str | None = None) -> str:

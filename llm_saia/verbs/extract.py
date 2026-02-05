@@ -2,12 +2,12 @@
 
 from typing import TypeVar
 
-from llm_saia.verbs._base import _Verb
+from llm_saia.core.verb import Verb
 
 T = TypeVar("T")
 
 
-class Extract(_Verb):
+class Extract(Verb):
     """Extract structured data from unstructured content."""
 
     async def __call__(

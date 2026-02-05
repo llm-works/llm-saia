@@ -1,11 +1,10 @@
-"""Base class for verbs with shared loop logic."""
+"""Base class for SAIA verbs."""
 
 from __future__ import annotations
 
 import json
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -14,12 +13,10 @@ from llm_saia.core.types import (
     Message,
     RunConfig,
     ToolCall,
-    ToolDef,
+    VerbConfig,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from llm_saia.core.backend import SAIABackend
     from llm_saia.core.logger import SAIALogger
 
@@ -29,21 +26,11 @@ T = TypeVar("T")
 DEFAULT_RUN = RunConfig(max_iterations=3)
 
 
-@dataclass
-class VerbConfig:
-    """Shared configuration for all verbs."""
+class Verb(ABC):
+    """Base class for all verbs. Subclass this to create custom verbs."""
 
-    backend: SAIABackend
-    tools: list[ToolDef]
-    executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None
-    system: str | None
-    run: RunConfig | None = None
-    terminal_tool: str | None = None
-    lg: SAIALogger | None = None
-
-
-class _Verb(ABC):
-    """Base class for all verbs. Provides shared loop functionality."""
+    # Truncation limit for log previews
+    _PREVIEW_LIMIT = 100
 
     def __init__(self, config: VerbConfig):
         """Initialize verb with configuration."""
@@ -94,7 +81,7 @@ class _Verb(ABC):
                     },
                     "stop_reason": response.stop_reason,
                     "tool_calls": bool(response.tool_calls),
-                    "preview": self._truncate(response.content, 100),
+                    "preview": self._truncate(response.content, self._PREVIEW_LIMIT),
                 },
             )
             self._lg.trace(
@@ -127,6 +114,49 @@ class _Verb(ABC):
             return text
         return f"{text[:limit]}... ({len(text)} chars)"
 
+    # Tool-call JSON patterns that indicate LLM tried to call tools via text output
+    _TOOL_CALL_PATTERNS = ('"name":', '"function":', '"parameters":', '"arguments":')
+
+    # Minimum expected input tokens per tool definition (conservative estimate)
+    _MIN_TOKENS_PER_TOOL = 50
+
+    def _check_tool_support(self, response: AgentResponse) -> None:
+        """Check for signs that the model may not natively support function calling."""
+        if not self._config.warn_tool_support or not self._has_tools() or not self._lg:
+            return
+        self._warn_low_input_tokens(response)
+        self._warn_tool_json_in_text(response)
+
+    def _warn_low_input_tokens(self, response: AgentResponse) -> None:
+        """Warn if input tokens suggest server ignored tool definitions."""
+        if response.tool_calls:  # Tools working, no warning needed
+            return
+        tool_count = len(self._config.tools)
+        min_expected = tool_count * self._MIN_TOKENS_PER_TOOL
+        if response.input_tokens > 0 and response.input_tokens < min_expected:
+            self._lg.warning(  # type: ignore[union-attr]
+                "input tokens suspiciously low - server may be ignoring tool definitions",
+                extra={
+                    "input_tokens": response.input_tokens,
+                    "tool_count": tool_count,
+                    "min_expected": min_expected,
+                },
+            )
+
+    def _warn_tool_json_in_text(self, response: AgentResponse) -> None:
+        """Warn if LLM outputs tool-call JSON as text instead of using tool_calls."""
+        if response.tool_calls or not response.content:
+            return
+        if any(pattern in response.content for pattern in self._TOOL_CALL_PATTERNS):
+            self._lg.warning(  # type: ignore[union-attr]
+                "tools configured but LLM returned text instead of tool_calls - "
+                "model may not support function calling",
+                extra={
+                    "content_preview": self._truncate(response.content, self._PREVIEW_LIMIT),
+                    "tool_count": len(self._config.tools),
+                },
+            )
+
     def _log_loop_complete(
         self, iteration: int, start_time: float, total_tokens: int, content: str
     ) -> None:
@@ -139,7 +169,7 @@ class _Verb(ABC):
                     "iters": iteration + 1,
                     "total_tokens": total_tokens,
                     "elapsed_secs": int(time.monotonic() - start_time),
-                    "preview": self._truncate(content, 100),
+                    "preview": self._truncate(content, self._PREVIEW_LIMIT),
                 },
             )
 
@@ -182,6 +212,7 @@ class _Verb(ABC):
             last_content = response.content
             messages.append(self._to_message(response))
             self._log_response(response, iteration, total_tokens)
+            self._check_tool_support(response)
 
             if response.tool_calls:
                 await self._execute_tools(response.tool_calls, messages)
@@ -274,11 +305,12 @@ class _Verb(ABC):
                 data = json.loads(response.content)
             except json.JSONDecodeError as e:
                 if self._lg:
+                    preview = self._truncate(response.content, self._PREVIEW_LIMIT)
                     self._lg.warning(
                         "json parse error in finalize",
                         extra={
                             "exception": e,
-                            "content_preview": self._truncate(response.content, 100),
+                            "content_preview": preview,
                             "schema": schema.__name__,
                         },
                     )
