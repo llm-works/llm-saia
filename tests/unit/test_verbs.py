@@ -16,6 +16,7 @@ from llm_saia.verbs import (
     Ask,
     Choose,
     Classify,
+    Config,
     Confirm,
     Constrain,
     Critique_,
@@ -25,7 +26,6 @@ from llm_saia.verbs import (
     Instruct,
     Refine,
     Synthesize,
-    VerbConfig,
     Verify,
     recall,
     store,
@@ -36,9 +36,9 @@ from tests.unit.conftest import MockBackend
 pytestmark = pytest.mark.unit
 
 
-def make_config(backend: MockBackend) -> VerbConfig:
-    """Create a VerbConfig with no tools (direct backend calls)."""
-    return VerbConfig(backend=backend, tools=[], executor=None, system=None)
+def make_config(backend: MockBackend) -> Config:
+    """Create a Config with no tools (direct backend calls)."""
+    return Config(backend=backend, tools=[], executor=None, system=None)
 
 
 class TestAsk:

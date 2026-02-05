@@ -5,14 +5,9 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
-from llm_saia.core.types import (
-    AgentResponse,
-    Message,
-    RunConfig,
-    TaskResult,
-    ToolCall,
-    VerbConfig,
-)
+from llm_saia.core.backend import AgentResponse, Message, ToolCall
+from llm_saia.core.config import Config, RunConfig
+from llm_saia.core.types import TaskResult
 from llm_saia.core.verb import Verb
 
 # Default run config for complete (unlimited iterations)
@@ -173,9 +168,9 @@ class Complete(Verb):
 
         return await self._check_completion(task, response.content, messages, iteration)
 
-    def _single_call_config(self) -> VerbConfig:
+    def _single_call_config(self) -> Config:
         """Create config for single-call verbs (no tools/looping)."""
-        return VerbConfig(
+        return Config(
             backend=self._config.backend,
             tools=[],
             executor=None,
@@ -183,6 +178,7 @@ class Complete(Verb):
             run=None,
             terminal_tool=None,
             lg=self._config.lg,
+            warn_tool_support=self._config.warn_tool_support,
         )
 
     async def _check_completion(

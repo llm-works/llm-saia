@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 import pytest
 
-from llm_saia.core.backend import SAIABackend
+from llm_saia import SAIA
+from llm_saia.core.backend import Backend
+from llm_saia.core.config import Config
+from llm_saia.core.logger import Logger
 from llm_saia.core.types import (
     AgentResponse,
     Message,
@@ -44,7 +48,7 @@ def _default_structured_responses() -> dict[str, dict[str, Any]]:
     }
 
 
-class MockBackend(SAIABackend):
+class MockBackend(Backend):
     """Mock backend for testing that returns predetermined responses."""
 
     def __init__(self) -> None:
@@ -165,3 +169,23 @@ class MockBackend(SAIABackend):
 def mock_backend() -> MockBackend:
     """Provide a mock backend for tests."""
     return MockBackend()
+
+
+def make_saia(
+    backend: Backend,
+    tools: list[ToolDef] | None = None,
+    executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
+    system: str | None = None,
+    terminal_tool: str | None = None,
+    lg: Logger | None = None,
+) -> SAIA:
+    """Helper to create SAIA instances for tests."""
+    config = Config(
+        backend=backend,
+        tools=tools or [],
+        executor=executor,
+        system=system,
+        terminal_tool=terminal_tool,
+        lg=lg,
+    )
+    return SAIA(config)

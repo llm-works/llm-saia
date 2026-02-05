@@ -1,6 +1,6 @@
 """Simple OpenAI backend for examples.
 
-This is a minimal implementation of SAIABackend for demonstration purposes.
+This is a minimal implementation of Backend for demonstration purposes.
 Production implementations should live in llm-infer/client.
 """
 
@@ -14,14 +14,14 @@ import httpx
 
 from llm_saia.core.backend import (
     AgentResponse,
+    Backend,
     Message,
-    SAIABackend,
     ToolCall,
     ToolDef,
 )
 
 
-class OpenAIBackend(SAIABackend):
+class OpenAIBackend(Backend):
     """Simple OpenAI-compatible backend for examples.
 
     Works with OpenAI, local LLMs (ollama, llama.cpp, vLLM), and other

@@ -7,18 +7,14 @@ import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from llm_saia.core.backend import AgentResponse, Message, ToolCall
+from llm_saia.core.config import Config, RunConfig
+from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
-from llm_saia.core.types import (
-    AgentResponse,
-    Message,
-    RunConfig,
-    ToolCall,
-    VerbConfig,
-)
 
 if TYPE_CHECKING:
-    from llm_saia.core.backend import SAIABackend
-    from llm_saia.core.logger import SAIALogger
+    from llm_saia.core.backend import Backend
+    from llm_saia.core.logger import Logger
 
 T = TypeVar("T")
 
@@ -32,17 +28,17 @@ class Verb(ABC):
     # Truncation limit for log previews
     _PREVIEW_LIMIT = 100
 
-    def __init__(self, config: VerbConfig):
+    def __init__(self, config: Config):
         """Initialize verb with configuration."""
         self._config = config
 
     @property
-    def _backend(self) -> SAIABackend:
+    def _backend(self) -> Backend:
         """Get the configured backend."""
         return self._config.backend
 
     @property
-    def _lg(self) -> SAIALogger | None:
+    def _lg(self) -> Logger | None:
         """Get the configured logger, if any."""
         return self._config.lg
 
@@ -114,8 +110,15 @@ class Verb(ABC):
             return text
         return f"{text[:limit]}... ({len(text)} chars)"
 
-    # Tool-call JSON patterns that indicate LLM tried to call tools via text output
-    _TOOL_CALL_PATTERNS = ('"name":', '"function":', '"parameters":', '"arguments":')
+    # Tool-call JSON patterns that indicate LLM tried to call tools via text output.
+    # These patterns are specific to common function-calling formats (OpenAI, Anthropic).
+    # We require the pattern to look like a tool invocation structure, not just any JSON.
+    _TOOL_CALL_PATTERNS = (
+        '"function_call":',
+        '"tool_calls":',
+        '"tool_use":',
+        '"name":',
+    )
 
     # Minimum expected input tokens per tool definition (conservative estimate)
     _MIN_TOKENS_PER_TOOL = 50
@@ -348,8 +351,36 @@ class Verb(ABC):
         try:
             data = json.loads(response.content)
         except json.JSONDecodeError as e:
-            raise ValueError(f"LLM returned invalid JSON for structured output: {e}") from e
+            raise self._structured_output_error(e, response.content, schema.__name__) from e
         return parse_json_to_dataclass(data, schema)
+
+    def _structured_output_error(
+        self, error: json.JSONDecodeError, content: str, schema_name: str
+    ) -> StructuredOutputError:
+        """Create appropriate error for structured output parse failure."""
+        error_msg = str(error)
+        # Detect truncation patterns
+        truncation_indicators = (
+            "Unterminated string",
+            "Unexpected end of JSON",
+            "Expecting value",
+            "Expecting ',' delimiter",
+            "Expecting ':' delimiter",
+        )
+        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
+
+        if is_truncated:
+            return TruncatedResponseError(
+                raw_content=content,
+                schema_name=schema_name,
+                parse_error=error_msg,
+            )
+        return StructuredOutputError(
+            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
+            raw_content=content,
+            schema_name=schema_name,
+            parse_error=error_msg,
+        )
 
     @abstractmethod
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:

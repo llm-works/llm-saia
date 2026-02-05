@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from llm_saia.core.backend import SAIABackend
-from llm_saia.core.logger import SAIALogger
-from llm_saia.core.types import RunConfig, ToolDef
+from llm_saia.core.config import Config, RunConfig
+
+if TYPE_CHECKING:
+    from llm_saia.builder import SAIABuilder
 from llm_saia.verbs import (
     Ask,
     Choose,
@@ -23,7 +23,6 @@ from llm_saia.verbs import (
     Instruct,
     Refine,
     Synthesize,
-    VerbConfig,
     Verify,
 )
 
@@ -35,95 +34,69 @@ class SAIA:
     """Framework-agnostic verb vocabulary for LLM agents.
 
     Example:
-        >>> saia = SAIA(backend=AnthropicBackend(), tools=tools, executor=exec)
+        >>> saia = (SAIA.builder()
+        ...     .backend(backend)
+        ...     .tools(tools, executor)
+        ...     .max_iterations(10)
+        ...     .build())
         >>> result = await saia.verify(code, "compiles")
         >>> result = await saia.with_single_call().confirm(claim)
-        >>> result = await saia.with_max_iterations(10).complete(task)
     """
 
-    def __init__(
-        self,
-        backend: SAIABackend,
-        tools: list[ToolDef] | None = None,
-        executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
-        system: str | None = None,
-        run: RunConfig | None = None,
-        terminal_tool: str | None = None,
-        lg: SAIALogger | None = None,
-        warn_tool_support: bool = True,
-        *,
-        _memory: dict[str, Any] | None = None,
-    ):
-        """Initialize SAIA with a backend and optional tool configuration."""
-        self._backend = backend
-        self._tools = tools or []
-        self._executor = executor
-        self._system = system
-        self._run = run or DEFAULT_RUN
-        self._terminal_tool = terminal_tool
-        self._lg = lg
-        self._warn_tool_support = warn_tool_support
+    @classmethod
+    def builder(cls) -> SAIABuilder:
+        """Create a fluent builder for SAIA."""
+        from llm_saia.builder import SAIABuilder
+
+        return SAIABuilder()
+
+    def __init__(self, config: Config, *, _memory: dict[str, Any] | None = None):
+        """Initialize SAIA with configuration."""
+        # Apply default run config if not specified
+        if config.run is None:
+            config = replace(config, run=DEFAULT_RUN)
+        self._config = config
         self._memory = _memory if _memory is not None else {}
         self._init_verbs()
 
     def _init_verbs(self) -> None:
         """Initialize verb instances with current config."""
-        config = VerbConfig(
-            backend=self._backend,
-            tools=self._tools,
-            executor=self._executor,
-            system=self._system,
-            run=self._run,
-            terminal_tool=self._terminal_tool,
-            lg=self._lg,
-            warn_tool_support=self._warn_tool_support,
-        )
-        self.ask = Ask(config)
-        self.choose = Choose(config)
-        self.classify = Classify(config)
-        self.complete = Complete(config)
-        self.confirm = Confirm(config)
-        self.constrain = Constrain(config)
-        self.critique = Critique_(config)
-        self.decompose = Decompose(config)
-        self.ground = Ground(config)
-        self.instruct = Instruct(config)
-        self.extract = Extract(config)
-        self.refine = Refine(config)
-        self.synthesize = Synthesize(config)
-        self.verify = Verify(config)
+        self.ask = Ask(self._config)
+        self.choose = Choose(self._config)
+        self.classify = Classify(self._config)
+        self.complete = Complete(self._config)
+        self.confirm = Confirm(self._config)
+        self.constrain = Constrain(self._config)
+        self.critique = Critique_(self._config)
+        self.decompose = Decompose(self._config)
+        self.ground = Ground(self._config)
+        self.instruct = Instruct(self._config)
+        self.extract = Extract(self._config)
+        self.refine = Refine(self._config)
+        self.synthesize = Synthesize(self._config)
+        self.verify = Verify(self._config)
+
+    @property
+    def config(self) -> Config:
+        """Current configuration."""
+        return self._config
 
     @property
     def run_config(self) -> RunConfig:
         """Current run configuration."""
-        return self._run
+        return self._config.run  # type: ignore[return-value]
 
     def _with_modified_run(self, **kwargs: Any) -> SAIA:
         """Return new SAIA with modified run config. Shares memory."""
-        return SAIA(
-            backend=self._backend,
-            tools=self._tools,
-            executor=self._executor,
-            system=self._system,
-            run=replace(self._run, **kwargs),
-            terminal_tool=self._terminal_tool,
-            lg=self._lg,
-            warn_tool_support=self._warn_tool_support,
-            _memory=self._memory,
-        )
+        # run is guaranteed non-None after __init__ applies DEFAULT_RUN
+        new_run = replace(self._config.run, **kwargs)  # type: ignore[type-var]
+        new_config = replace(self._config, run=new_run)
+        return SAIA(new_config, _memory=self._memory)
 
     def with_run_config(self, run: RunConfig) -> SAIA:
         """Return new SAIA with different run config. Shares memory."""
-        return SAIA(
-            backend=self._backend,
-            tools=self._tools,
-            executor=self._executor,
-            system=self._system,
-            run=run,
-            terminal_tool=self._terminal_tool,
-            lg=self._lg,
-            _memory=self._memory,
-        )
+        new_config = replace(self._config, run=run)
+        return SAIA(new_config, _memory=self._memory)
 
     def with_single_call(self) -> SAIA:
         """Return new SAIA for single LLM call (no looping). Shares memory."""

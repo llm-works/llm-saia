@@ -4,9 +4,8 @@ from typing import Any
 
 import pytest
 
-from llm_saia import SAIA
 from llm_saia.core.types import AgentResponse, ConfirmResult, RunConfig, ToolCall, ToolDef
-from tests.unit.conftest import MockBackend
+from tests.unit.conftest import MockBackend, make_saia
 
 pytestmark = pytest.mark.unit
 
@@ -46,7 +45,7 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task completes when LLM returns text without tool calls."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
 
         mock_backend.queue_tool_response(
             AgentResponse(content="Task completed!", tool_calls=[], stop_reason="end_turn")
@@ -72,7 +71,7 @@ class TestTask:
             executed_tools.append((name, args))
             return f"Results for {args.get('query', 'unknown')}"
 
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=tracking_executor)
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
 
         mock_backend.queue_tool_response(
             AgentResponse(
@@ -99,7 +98,7 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task injects wrap-up message when confirmation fails."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
 
         mock_backend.queue_tool_response(
             AgentResponse(content="I started...", tool_calls=[], stop_reason="end_turn")
@@ -127,12 +126,8 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task stops after max iterations."""
-        saia = SAIA(
-            backend=mock_backend,
-            tools=sample_tools,
-            executor=dummy_executor,
-            run=RunConfig(max_iterations=3),
-        )
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = saia.with_max_iterations(3)
 
         for _ in range(5):
             mock_backend.queue_tool_response(
@@ -151,7 +146,7 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task calls on_iteration callback each iteration."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
         iterations_seen: list[int] = []
 
         mock_backend.queue_tool_response(
@@ -177,7 +172,7 @@ class TestTask:
         async def failing_executor(name: str, args: dict[str, Any]) -> str:
             raise RuntimeError("Tool crashed!")
 
-        saia = SAIA(backend=mock_backend, tools=sample_tools, executor=failing_executor)
+        saia = make_saia(mock_backend, tools=sample_tools, executor=failing_executor)
 
         mock_backend.queue_tool_response(
             AgentResponse(
@@ -202,7 +197,7 @@ class TestTask:
 
     async def test_task_requires_tools(self, mock_backend: MockBackend) -> None:
         """Task raises error when no tools configured."""
-        saia = SAIA(backend=mock_backend, executor=dummy_executor)
+        saia = make_saia(mock_backend, executor=dummy_executor)
 
         with pytest.raises(ValueError, match="Complete requires tools and executor"):
             await saia.complete(task="Do something")
@@ -211,7 +206,7 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task raises error when no executor configured."""
-        saia = SAIA(backend=mock_backend, tools=sample_tools)
+        saia = make_saia(mock_backend, tools=sample_tools)
 
         with pytest.raises(ValueError, match="Complete requires tools and executor"):
             await saia.complete(task="Do something")
@@ -220,12 +215,8 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task stops after soft timeout."""
-        saia = SAIA(
-            backend=mock_backend,
-            tools=sample_tools,
-            executor=dummy_executor,
-            run=RunConfig(timeout_secs=0.001),
-        )
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = saia.with_timeout_secs(0.001)
 
         # Queue enough responses for multiple iterations
         for _ in range(10):
@@ -246,12 +237,8 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Task with max_iterations=0 runs until complete."""
-        saia = SAIA(
-            backend=mock_backend,
-            tools=sample_tools,
-            executor=dummy_executor,
-            run=RunConfig(max_iterations=0),
-        )
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+        saia = saia.with_run_config(RunConfig(max_iterations=0))
 
         # Queue 5 "not done" responses, then one "done"
         for _ in range(5):
@@ -292,8 +279,8 @@ class TestTask:
         )
         tools_with_terminal = sample_tools + [terminal_tool_def]
 
-        saia = SAIA(
-            backend=mock_backend,
+        saia = make_saia(
+            mock_backend,
             tools=tools_with_terminal,
             executor=dummy_executor,
             terminal_tool="task_complete",
@@ -352,8 +339,8 @@ class TestTask:
         )
         tools_with_terminal = sample_tools + [terminal_tool_def]
 
-        saia = SAIA(
-            backend=mock_backend,
+        saia = make_saia(
+            mock_backend,
             tools=tools_with_terminal,
             executor=tracking_executor,
             terminal_tool="finish",
@@ -400,8 +387,8 @@ class TestTask:
         )
         tools_with_terminal = sample_tools + [terminal_tool_def]
 
-        saia = SAIA(
-            backend=mock_backend,
+        saia = make_saia(
+            mock_backend,
             tools=tools_with_terminal,
             executor=tracking_executor,
             terminal_tool="finish",
@@ -451,8 +438,8 @@ class TestTask:
         )
         tools_with_terminal = sample_tools + [terminal_tool_def]
 
-        saia = SAIA(
-            backend=mock_backend,
+        saia = make_saia(
+            mock_backend,
             tools=tools_with_terminal,
             executor=tracking_executor,
             terminal_tool="finish",
@@ -502,8 +489,8 @@ class TestTask:
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
         """Without terminal_tool configured, task uses Confirm verb for completion."""
-        saia = SAIA(
-            backend=mock_backend,
+        saia = make_saia(
+            mock_backend,
             tools=sample_tools,
             executor=dummy_executor,
             # No terminal_tool set
@@ -535,8 +522,8 @@ class TestTask:
         )
         tools_with_terminal = sample_tools + [terminal_tool_def]
 
-        saia = SAIA(
-            backend=mock_backend,
+        saia = make_saia(
+            mock_backend,
             tools=tools_with_terminal,
             executor=dummy_executor,
             terminal_tool="finish",

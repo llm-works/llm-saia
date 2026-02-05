@@ -19,8 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from examples import OpenAIBackend
-from llm_saia import SAIA
-from llm_saia.core.types import Critique, RunConfig, VerifyResult
+from llm_saia import SAIA, Error
+from llm_saia.core.types import Critique, VerifyResult
 
 
 async def gather_evidence(saia: SAIA, claim: str) -> str:
@@ -83,16 +83,16 @@ async def investigate_claim(saia: SAIA, claim: str) -> dict[str, object]:
 async def main() -> None:
     """Run the example."""
     async with OpenAIBackend() as backend:
-        saia = SAIA(
-            backend=backend,
-            run=RunConfig(max_iterations=3, max_call_tokens=4096),
-        )
+        saia = SAIA.builder().backend(backend).max_iterations(3).max_call_tokens(4096).build()
 
         print(f"Run config: {saia.run_config}")
 
         claim = "Python is slower than C for all computational tasks"
-        result = await investigate_claim(saia, claim)
-        print(f"\nResult: {result}")
+        try:
+            result = await investigate_claim(saia, claim)
+            print(f"\nResult: {result}")
+        except Error as e:
+            print(f"\nError: {e}")
 
 
 if __name__ == "__main__":

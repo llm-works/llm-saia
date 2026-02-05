@@ -4,9 +4,9 @@ SAIA defines what it needs from an LLM backend - implementations live elsewhere
 (e.g., llm-infer/client). This keeps SAIA as a pure language layer.
 
 Usage:
-    from llm_saia.core.backend import SAIABackend, Message, ToolDef, AgentResponse
+    from llm_saia.core.backend import Backend, Message, ToolDef, AgentResponse
 
-    class MyBackend(SAIABackend):
+    class MyBackend(Backend):
         async def chat(self, messages, system=None, tools=None, ...):
             ...
 """
@@ -62,7 +62,7 @@ class AgentResponse:
 # --- Backend ABC ---
 
 
-class SAIABackend(ABC):
+class Backend(ABC):
     """Stateless interface for LLM backends.
 
     A single chat() method handles all LLM interactions. SAIA handles
