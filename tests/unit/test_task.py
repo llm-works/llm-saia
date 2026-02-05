@@ -521,3 +521,50 @@ class TestTask:
         assert result.completed is True
         assert result.terminal_tool is None
         assert result.terminal_data is None
+
+    async def test_task_terminal_tool_handles_non_serializable_args(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Terminal tool confirmation handles non-JSON-serializable arguments gracefully."""
+        from datetime import datetime
+
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = SAIA(
+            backend=mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="finish",
+        )
+
+        # Arguments contain a non-JSON-serializable object (datetime)
+        non_serializable_args = {"timestamp": datetime.now(), "data": "test"}
+
+        # First: LLM calls terminal tool with non-serializable args
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Done",
+                tool_calls=[ToolCall(id="call_1", name="finish", arguments=non_serializable_args)],
+                stop_reason="tool_use",
+            )
+        )
+        # Second: LLM confirms
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Confirmed",
+                tool_calls=[ToolCall(id="call_2", name="finish", arguments=non_serializable_args)],
+                stop_reason="tool_use",
+            )
+        )
+
+        # Should not crash - falls back to str() representation
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is True
+        assert result.terminal_tool == "finish"
+        assert result.terminal_data == non_serializable_args

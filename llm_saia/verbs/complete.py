@@ -69,11 +69,15 @@ class Complete(_Verb):
         if result.output:
             return result.output
         if result.terminal_data:
-            try:
-                return json.dumps(result.terminal_data)
-            except (TypeError, ValueError):
-                return str(result.terminal_data)
+            return self._safe_json_dumps(result.terminal_data)
         return ""
+
+    def _safe_json_dumps(self, data: object, indent: int | None = None) -> str:
+        """Serialize data to JSON, falling back to str() for non-serializable objects."""
+        try:
+            return json.dumps(data, indent=indent)
+        except (TypeError, ValueError):
+            return str(data)
 
     def _check_terminal_tool(
         self, task: str, response: AgentResponse, messages: list[Message], iteration: int
@@ -135,7 +139,7 @@ class Complete(_Verb):
             )
         )
         # Add confirmation prompt
-        data_preview = json.dumps(terminal_call.arguments, indent=2)
+        data_preview = self._safe_json_dumps(terminal_call.arguments, indent=2)
         prompt = (
             f"You called `{terminal_tool}` to signal completion.\n\n"
             f"**Original task:** {task}\n\n"
