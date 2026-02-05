@@ -139,12 +139,14 @@ class Complete(Verb):
 
             case ActionKind.INSTRUCT:
                 self._add_response_if_needed(messages, response)
+                self._ack_response_tools(response, messages)
                 if action.message:
                     messages.append(Message(role="user", content=action.message))
                 return None
 
             case ActionKind.SKIP:
                 self._add_response_if_needed(messages, response)
+                self._ack_response_tools(response, messages)
                 messages.append(Message(role="user", content="Continue."))
                 return None
 
@@ -201,6 +203,15 @@ class Complete(Verb):
                     )
                 )
 
+    def _ack_response_tools(self, response: AgentResponse, messages: list[Message]) -> None:
+        """Acknowledge all tool_calls in a response that won't be executed.
+
+        Must be called after _add_response_if_needed for INSTRUCT/SKIP paths
+        where the assistant message contains tool_calls but no tools are executed.
+        """
+        if response.tool_calls:
+            self._ack_skipped_tools(response.tool_calls, [], messages)
+
     def _add_response_if_needed(self, messages: list[Message], response: AgentResponse) -> None:
         """Add response to messages if not already added."""
         if messages:
@@ -227,8 +238,8 @@ class Complete(Verb):
             output=action.output or response.content,
             iterations=iteration + 1,
             history=messages,
-            terminal_data=action.terminal_data if completed else None,
-            terminal_tool=action.terminal_tool if completed else None,
+            terminal_data=action.terminal_data,
+            terminal_tool=action.terminal_tool,
         )
 
     def _log_action(self, action: Action) -> None:

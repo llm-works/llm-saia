@@ -576,6 +576,114 @@ class TestTask:
         assert result.terminal_tool == "finish"
         assert result.terminal_data == non_serializable_args
 
+    async def test_task_terminal_confirmation_produces_tool_results(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """INSTRUCT path for terminal confirmation adds tool_result for orphaned tool_calls."""
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+
+        saia = make_saia(
+            mock_backend,
+            tools=sample_tools + [terminal_tool_def],
+            executor=lambda n, a: n,
+            terminal_tool="finish",
+        )
+
+        # First: LLM calls only the terminal tool (triggers INSTRUCT confirmation)
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Done",
+                tool_calls=[ToolCall(id="call_1", name="finish", arguments={"output": "ok"})],
+                stop_reason="tool_use",
+            )
+        )
+        # Second: LLM confirms
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Confirmed",
+                tool_calls=[ToolCall(id="call_2", name="finish", arguments={"output": "ok"})],
+                stop_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is True
+        # Verify that every non-final assistant tool_call has a matching tool_result.
+        # The final assistant message (COMPLETE/FAIL) won't have tool_results since
+        # no further _chat() call follows, which is correct.
+        assistant_msgs = [
+            (i, m) for i, m in enumerate(result.history) if m.role == "assistant" and m.tool_calls
+        ]
+        # Check all except the last assistant message (the confirmed terminal response)
+        for idx, msg in assistant_msgs[:-1]:
+            for tc in msg.tool_calls:
+                matching = [
+                    m
+                    for m in result.history[idx + 1 :]
+                    if m.role == "tool_result" and m.tool_call_id == tc.id
+                ]
+                assert matching, f"No tool_result for tool_call {tc.id} ({tc.name})"
+
+    async def test_task_terminal_failure_preserves_terminal_data(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Terminal tool failure result preserves terminal_data and terminal_tool."""
+        from llm_saia.core.config import TerminalConfig
+
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+
+        config = Config(
+            backend=mock_backend,
+            tools=sample_tools + [terminal_tool_def],
+            executor=lambda n, a: n,
+            system=None,
+            terminal=TerminalConfig(tool="finish", failure_values=("stuck", "failed")),
+            run=RunConfig(max_retries=0),  # No failure retries
+        )
+        from llm_saia import SAIA
+
+        saia = SAIA(config)
+
+        # First: LLM calls terminal with failure status
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="I'm stuck",
+                tool_calls=[
+                    ToolCall(
+                        id="c1", name="finish", arguments={"status": "stuck", "reason": "blocked"}
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        )
+        # Confirmation: same failure
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Confirmed stuck",
+                tool_calls=[
+                    ToolCall(
+                        id="c2", name="finish", arguments={"status": "stuck", "reason": "blocked"}
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is False
+        assert result.terminal_tool == "finish"
+        assert result.terminal_data == {"status": "stuck", "reason": "blocked"}
+
 
 class TestDefaultController:
     """Tests for DefaultController."""

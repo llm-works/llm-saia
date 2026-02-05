@@ -121,10 +121,14 @@ class DefaultController:
     nudges: dict[TaskState, str] = field(default_factory=lambda: DEFAULT_NUDGES.copy())
 
     # Internal state
+    _classifier: LLMTaskStateClassifier = field(init=False, repr=False)
     _last_nudge_iteration: int = field(default=-100, init=False, repr=False)
     _pending_terminal: ToolCall | None = field(default=None, init=False, repr=False)
     _confirmation_retries: int = field(default=0, init=False, repr=False)
     _failure_retries: int = field(default=0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._classifier = LLMTaskStateClassifier(self.config.llm_config)
 
     def reset(self) -> None:
         """Reset state for a new task."""
@@ -183,6 +187,7 @@ class DefaultController:
         """Request confirmation for terminal tool."""
         self._pending_terminal = call
         self._confirmation_retries = 0
+        self._failure_retries = 0
 
         # Execute other tools if any (but not the terminal tool)
         other_calls = [c for c in (obs.response.tool_calls or []) if c.name != obs.terminal_tool]
@@ -342,8 +347,7 @@ class DefaultController:
 
     async def _handle_no_tools(self, obs: Observation) -> Action:
         """Handle response with no tool calls."""
-        classifier = LLMTaskStateClassifier(self.config.llm_config)
-        result = await classifier.classify(obs.task, obs.response.content, obs.tool_names)
+        result = await self._classifier.classify(obs.task, obs.response.content, obs.tool_names)
 
         if result.state == TaskState.COMPLETED:
             return Action(
