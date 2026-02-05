@@ -4,7 +4,15 @@ from typing import Any
 
 import pytest
 
-from llm_saia.core.types import AgentResponse, ConfirmResult, RunConfig, ToolCall, ToolDef
+from llm_saia.core.config import Config
+from llm_saia.core.types import (
+    AgentResponse,
+    ConfirmResult,
+    Message,
+    RunConfig,
+    ToolCall,
+    ToolDef,
+)
 from tests.unit.conftest import MockBackend, make_saia
 
 pytestmark = pytest.mark.unit
@@ -321,6 +329,8 @@ class TestTask:
         assert result.iterations == 2  # Initial call + confirmation
         assert result.terminal_tool == "task_complete"
         assert result.terminal_data == {"summary": "Successfully completed the search"}
+        # Output should be from original response, not confirmation response
+        assert result.output == "Task finished!"
 
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
@@ -370,10 +380,10 @@ class TestTask:
         assert executed_tools == []
         assert result.terminal_tool == "finish"
 
-    async def test_task_terminal_tool_in_batch_skips_other_tools(
+    async def test_task_terminal_tool_in_batch_executes_other_tools(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
-        """When terminal tool is in a batch with other tools, other tools are not executed."""
+        """When terminal tool is in a batch with other tools, other tools ARE executed."""
         executed_tools: list[str] = []
 
         async def tracking_executor(name: str, args: dict[str, Any]) -> str:
@@ -417,8 +427,8 @@ class TestTask:
         result = await saia.complete(task="Search and finish")
 
         assert result.completed is True
-        # Neither tool was executed - terminal tool detection short-circuits
-        assert executed_tools == []
+        # Non-terminal tools are executed before asking for confirmation
+        assert executed_tools == ["search"]
         assert result.terminal_tool == "finish"
 
     async def test_task_terminal_tool_can_be_reconsidered(
@@ -555,3 +565,82 @@ class TestTask:
         assert result.completed is True
         assert result.terminal_tool == "finish"
         assert result.terminal_data == non_serializable_args
+
+
+class TestCompleteHelpers:
+    """Tests for Complete verb helper methods."""
+
+    def test_has_continuation_signal_detects_intent_phrases(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Continuation signals detect intent to continue."""
+        from llm_saia.verbs.complete import Complete
+
+        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        complete = Complete(config)
+
+        # Should detect
+        assert complete._has_continuation_signal("Let me check the file")
+        assert complete._has_continuation_signal("I will use the search tool")
+        assert complete._has_continuation_signal("Let's proceed with the next step")
+        assert complete._has_continuation_signal("Would you like me to continue?")
+        assert complete._has_continuation_signal("Let's read the README")
+
+        # Should NOT detect
+        assert not complete._has_continuation_signal("Task completed successfully")
+        assert not complete._has_continuation_signal("Here is the result")
+        assert not complete._has_continuation_signal("Done")
+
+    def test_has_continuation_signal_detects_text_tool_patterns(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Continuation signals detect tool invocations written as text."""
+        from llm_saia.verbs.complete import Complete
+
+        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        complete = Complete(config)
+
+        # Should detect tool-like text
+        assert complete._has_continuation_signal('read_file path="README.md"')
+        assert complete._has_continuation_signal("shell ls -la")
+
+        # Should NOT detect
+        assert not complete._has_continuation_signal("The file was read successfully")
+
+    def test_check_contradiction_returns_true_for_contradictory_content(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Contradiction check identifies contradictory confirmation."""
+        from llm_saia.verbs.complete import Complete
+
+        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        complete = Complete(config)
+        messages: list[Message] = []
+        terminal_call = ToolCall(id="call_1", name="finish", arguments={})
+
+        # Contradictory content (says "final" but has continuation signal)
+        result = complete._check_contradiction(
+            "Yes, this is final. But let me also check one more thing...",
+            terminal_call,
+            messages,
+        )
+        assert result is True
+        # Should have added a pushback message
+        assert len(messages) == 1
+        assert "contradictory signals" in messages[0].content
+
+    def test_check_contradiction_returns_false_for_clean_confirmation(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Clean confirmations pass through."""
+        from llm_saia.verbs.complete import Complete
+
+        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        complete = Complete(config)
+        messages: list[Message] = []
+        terminal_call = ToolCall(id="call_1", name="finish", arguments={})
+
+        # Clean confirmation
+        result = complete._check_contradiction("Confirmed", terminal_call, messages)
+        assert result is False
+        assert len(messages) == 0  # No pushback added

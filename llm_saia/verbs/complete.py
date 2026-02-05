@@ -3,7 +3,7 @@
 import json
 import time
 from collections.abc import Awaitable, Callable
-from typing import Literal
+from typing import Any, Literal
 
 from llm_saia.core.backend import AgentResponse, Message, ToolCall
 from llm_saia.core.config import Config, RunConfig
@@ -54,7 +54,7 @@ class Complete(Verb):
         self, task: str, response: AgentResponse, messages: list[Message], iteration: int
     ) -> TaskResult | None:
         """Check if task completed via terminal tool or confirmation."""
-        terminal_result = self._check_terminal_tool(task, response, messages, iteration)
+        terminal_result = await self._check_terminal_tool(task, response, messages, iteration)
         if terminal_result is False:
             # Terminal tool detected but awaiting confirmation - continue loop
             return None
@@ -77,7 +77,7 @@ class Complete(Verb):
         except (TypeError, ValueError):
             return str(data)
 
-    def _check_terminal_tool(
+    async def _check_terminal_tool(
         self, task: str, response: AgentResponse, messages: list[Message], iteration: int
     ) -> TaskResult | Literal[False] | None:
         """Check if terminal tool was called.
@@ -99,30 +99,101 @@ class Complete(Verb):
 
         # Check if this is a confirmed terminal call (called twice in a row)
         if self._is_terminal_confirmed(messages, terminal_tool):
-            return TaskResult(
-                completed=True,
-                output=response.content,
-                iterations=iteration + 1,
-                history=messages,
-                terminal_data=terminal_call.arguments,
-                terminal_tool=terminal_tool,
+            return self._handle_confirmed_terminal(
+                task, terminal_tool, terminal_call, response.content, messages, iteration
             )
+
+        # Execute any non-terminal tools before asking for confirmation
+        # This ensures the LLM has results from all tools it called
+        non_terminal_calls = [tc for tc in response.tool_calls if tc.name != terminal_tool]
+        if non_terminal_calls:
+            await self._execute_tools(non_terminal_calls, messages)
 
         # First terminal call - ask for confirmation
         self._inject_terminal_confirmation(task, terminal_tool, terminal_call, messages)
         return False
+
+    # Marker in pushback messages that invalidates a pending confirmation
+    _CONTRADICTION_MARKER = "contradictory signals"
 
     def _is_terminal_confirmed(self, messages: list[Message], terminal_tool: str) -> bool:
         """Check if this is a second terminal tool call (confirmation)."""
         # Look for a recent confirmation prompt in messages
         confirm_marker = f"call `{terminal_tool}` again to confirm"
         for msg in reversed(messages[:-1]):  # Exclude the message we just added
+            # If we hit a contradiction pushback, the confirmation was invalidated
+            if msg.role == "tool_result" and self._CONTRADICTION_MARKER in msg.content:
+                return False
             if msg.role == "user" and confirm_marker in msg.content:
                 return True
             # Only look back to the previous user message
             if msg.role == "user":
                 break
         return False
+
+    def _check_contradiction(
+        self, confirm_content: str, terminal_call: ToolCall, messages: list[Message]
+    ) -> bool:
+        """Check for contradictory continuation signals. Returns True if pushed back."""
+        if not self._has_continuation_signal(confirm_content):
+            return False
+        contradiction_msg = (
+            "Your response contains contradictory signals - you confirmed completion "
+            "but also indicated you want to continue. Please either continue working "
+            "using the available tools, or call the terminal tool with a clear final answer."
+        )
+        messages.append(
+            Message(role="tool_result", content=contradiction_msg, tool_call_id=terminal_call.id)
+        )
+        return True
+
+    def _handle_confirmed_terminal(
+        self,
+        task: str,
+        terminal_tool: str,
+        terminal_call: ToolCall,
+        confirm_content: str,
+        messages: list[Message],
+        iteration: int,
+    ) -> TaskResult | Literal[False]:
+        """Handle a confirmed terminal tool call."""
+        # Check for contradiction: LLM says "confirmed" but also has continuation signals
+        if self._check_contradiction(confirm_content, terminal_call, messages):
+            return False
+
+        # Check for failure indicators - if LLM says "stuck", push back
+        if self._is_failure_status(terminal_call.arguments):
+            max_retries = (self._config.run or DEFAULT_COMPLETE_RUN).max_retries
+            if self._count_failure_retries(messages) < max_retries:
+                self._inject_retry_prompt(task, terminal_call.arguments, messages)
+                return False
+            # Max retries exceeded - accept failure
+
+        original_content = self._get_original_terminal_content(messages, terminal_tool)
+        return TaskResult(
+            completed=not self._is_failure_status(terminal_call.arguments),
+            output=original_content,
+            iterations=iteration + 1,
+            history=messages,
+            terminal_data=terminal_call.arguments,
+            terminal_tool=terminal_tool,
+        )
+
+    def _get_original_terminal_content(self, messages: list[Message], terminal_tool: str) -> str:
+        """Get content from the original terminal tool call (before confirmation).
+
+        Searches backwards for the assistant message that precedes the confirmation prompt.
+        This handles cases where non-terminal tools added extra messages.
+        """
+        confirm_marker = f"call `{terminal_tool}` again to confirm"
+        found_confirm = False
+        for msg in reversed(messages[:-1]):  # Exclude the confirmation response we just added
+            if msg.role == "user" and confirm_marker in msg.content:
+                found_confirm = True
+                continue
+            if found_confirm and msg.role == "assistant":
+                return msg.content
+        return ""
 
     def _inject_terminal_confirmation(
         self, task: str, terminal_tool: str, terminal_call: ToolCall, messages: list[Message]
@@ -147,6 +218,55 @@ class Complete(Verb):
             f"- If NO, continue working using the available tools."
         )
         messages.append(Message(role="user", content=prompt))
+
+    # Statuses that indicate the LLM gave up without completing
+    _FAILURE_STATUSES = frozenset(
+        {
+            "stuck",
+            "failed",
+            "error",
+            "incomplete",
+            "blocked",
+            "unable",
+            "cannot",
+            "impossible",
+            "give_up",
+            "giving_up",
+            "abort",
+            "aborted",
+        }
+    )
+
+    def _is_failure_status(self, terminal_data: dict[str, Any]) -> bool:
+        """Check if terminal data indicates a failure rather than success."""
+        status = terminal_data.get("status", "")
+        if isinstance(status, str):
+            return status.lower() in self._FAILURE_STATUSES
+        return False
+
+    # Marker for retry prompts so we can count them
+    _RETRY_MARKER = "[SAIA_RETRY]"
+
+    def _inject_retry_prompt(
+        self, task: str, terminal_data: dict[str, Any], messages: list[Message]
+    ) -> None:
+        """Inject prompt telling LLM to keep trying after failure status."""
+        status = terminal_data.get("status", "unknown")
+        conclusion = terminal_data.get("conclusion", "")
+        prompt = (
+            f"{self._RETRY_MARKER} You indicated status '{status}' but the task is not complete.\n"
+            f"\n**Original task:** {task}\n\n"
+            f"**Your conclusion:** {conclusion}\n\n"
+            f"Please continue working on the task using the available tools. "
+            f"Do not give up - try a different approach if needed."
+        )
+        messages.append(Message(role="user", content=prompt))
+
+    def _count_failure_retries(self, messages: list[Message]) -> int:
+        """Count how many retry prompts have been injected."""
+        return sum(
+            1 for msg in messages if msg.role == "user" and self._RETRY_MARKER in msg.content
+        )
 
     async def _run_iteration(
         self, messages: list[Message], config: RunConfig
@@ -181,10 +301,73 @@ class Complete(Verb):
             warn_tool_support=self._config.warn_tool_support,
         )
 
+    # Phrases that indicate the LLM wants to continue but didn't use tools
+    _CONTINUATION_SIGNALS = (
+        # Intent to act
+        "let's proceed",
+        "let me ",
+        "i will use",
+        "i'll use",
+        "next, i will",
+        "next i will",
+        "now i'll",
+        "now i will",
+        "let's use",
+        "i'm going to use",
+        "i am going to use",
+        # Asking for permission to continue
+        "would you like to proceed",
+        "would you like me to",
+        "shall i ",
+        "should i ",
+        "do you want me to",
+        "do you want to proceed",
+        "want me to continue",
+        # Intent to explore/read (often when tool access is lost)
+        "let's read",
+        "let's examine",
+        "let's look at",
+        "let's check",
+        "let's explore",
+        "let's review",
+        "let's see",
+        "let's open",
+    )
+
+    # Patterns that look like tool invocations written in text (when tool access is lost)
+    _TEXT_TOOL_PATTERNS = (
+        "read_file",
+        "shell ",
+        "execute(",
+        "run_command",
+        "search_files",
+        "list_files",
+    )
+
+    def _has_continuation_signal(self, content: str) -> bool:
+        """Check if content indicates the LLM wants to continue working."""
+        content_lower = content.lower()
+        if any(signal in content_lower for signal in self._CONTINUATION_SIGNALS):
+            return True
+        # Check for tool invocations written as text (usually in code blocks)
+        if any(pattern in content_lower for pattern in self._TEXT_TOOL_PATTERNS):
+            return True
+        return False
+
     async def _check_completion(
         self, task: str, content: str, messages: list[Message], iteration: int
     ) -> TaskResult | None:
         """Check if task is complete. Returns TaskResult if done, None to continue."""
+        # Fast path: if content has continuation signals, don't bother with Confirm
+        if self._has_continuation_signal(content):
+            wrap_up = (
+                "You indicated you want to continue but didn't use any tools. "
+                "Please use the available tools to proceed, or call the terminal tool "
+                "if you have completed the task."
+            )
+            messages.append(Message(role="user", content=wrap_up))
+            return None
+
         from llm_saia.verbs.confirm import Confirm
 
         confirm = Confirm(self._single_call_config())
