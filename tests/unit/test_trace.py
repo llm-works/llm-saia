@@ -12,7 +12,7 @@ import pytest
 from llm_saia.core.backend import AgentResponse, ToolCall, ToolDef
 from llm_saia.core.controller import Action, ActionType, Observation
 from llm_saia.core.trace import Tracer, TracerFactory, build_base_trace, build_trace
-from llm_saia.core.types import DecisionReason
+from llm_saia.core.types import ClassifyResult, DecisionReason
 from llm_saia.core.verb import Verb
 from tests.unit.conftest import MockBackend, make_saia
 
@@ -403,7 +403,7 @@ class TestCompleteTrace:
             executor=lambda n, a: "result",
         )
         mock_backend.set_structured_response(
-            "ClassifyResult", {"category": "completed", "confidence": 0.9, "reason": "done"}
+            ClassifyResult, ClassifyResult(category="completed", confidence=0.9, reason="done")
         )
         mock_backend.set_complete_response("done")
         result = await saia.complete("do something")

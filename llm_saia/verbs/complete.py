@@ -386,7 +386,6 @@ class Complete(Verb):
         classifier_called = action.reason in (
             DecisionReason.CLASSIFIED_COMPLETE,
             DecisionReason.NUDGE_CLASSIFIED,
-            DecisionReason.BACKOFF,
         )
 
         record = build_trace(
