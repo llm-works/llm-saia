@@ -94,7 +94,9 @@ async def common_executor(name: str, args: dict[str, Any]) -> str:
             if not path.is_dir():
                 return f"Error: {path} is not a directory"
             try:
-                return "\n".join(p.name for p in sorted(path.iterdir()) if not p.name.startswith("."))
+                return "\n".join(
+                    p.name for p in sorted(path.iterdir()) if not p.name.startswith(".")
+                )
             except (PermissionError, OSError) as e:
                 return f"Error listing {path}: {e}"
         case _:
