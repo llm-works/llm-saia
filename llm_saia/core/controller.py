@@ -10,6 +10,7 @@ need gentler, less frequent nudges while stronger models can be pushed harder.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
@@ -135,6 +136,7 @@ class DefaultController:
     _pending_terminal: ToolCall | None = field(default=None, init=False, repr=False)
     _confirmation_retries: int = field(default=0, init=False, repr=False)
     _failure_retries: int = field(default=0, init=False, repr=False)
+    _consecutive_degenerate: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._classifier = LLMTaskStateClassifier(self.config.llm_config)
@@ -145,6 +147,7 @@ class DefaultController:
         self._pending_terminal = None
         self._confirmation_retries = 0
         self._failure_retries = 0
+        self._consecutive_degenerate = 0
 
     async def decide(self, obs: Observation) -> Action:
         """Decide what action to take."""
@@ -153,8 +156,9 @@ class DefaultController:
         if terminal_action:
             return terminal_action
 
-        # 2. Has tool calls → execute them
+        # 2. Has tool calls → execute them (reset degenerate counter)
         if obs.response.tool_calls:
+            self._consecutive_degenerate = 0
             return Action(ActionKind.EXECUTE_TOOLS, reason="has_tool_calls")
 
         # 3. No tool calls → classify and decide
@@ -360,42 +364,47 @@ class DefaultController:
     def _has_text_tool_pattern(self, content: str, tool_names: list[str]) -> bool:
         """Check if content contains tool names written as text (tool access lost).
 
-        Matches against actual tool names provided to the agent, avoiding false
-        positives from hardcoded patterns like ``"shell "``.  Falls back to the
-        static ``_TEXT_TOOL_PATTERNS`` when no tool names are available.
+        Uses word-boundary matching against actual tool names to avoid false
+        positives (e.g. ``"search"`` inside ``"research"``).  Falls back to the
+        static ``_TEXT_TOOL_PATTERNS`` (which have their own delimiters) when no
+        tool names are available.
         """
         if not content:
             return False
         content_lower = content.lower()
-        patterns = [t.lower() for t in tool_names] if tool_names else self._TEXT_TOOL_PATTERNS
-        return any(p in content_lower for p in patterns)
+        if tool_names:
+            return any(
+                re.search(r"\b" + re.escape(t.lower()) + r"\b", content_lower) for t in tool_names
+            )
+        return any(p in content_lower for p in self._TEXT_TOOL_PATTERNS)
 
     async def _handle_no_tools(self, obs: Observation) -> Action:
         """Handle response with no tool calls.
 
         Checks for degenerate states (empty response, text-tool patterns) first,
-        bypassing backoff and classifier. Normal responses go through classification
-        and backoff logic.
+        bypassing backoff and classifier. After ``backoff_iterations`` consecutive
+        degenerate nudges, falls through to classify-and-nudge to avoid infinite
+        loops when the LLM genuinely cannot make tool calls.
         """
-        # Degenerate: empty response (0 output tokens) — nudge immediately
-        if self._is_empty_response(obs.response):
-            self._last_nudge_iteration = obs.iteration
-            return Action(
-                ActionKind.INSTRUCT,
-                message=_EMPTY_RESPONSE_NUDGE,
-                reason="empty_response",
-            )
+        is_degenerate = self._is_empty_response(obs.response) or self._has_text_tool_pattern(
+            obs.response.content, obs.tool_names
+        )
 
-        # Degenerate: LLM writing tool calls as text — nudge immediately
-        if self._has_text_tool_pattern(obs.response.content, obs.tool_names):
-            self._last_nudge_iteration = obs.iteration
-            return Action(
-                ActionKind.INSTRUCT,
-                message=_TEXT_TOOL_NUDGE,
-                reason="text_tool_pattern",
-            )
+        if is_degenerate:
+            self._consecutive_degenerate += 1
+        else:
+            self._consecutive_degenerate = 0
+            return await self._classify_and_nudge(obs)
 
-        return await self._classify_and_nudge(obs)
+        # After enough consecutive degenerate nudges, fall through to classifier
+        # so backoff kicks in and the loop can terminate naturally.
+        if self._consecutive_degenerate > self.config.backoff_iterations:
+            return await self._classify_and_nudge(obs)
+
+        reason = "empty_response" if self._is_empty_response(obs.response) else "text_tool_pattern"
+        message = _EMPTY_RESPONSE_NUDGE if reason == "empty_response" else _TEXT_TOOL_NUDGE
+        self._last_nudge_iteration = obs.iteration
+        return Action(ActionKind.INSTRUCT, message=message, reason=reason)
 
     async def _classify_and_nudge(self, obs: Observation) -> Action:
         """Classify the response state and decide whether to nudge or backoff."""

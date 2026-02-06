@@ -753,6 +753,8 @@ class TestDefaultController:
         assert controller._has_text_tool_pattern("Using execute(ls)", tools)
         # No match — "shell" is not in tool_names
         assert not controller._has_text_tool_pattern("I need a shell script", tools)
+        # No match — word-boundary prevents "search" matching inside "research"
+        assert not controller._has_text_tool_pattern("I'll research the best approach", tools)
         # Clean content
         assert not controller._has_text_tool_pattern("The task is complete", tools)
         assert not controller._has_text_tool_pattern("", tools)
@@ -819,6 +821,102 @@ class TestDefaultController:
         assert action.kind == ActionKind.INSTRUCT
         assert action.reason == "text_tool_pattern"
         assert "text" in action.message.lower()
+
+    async def test_degenerate_falls_through_after_limit(self, mock_backend: MockBackend) -> None:
+        """After backoff_iterations consecutive degenerate nudges, falls through to classifier."""
+        from llm_saia.core.controller import (
+            ActionKind,
+            ControllerConfig,
+            DefaultController,
+            Observation,
+        )
+
+        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=2)
+        controller = DefaultController(config=ctrl_config)
+        controller.reset()
+
+        def make_obs(iteration: int) -> Observation:
+            return Observation(
+                response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+                messages=[],
+                iteration=iteration,
+                task="do something",
+                tool_names=["search"],
+                terminal_tool=None,
+            )
+
+        # First 2 degenerate responses → nudge (within limit)
+        a1 = await controller.decide(make_obs(1))
+        assert a1.kind == ActionKind.INSTRUCT
+        assert a1.reason == "empty_response"
+
+        a2 = await controller.decide(make_obs(2))
+        assert a2.kind == ActionKind.INSTRUCT
+        assert a2.reason == "empty_response"
+
+        # 3rd consecutive → exceeds backoff_iterations=2, falls through to classifier.
+        # Classifier returns WANTS_CONTINUE (default mock), and since the last nudge
+        # was on iteration 2, backoff window still active → SKIP.
+        a3 = await controller.decide(make_obs(3))
+        assert a3.kind == ActionKind.SKIP
+        assert "backoff" in a3.reason
+
+    async def test_degenerate_counter_resets_on_tool_calls(self, mock_backend: MockBackend) -> None:
+        """Consecutive degenerate counter resets when LLM makes real tool calls."""
+        from llm_saia.core.controller import (
+            ActionKind,
+            ControllerConfig,
+            DefaultController,
+            Observation,
+        )
+
+        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=1)
+        controller = DefaultController(config=ctrl_config)
+        controller.reset()
+
+        # 1 degenerate nudge (at the limit)
+        obs_empty = Observation(
+            response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+            messages=[],
+            iteration=1,
+            task="do something",
+            tool_names=["search"],
+            terminal_tool=None,
+        )
+        a1 = await controller.decide(obs_empty)
+        assert a1.kind == ActionKind.INSTRUCT
+        assert a1.reason == "empty_response"
+
+        # LLM recovers — makes a tool call
+        obs_tools = Observation(
+            response=AgentResponse(
+                content="",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={})],
+                output_tokens=5,
+            ),
+            messages=[],
+            iteration=2,
+            task="do something",
+            tool_names=["search"],
+            terminal_tool=None,
+        )
+        a2 = await controller.decide(obs_tools)
+        assert a2.kind == ActionKind.EXECUTE_TOOLS
+
+        # Another degenerate — counter was reset, so should nudge again (not fall through)
+        obs_empty2 = Observation(
+            response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+            messages=[],
+            iteration=3,
+            task="do something",
+            tool_names=["search"],
+            terminal_tool=None,
+        )
+        a3 = await controller.decide(obs_empty2)
+        assert a3.kind == ActionKind.INSTRUCT
+        assert a3.reason == "empty_response"
 
 
 class TestTaskStateClassifier:
