@@ -133,3 +133,39 @@ class SAIA:
     def store(self, key: str, value: Any) -> None:
         """STORE: Save a value to memory."""
         self._memory[key] = value
+
+    # --- Prompt Utilities ---
+
+    def compose(self, *layers: str | None, separator: str = "\n\n") -> str:
+        """COMPOSE: Build structured prompts from layers.
+
+        Automatically filters out None and empty strings to simplify prompt
+        composition when some layers may be optional.
+
+        Args:
+            *layers: Prompt layers to combine (None/empty are filtered out)
+            separator: String to join layers with (default: double newline)
+
+        Returns:
+            Combined prompt string (may be empty if all layers filtered out)
+
+        Example:
+            >>> # Simple composition
+            >>> prompt = saia.compose(
+            ...     "You are a comedian",
+            ...     "Past jokes: ...",
+            ...     "Tell me a joke about cats"
+            ... )
+            >>> # -> "You are a comedian\\n\\nPast jokes: ...\\n\\nTell me a joke about cats"
+            >>>
+            >>> # With None/empty filtering (common pattern in agents)
+            >>> context = None  # No context available
+            >>> prompt = saia.compose("You are helpful", context, "Help me code")
+            >>> # -> "You are helpful\\n\\nHelp me code"
+            >>>
+            >>> # Custom separator
+            >>> prompt = saia.compose("Step 1", "Step 2", separator=" -> ")
+            >>> # -> "Step 1 -> Step 2"
+        """
+        filtered = [layer for layer in layers if layer]
+        return separator.join(filtered)
