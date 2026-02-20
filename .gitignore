@@ -8,6 +8,7 @@ __pycache__
 Makefile.local
 .installed_packages
 .coverage
+.cover/
 .htmlcov
 .logs
 *.egg-info
