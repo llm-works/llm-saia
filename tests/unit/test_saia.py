@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from llm_saia.core.types import ChooseResult, ClassifyResult, ConfirmResult, Critique, VerifyResult
+from llm_saia.core.types import ChooseResult, ClassifyResult, Critique, VerifyResult
 from llm_saia.verbs.decompose import DecomposeResult
 from tests.unit.conftest import MockBackend, make_saia
 
@@ -52,14 +52,6 @@ class TestSAIA:
 
         assert isinstance(result, ClassifyResult)
         assert result.category == "test_category"
-
-    async def test_confirm(self, mock_backend: MockBackend) -> None:
-        saia = make_saia(mock_backend)
-
-        result = await saia.confirm("claim")
-
-        assert isinstance(result, ConfirmResult)
-        assert result.confirmed is True
 
     async def test_choose(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)

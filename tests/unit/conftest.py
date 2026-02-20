@@ -41,7 +41,6 @@ def _default_structured_responses() -> dict[str, dict[str, Any]]:
             "confidence": 0.9,
             "reason": "test classification reason",
         },
-        "ConfirmResult": {"confirmed": True, "reason": "test confirmation reason"},
         "ChooseResult": {"choice": "option_a", "reason": "test choice reason"},
         # Generic fallbacks
         "DecomposeResult": {"subtasks": ["task 1", "task 2"]},

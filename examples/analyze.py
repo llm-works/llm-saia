@@ -1,12 +1,29 @@
 #!/usr/bin/env python3
 """Example: Use the Complete verb with tools to analyze its own source code.
 
-Demonstrates the agentic tool loop — the LLM reads files, reasons about them,
-and calls a terminal tool when done.  Every LLM call is traced.
+Demonstrates the agentic tool loop with tracing — the LLM reads files, reasons
+about them, and calls done when finished. Every LLM call is traced.
+
+Recommended usage: LLM_BACKEND=anthropic ./analyze.py
+Requires ANTHROPIC_API_KEY environment variable.
 
 Usage:
-    ./examples/analyze.py           # compact one-line-per-iteration trace
-    ./examples/analyze.py --full    # full JSON trace blobs
+    ./examples/analyze.py           # normal output
+    ./examples/analyze.py --trace   # with compact trace
+    ./examples/analyze.py --trace --full  # with full JSON trace
+
+Example output:
+    [task] Analyze ./examples/analyze.py and summarize what it does
+
+    [0] read_file(path=./examples/analyze.py)
+    [1] done(summary=This file is a Python example demonstrating...)
+    [2] done(summary=This file is a Python example demonstrating...)
+
+    [done] iterations: 3
+
+    This file is a Python example demonstrating an agentic tool loop using the
+    SAIA framework. It shows how to define tools (read_file, done), configure
+    terminal conditions, and trace LLM interactions...
 """
 
 import argparse
@@ -15,69 +32,83 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Add project root to path for direct execution
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from examples import (
-    COMMON_TOOLS,
-    OpenAIBackend,
-    make_executor,
-    print_trace_compact,
-    print_trace_full,
-)
-from llm_saia import SAIA, Error
+from examples import Colors as C
+from examples import get_backend, print_trace_compact, print_trace_full
+from llm_saia import SAIA, ToolDef
+
+# Simple tools for file analysis
+TOOLS = [
+    ToolDef(
+        name="read_file",
+        description="Read contents of a file",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "File path"}},
+            "required": ["path"],
+        },
+    ),
+    ToolDef(
+        name="done",
+        description="Call when analysis is complete",
+        parameters={
+            "type": "object",
+            "properties": {"summary": {"type": "string", "description": "Analysis summary"}},
+            "required": ["summary"],
+        },
+    ),
+]
 
 
-def _build_saia(backend: Any, trace_fn: Any) -> SAIA:
-    """Build the SAIA instance for the example.
-
-    The .terminal() configuration is critical - it tells SAIA that "report" is
-    the terminal tool that signals completion. When the LLM calls report():
-    1. Controller intercepts it (doesn't execute via executor)
-    2. Asks LLM to call report() again to confirm
-    3. On confirmation, extracts args["analysis"] as final output
-
-    Without .terminal(), "report" would just be a regular tool that returns
-    "Unknown tool: report" from the executor.
-    """
-    return (
-        SAIA.builder()
-        .backend(backend)
-        # .logger(StderrLogger("trace"))
-        .tools(COMMON_TOOLS, make_executor())
-        # Mark "report" as terminal tool - extracts "analysis" field as final output
-        .terminal("report", output_field="analysis")
-        .system("You are a code analyst. Read the requested file, then submit a report.")
-        .max_iterations(100)
-        .max_call_tokens(2048)
-        .timeout(300)
-        .tracing.callback(trace_fn)
-        .build()
-    )
+async def execute_tool(name: str, args: dict[str, Any]) -> str:
+    """Execute a tool call."""
+    if name == "read_file":
+        path = Path(args["path"])
+        if not path.exists():
+            return f"Error: {path} not found"
+        return path.read_text()[:4000]
+    return f"Unknown tool: {name}"
 
 
-async def main() -> None:
-    """Run the example."""
-    parser = argparse.ArgumentParser(description="Analyze this script using SAIA Complete verb")
-    parser.add_argument("--full", action="store_true", help="Show full JSON trace blobs")
+async def main() -> None:  # cq: exempt
+    parser = argparse.ArgumentParser(description="Analyze this script with tracing")
+    parser.add_argument("--full", action="store_true", help="Show full JSON trace")
+    parser.add_argument("--trace", action="store_true", help="Show trace output")
     args = parser.parse_args()
-    trace_fn = print_trace_full if args.full else print_trace_compact
 
-    async with OpenAIBackend() as backend:
-        saia = _build_saia(backend, trace_fn)
-        try:
-            result = await saia.with_request_id("analyze-001").complete(
-                f"Analyze the file {__file__} and print a short summary"
-            )
-            print(f"\nCompleted: {result.completed}")
-            print(f"Iterations: {result.iterations}")
-            print(f"Trace ID: {result.trace_id}")
-            print(f"Request ID: {result.request_id}")
-            print(f"Score: {result.score}")
-            print(f"\n{result.output}")
-        except Error as e:
-            print(f"Error: {e}")
+    async with get_backend() as backend:
+        builder = (
+            SAIA.builder()
+            .backend(backend)
+            .tools(TOOLS, execute_tool)
+            .terminal("done", output_field="summary")
+            .system("You are a code analyst. Read the file, then call done with a brief summary.")
+            .max_iterations(10)
+        )
+        if args.trace:
+            trace_fn = print_trace_full if args.full else print_trace_compact
+            builder = builder.tracing.callback(trace_fn)
+        saia = builder.build()
+
+        task = f"Analyze {__file__} and summarize what it does"
+        print(f"{C.CYAN}[task]{C.RESET} {task}\n")
+
+        async def on_iteration(i: int, response: Any) -> None:
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    args_str = ", ".join(f"{k}={v}" for k, v in tc.arguments.items())
+                    print(f"{C.YELLOW}[{i}]{C.RESET} {tc.name}({args_str[:60]})")
+            elif response.content:
+                print(f"{C.YELLOW}[{i}]{C.RESET} thinking...")
+
+        result = await saia.with_request_id("analyze-001").complete(task, on_iteration=on_iteration)
+        print(f"\n{C.GREEN}[done]{C.RESET} iterations: {result.iterations}")
+        print(f"\n{result.output}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")

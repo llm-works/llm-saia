@@ -7,7 +7,6 @@ import pytest
 from llm_saia.core.types import (
     ChooseResult,
     ClassifyResult,
-    ConfirmResult,
     Critique,
     Evidence,
     VerifyResult,
@@ -17,7 +16,6 @@ from llm_saia.verbs import (
     Choose,
     Classify,
     Config,
-    Confirm,
     Constrain,
     Critique_,
     Decompose,
@@ -129,29 +127,6 @@ class TestClassify:
         await classify("text", ["a", "b"], criteria="Based on sentiment")
 
         assert "Based on sentiment" in mock_backend.last_prompt
-
-
-class TestConfirm:
-    async def test_confirm_returns_result(self, mock_backend: MockBackend) -> None:
-        confirm = Confirm(make_config(mock_backend))
-        result = await confirm("the task is complete")
-
-        assert isinstance(result, ConfirmResult)
-        assert result.confirmed is True
-        assert result.reason == "test confirmation reason"
-
-    async def test_confirm_includes_claim_in_prompt(self, mock_backend: MockBackend) -> None:
-        confirm = Confirm(make_config(mock_backend))
-        await confirm("this claim should be confirmed")
-
-        assert "this claim should be confirmed" in mock_backend.last_prompt
-
-    async def test_confirm_includes_context_when_provided(self, mock_backend: MockBackend) -> None:
-        confirm = Confirm(make_config(mock_backend))
-        await confirm("task complete", context="The agent processed all items.")
-
-        assert "task complete" in mock_backend.last_prompt
-        assert "The agent processed all items." in mock_backend.last_prompt
 
 
 class TestChoose:

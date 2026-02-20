@@ -1,7 +1,32 @@
+#!/usr/bin/env python3
 """Example showing compose() for clean prompt building.
 
 This demonstrates how compose() simplifies prompt construction in agent code,
 replacing manual string concatenation and conditional logic.
+
+No LLM required - this example just shows the compose() utility.
+
+Usage:
+    ./compose_example.py
+
+Example output:
+    Example 1 - Simple:
+    You are a helpful assistant
+
+    Explain quantum computing
+
+    Example 2 - With None (filtered out):
+    You are a helpful assistant
+
+    Explain quantum computing
+
+    Example 3 - With context:
+    You are a helpful assistant
+
+    Previous findings:
+    - User prefers concise answers
+
+    Explain quantum computing
 """
 
 from typing import Any

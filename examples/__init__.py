@@ -2,6 +2,13 @@
 
 Provides an OpenAI-compatible backend, a simple stderr logger, and trace helpers.
 Production backends should live in llm-infer/client.
+
+Environment variables:
+    LLM_BACKEND: Backend to use ("openai" or "anthropic", default: "openai")
+    LLM_MODEL: Model name (default depends on backend)
+    LLM_BASE_URL: Base URL for OpenAI-compatible API (default: http://localhost:8000/v1)
+    OPENAI_API_KEY: API key for OpenAI backend
+    ANTHROPIC_API_KEY: API key for Anthropic backend
 """
 
 from __future__ import annotations
@@ -9,7 +16,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from io import StringIO
 from typing import Any
 
@@ -23,6 +31,25 @@ from llm_saia.core.backend import (
     ToolDef,
 )
 from llm_saia.core.logger import Logger as Logger
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+
+
+class Colors:
+    """ANSI colors for example output."""
+
+    CYAN = "\033[1;36m"
+    GREEN = "\033[1;32m"
+    YELLOW = "\033[1;33m"
+    MAGENTA = "\033[1;35m"
+    RED = "\033[1;31m"
+    BLUE = "\033[1;34m"
+    RESET = "\033[0m"
+
 
 # ---------------------------------------------------------------------------
 # Common tool definitions for examples
@@ -196,7 +223,7 @@ class OpenAIBackend(Backend):
         api_key: str | None = None,
         base_url: str | None = None,
     ):
-        self._model = model or os.environ.get("LLM_MODEL", "qwen3-4b-instruct-2507-awq")
+        self._model = model or os.environ.get("LLM_MODEL", "default")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._base_url = base_url or os.environ.get("LLM_BASE_URL", "http://localhost:8000/v1")
         self._client = httpx.AsyncClient(timeout=60.0)
@@ -354,6 +381,55 @@ class OpenAIBackend(Backend):
 
     async def __aexit__(self, *args: Any) -> None:
         await self.close()
+
+
+@asynccontextmanager
+async def get_backend(model: str | None = None) -> AsyncGenerator[Backend, None]:
+    """Create a backend based on LLM_BACKEND environment variable.
+
+    Args:
+        model: Override the model name. If not provided, uses LLM_MODEL env var
+               or backend-specific defaults.
+
+    Yields:
+        Backend instance ready for use with SAIA.
+
+    Environment variables:
+        LLM_BACKEND: "openai" (default) or "anthropic"
+        LLM_MODEL: Model name override
+
+    Usage:
+        # Default (OpenAI-compatible, local LLM)
+        async with get_backend() as backend:
+            saia = SAIA(backend=backend)
+
+        # Use Anthropic (Haiku is default)
+        LLM_BACKEND=anthropic python example.py
+
+    Note:
+        Anthropic backend requires: pip install llm-infer[anthropic,saia]
+    """
+    backend_type = os.environ.get("LLM_BACKEND", "openai").lower()
+    model = model or os.environ.get("LLM_MODEL")
+
+    if backend_type == "anthropic":
+        try:
+            from appinfra.log import Logger as AppLogger
+            from llm_infer.client import Factory, SAIAAdapter
+        except ImportError as e:
+            raise ImportError(
+                "Anthropic backend requires llm-infer. "
+                "Install with: pip install llm-infer[anthropic,saia]"
+            ) from e
+
+        lg = AppLogger("saia-examples")
+        factory = Factory(lg)
+        async with factory.anthropic(model=model or DEFAULT_ANTHROPIC_MODEL) as client:
+            yield SAIAAdapter(client)
+    else:
+        # Default: OpenAI-compatible backend
+        async with OpenAIBackend(model=model) as backend:
+            yield backend
 
 
 def print_trace_json(trace_buf: StringIO) -> None:

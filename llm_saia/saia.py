@@ -14,7 +14,6 @@ from llm_saia.verbs import (
     Choose,
     Classify,
     Complete,
-    Confirm,
     Constrain,
     Critique_,
     Decompose,
@@ -37,7 +36,7 @@ class SAIA:
         ...     .max_iterations(10)
         ...     .build())
         >>> result = await saia.verify(code, "compiles")
-        >>> result = await saia.with_single_call().confirm(claim)
+        >>> result = await saia.with_single_call().verify(claim)
     """
 
     @classmethod
@@ -62,7 +61,6 @@ class SAIA:
         self.choose = Choose(self._config)
         self.classify = Classify(self._config)
         self.complete = Complete(self._config)
-        self.confirm = Confirm(self._config)
         self.constrain = Constrain(self._config)
         self.critique = Critique_(self._config)
         self.decompose = Decompose(self._config)

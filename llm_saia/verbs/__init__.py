@@ -6,7 +6,6 @@ from llm_saia.verbs.ask import Ask
 from llm_saia.verbs.choose import Choose
 from llm_saia.verbs.classify import Classify
 from llm_saia.verbs.complete import Complete
-from llm_saia.verbs.confirm import Confirm
 from llm_saia.verbs.constrain import Constrain
 from llm_saia.verbs.critique import Critique_
 from llm_saia.verbs.decompose import Decompose
@@ -27,7 +26,6 @@ __all__ = [
     "Choose",
     "Classify",
     "Complete",
-    "Confirm",
     "Constrain",
     "Critique_",
     "Decompose",

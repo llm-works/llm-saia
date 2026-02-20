@@ -59,7 +59,6 @@ __all__ = [
     # Verb results
     "ChooseResult",
     "ClassifyResult",
-    "ConfirmResult",
     "Critique",
     "Evidence",
     "VerbResult",
@@ -115,14 +114,6 @@ class ClassifyResult:
 
     category: str
     confidence: float  # 0.0 to 1.0
-    reason: str
-
-
-@dataclass
-class ConfirmResult:
-    """Result from CONFIRM verb."""
-
-    confirmed: bool
     reason: str
 
 

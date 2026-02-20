@@ -16,7 +16,6 @@ from llm_saia.core.trace import CallbackTracer, Tracer, TracerFactory
 from llm_saia.core.types import (
     ChooseResult,
     ClassifyResult,
-    ConfirmResult,
     Critique,
     DecisionReason,
     Evidence,
@@ -49,7 +48,6 @@ __all__ = [
     # Verb results
     "ChooseResult",
     "ClassifyResult",
-    "ConfirmResult",
     "Critique",
     "Evidence",
     "VerifyResult",
