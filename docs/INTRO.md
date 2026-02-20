@@ -66,6 +66,7 @@ either nudges back on track or terminates via a designated tool. Agents that act
 
 ## What You Get
 
+- **Zero dependencies** - pure Python core, bring your own LLM client
 - **Swap backends freely** - Anthropic, OpenAI, Ollama, vLLM with one line change
 - **~2500 lines total** - easy to understand, minimal structures, fork it if you want
 - **No lock-in** - use inside any orchestrator, any framework

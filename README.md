@@ -3,6 +3,7 @@
 **Framework-agnostic verb vocabulary for LLM agents**
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
 ![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen.svg)
 [![Typed](https://img.shields.io/badge/typed-PEP%20561-brightgreen.svg)](https://peps.python.org/pep-0561/)
 [![Linting: Ruff](https://img.shields.io/badge/linting-ruff-brightgreen)](https://github.com/astral-sh/ruff)
@@ -27,6 +28,7 @@ building software, not chatting:
 - **Testable** - mock the backend, unit test your verbs
 - **Traceable** - every verb call logged with inputs/outputs for debugging production issues
 - **Backend-agnostic** - same code works with Anthropic, OpenAI, or local models
+- **Zero dependencies** - pure Python core; bring your own LLM client
 
 **"Why not raw tool calling?"** You could write the iteration loop yourself (~50-100 lines). SAIA
 gives you `complete()` with terminal detection, tracing, timeouts, and max iterations built in.
@@ -144,7 +146,8 @@ See the [examples/](examples/) directory:
 2. **Structured over strings** - type-safe dataclass responses
 3. **Composable primitives** - build complex flows from simple verbs
 4. **Backend-agnostic** - same code works with any LLM
-5. **Debuggable** - every operation is traceable
+5. **Zero dependencies** - pure Python core, you control your LLM client
+6. **Debuggable** - every operation is traceable
 
 ## Research Directions
 
