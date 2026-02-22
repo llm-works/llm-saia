@@ -118,3 +118,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
+        sys.exit(1)

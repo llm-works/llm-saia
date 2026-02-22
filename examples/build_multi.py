@@ -133,7 +133,8 @@ async def main() -> None:  # cq: exempt
             print(f"\n{C.GREEN}[instruct]{C.RESET} generating code...")
             parts = []
             for i, t in enumerate(subtasks):
-                print(f"  [{i + 1}/{len(subtasks)}] {t[:50]}...", end=" ", flush=True)
+                label = t if len(t) <= 50 else t[:50] + "..."
+                print(f"  [{i + 1}/{len(subtasks)}] {label}", end=" ", flush=True)
                 parts.append(await local.instruct(f"Write Python for: {t}"))
                 print("done")
 
