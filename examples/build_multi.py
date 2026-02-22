@@ -80,8 +80,14 @@ async def get_smart_backend() -> AsyncGenerator[Backend, None]:
     model = os.environ.get("SMART_MODEL")
 
     if backend_type == "anthropic":
-        from appinfra.log import Logger
-        from llm_infer.client import Factory, SAIAAdapter
+        try:
+            from appinfra.log import Logger
+            from llm_infer.client import Factory, SAIAAdapter
+        except ImportError as e:
+            raise ImportError(
+                "Anthropic backend requires llm-infer. "
+                "Install with: pip install llm-infer[anthropic,saia]"
+            ) from e
 
         lg = Logger("build-multi")
         factory = Factory(lg)
