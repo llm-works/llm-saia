@@ -97,4 +97,5 @@ SAIA is the semantic layer extracted from a production agent stack for 24/7 auto
 
 ## Links
 
-[github.com/serendip-ml](https://github.com/serendip-ml)
+- [llm-saia](https://github.com/serendip-ml/llm-saia) - this repo
+- [serendip-ml](https://github.com/serendip-ml) - full agent stack
