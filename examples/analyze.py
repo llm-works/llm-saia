@@ -104,7 +104,8 @@ async def main() -> None:  # cq: exempt
             if response.tool_calls:
                 for tc in response.tool_calls:
                     args_str = ", ".join(f"{k}={v}" for k, v in tc.arguments.items())
-                    print(f"{C.YELLOW}[{i}]{C.RESET} {tc.name}({args_str[:60]})")
+                    args_label = args_str if len(args_str) <= 60 else args_str[:60] + "..."
+                    print(f"{C.YELLOW}[{i}]{C.RESET} {tc.name}({args_label})")
             elif response.content:
                 print(f"{C.YELLOW}[{i}]{C.RESET} thinking...")
 

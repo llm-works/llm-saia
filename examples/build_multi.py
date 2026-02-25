@@ -127,7 +127,8 @@ async def main() -> None:  # cq: exempt
             subtasks = await local.decompose(TASK)
             print(f"{C.CYAN}[decompose]{C.RESET} {len(subtasks)} subtasks")
             for t in subtasks:
-                print(f"  - {t[:60]}")
+                label = t if len(t) <= 60 else t[:60] + "..."
+                print(f"  - {label}")
 
             # 2. Instruct each (local)
             print(f"\n{C.GREEN}[instruct]{C.RESET} generating code...")
@@ -175,3 +176,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
+        sys.exit(1)
