@@ -1,22 +1,18 @@
 # SAIA: SCUMM for AI Agents
 
-You tell the LLM "verify this claim and explain why." It returns prose. Now you're parsing strings,
-hoping it followed your format. SAIA gives you `verify()` - it returns `{passed: bool, reason:
-str}`.
+SCUMM (1987) reduced adventure games to a fixed set of verbs. Monkey Island had 9: Open, Close,
+Push, Pull, Give, Pick up, Look at, Talk to, Use. Every puzzle was built from these primitives.
+Designers knew exactly what players could do.
 
-SCUMM (1987) reduced adventure games to a fixed set of verbs. The original Monkey Island used 12;
-later releases refined this to 9: Open, Close, Push, Pull, Give, Pick up, Look at, Talk to, Use.
-Every puzzle was built from these primitives. The constraints didn't limit the games - they enabled
-them. Designers knew exactly what players could do.
+I wanted the same for LLM agents. Instead of parsing free text from "verify this claim and
+explain why", `verify()` returns `{passed: bool, reason: str}`. The structure follows from the
+operation.
 
-SAIA applies the same idea to LLM agents. `verify()` returns pass/fail with reason. `critique()`
-returns weaknesses. `decompose()` returns subtasks. The structure follows from the operation.
-
-**Prompts are suggestions. Verbs are structured contracts.**
+The goal: while prompts are suggestions, verbs should be structured contracts.
 
 ![SAIA demo](./demo/demo.gif)
 
-In practice:
+Or in practice:
 
 ```python
 saia = SAIA.builder().backend(backend).build()
@@ -32,11 +28,11 @@ fixed = await saia.refine(llm_response, critique.weaknesses)
 
 ## The Verbs
 
-- **verify** - check a predicate -> `{passed: bool, reason: str}`
-- **critique** - find weaknesses -> `{weaknesses: list[str]}`
-- **decompose** - break into subtasks -> `list[str]`
-- **extract** - pull structured data -> your schema
-- **synthesize** - combine inputs -> structured output or text
+- `verify` - check a predicate -> `{passed: bool, reason: str}`
+- `critique` - find weaknesses -> `{weaknesses: list[str]}`
+- `decompose` - break into subtasks -> `list[str]`
+- `extract` - pull structured data -> your schema
+- `synthesize` - combine inputs -> structured output or text
 
 Plus `ask`, `refine`, `classify`, `choose`, `constrain`, `ground`, `instruct` - see
 [docs](../README.md).
@@ -48,52 +44,51 @@ from llm_saia import SAIA
 
 saia = SAIA.builder().backend(anthropic_backend).build()
 
-# Break down, execute, combine
 subtasks = await saia.decompose("Build a web scraper")
 results = [await saia.instruct(t) for t in subtasks]
 output = await saia.synthesize(results, goal="single working Python script")
 ```
 
-## The Loop Controller
+## Loop Controller
 
-Verbs handle single calls. `complete()` handles multi-step agent loops with tools.
+Verbs run until the LLM stops calling tools. `complete()` adds a controller that detects stuck
+states and manages clean termination.
 
 ```python
 result = await saia.complete("Analyze the files in /src and summarize")
-# result.output = "The src directory contains..."
-# result.iterations = 4
+# [1] read_file("/src")
+# [2] "Should I continue?" -> nudged
+# [3] read_file("/src/main.py")
+# [4] done(summary="...")
+# result.iterations = 4, result.score.nudges = 1
 ```
 
-It detects degenerate states (LLM repeating itself, contradicting itself, asking permission) and
-either nudges back on track or terminates via a designated tool. Agents that actually finish.
+It detects when the LLM repeats itself, contradicts itself, or asks permission - and nudges it
+back on track. Termination uses confirmation: "is this your final answer?"
 
-## What You Get
+## Design
 
-- **Zero runtime dependencies** - pure Python core, bring your own LLM client
-- **Swap backends freely** - Anthropic, OpenAI, Ollama, vLLM with one line change
-- **~2500 lines total** - easy to understand, minimal structures, fork it if you want
-- **No lock-in** - use inside any orchestrator, any framework
+- Pure Python, no runtime dependencies - bring your own LLM client
+- Backend-agnostic: Anthropic, OpenAI, Ollama, vLLM
+- ~2500 lines total
 
-## How is this different?
+## vs. Other Tools
 
-**Instructor** extracts. **SAIA** orchestrates.
+Some related tools in this space:
 
-Instructor validates structured output from a single LLM call. SAIA runs multi-step agent loops
-with tools, state detection, and graceful termination.
+Instructor validates structured output from a single call. SAIA runs multi-step loops with state
+detection.
 
-**LangChain** is a framework. SAIA is ~2500 lines you plug into anything.
+LangChain provides an end-to-end framework. SAIA is just the semantic layer.
 
-**Native structured outputs** give you shape. SAIA verbs give you shape *and* the prompt that
-produces it.
+## Background
 
-## Part of an agent framework
-
-SAIA is the semantic layer extracted from a production agent stack for 24/7 autonomous agents:
-- **llm-agent** - agent orchestration platform
-- **llm-saia** - semantic actions (this library)
-- **llm-learn** - training / tuning framework
-- **llm-infer** - inference backends and routing
-- **appinfra** - shared infrastructure (logging, config, cli, database)
+Part of a larger project, currently being developed:
+- llm-gent  - agent orchestration
+- llm-saia  - semantic actions (this library)
+- llm-kelt  - knowledge, embedding, learning, training
+- llm-infer - inference backends
+- appinfra  - logging, configs, databases, CLIs
 
 ## Links
 
