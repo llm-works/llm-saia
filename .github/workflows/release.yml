@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write  # Required for PyPI trusted publishing
 
     steps:
       - name: Checkout code
@@ -51,3 +52,8 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.whl
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          verbose: true
