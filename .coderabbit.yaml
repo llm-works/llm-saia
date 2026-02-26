@@ -1,0 +1,22 @@
+# CodeRabbit AI Code Review Configuration
+# https://docs.coderabbit.ai/guides/configure-coderabbit
+
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  path_filters:
+    - "!**/*.lock"
+    - "!**/*.min.js"
+    - "!**/poetry.lock"
+  auto_review:
+    enabled: true
+    drafts: false
+
+chat:
+  auto_reply: true
