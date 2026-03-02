@@ -1,14 +1,11 @@
-# SAIA: SCUMM for AI Agents
+# SAIA: Typed Contracts for LLM Outputs
 
-SCUMM (1987) reduced adventure games to a fixed set of verbs. Monkey Island had 9: Open, Close,
-Push, Pull, Give, Pick up, Look at, Talk to, Use. Every puzzle was built from these primitives.
-Designers knew exactly what players could do.
+Prompts are suggestions. Verbs are contracts.
 
-I wanted the same for LLM agents. Instead of parsing free text from "verify this claim and
-explain why", `verify()` returns `{passed: bool, reason: str}`. The structure follows from the
-operation.
+Instead of parsing free text from "verify this claim and explain why", `verify()` returns
+`{passed: bool, reason: str}`. The structure follows from the operation.
 
-The goal: while prompts are suggestions, verbs should be structured contracts.
+SAIA gives you 12 typed verbs for controlling LLM outputs.
 
 ![SAIA demo](./demo/demo.gif)
 
@@ -25,6 +22,14 @@ critique = await saia.critique(llm_response)
 
 fixed = await saia.refine(llm_response, critique.weaknesses)
 ```
+
+## The Analogy
+
+SCUMM (1987) reduced adventure games to a fixed set of verbs. Monkey Island had 9: Open, Close,
+Push, Pull, Give, Pick up, Look at, Talk to, Use. Every puzzle was built from these primitives.
+Designers knew exactly what players could do.
+
+SAIA does the same for LLMs. 12 verbs, typed outputs, predictable behavior.
 
 ## The Verbs
 
