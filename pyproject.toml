@@ -37,9 +37,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/serendip-ml/llm-saia"
-Repository = "https://github.com/serendip-ml/llm-saia"
-Issues = "https://github.com/serendip-ml/llm-saia/issues"
+Homepage = "https://github.com/llm-works/llm-saia"
+Repository = "https://github.com/llm-works/llm-saia"
+Issues = "https://github.com/llm-works/llm-saia/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

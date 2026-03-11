@@ -97,5 +97,5 @@ Part of a larger project, currently being developed:
 
 ## Links
 
-- [llm-saia](https://github.com/serendip-ml/llm-saia) - this repo
+- [llm-saia](https://github.com/llm-works/llm-saia) - this repo
 - [serendip-ml](https://github.com/serendip-ml) - full agent stack

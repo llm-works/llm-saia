@@ -44,5 +44,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/serendip-ml/llm-saia/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/serendip-ml/llm-saia/releases/tag/v0.1.0
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/llm-works/llm-saia/releases/tag/v0.1.0
