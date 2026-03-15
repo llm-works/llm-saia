@@ -138,12 +138,14 @@ class MockBackend(Backend):
         tools: list[ToolDef] | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AgentResponse:
         """Return predetermined response."""
         self.last_messages = messages
         self.last_system = system
         self.last_tools = tools
         self.last_response_schema = response_schema
+        self.last_temperature = temperature
 
         # Check structured output first (these calls have response_schema set)
         if response_schema:

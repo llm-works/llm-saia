@@ -266,32 +266,36 @@ class OpenAIBackend(Backend):
             }
         return {"role": msg.role, "content": msg.content}
 
+    def _build_tools_spec(self, tools: list[ToolDef]) -> list[dict[str, Any]]:
+        """Convert ToolDef list to OpenAI tools format."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                },
+            }
+            for t in tools
+        ]
+
     def _build_request(
         self,
         api_messages: list[dict[str, Any]],
         tools: list[ToolDef] | None,
         response_schema: dict[str, Any] | None,
         max_tokens: int | None,
+        temperature: float | None,
     ) -> dict[str, Any]:
         """Build the OpenAI API request body."""
         request: dict[str, Any] = {"model": self._model, "messages": api_messages}
-
         if max_tokens:
             request["max_tokens"] = max_tokens
-
+        if temperature is not None:
+            request["temperature"] = temperature
         if tools:
-            request["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                }
-                for t in tools
-            ]
-
+            request["tools"] = self._build_tools_spec(tools)
         if response_schema:
             request["response_format"] = {
                 "type": "json_schema",
@@ -301,7 +305,6 @@ class OpenAIBackend(Backend):
                     "schema": response_schema.get("schema", {}),
                 },
             }
-
         return request
 
     def _parse_tool_arguments(self, args_str: str) -> dict[str, Any]:
@@ -349,10 +352,11 @@ class OpenAIBackend(Backend):
         tools: list[ToolDef] | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AgentResponse:
         """Send a chat completion request to OpenAI."""
         api_messages = self._build_api_messages(messages, system)
-        request = self._build_request(api_messages, tools, response_schema, max_tokens)
+        request = self._build_request(api_messages, tools, response_schema, max_tokens, temperature)
 
         headers = {"Content-Type": "application/json"}
         if self._api_key:

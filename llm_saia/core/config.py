@@ -33,6 +33,7 @@ class RunConfig:
     max_iterations: int = 3  # Max tool-calling rounds (0 = unlimited)
     max_retries: int = 1  # Number of retry attempts (1 = no retry)
     retry_escalation: str | None = None  # Prompt added on retry attempts
+    temperature: float | None = None  # Sampling temperature (None = use Config default)
 
     def with_single_call(self) -> RunConfig:
         """Return a config for single LLM call (no looping)."""
@@ -43,6 +44,7 @@ class RunConfig:
             max_iterations=1,
             max_retries=self.max_retries,
             retry_escalation=self.retry_escalation,
+            temperature=self.temperature,
         )
 
     def with_retries(self, max_retries: int, escalation: str | None = None) -> RunConfig:
@@ -54,6 +56,7 @@ class RunConfig:
             max_iterations=self.max_iterations,
             max_retries=max_retries,
             retry_escalation=escalation,
+            temperature=self.temperature,
         )
 
 
@@ -85,6 +88,7 @@ class Config:
     warn_tool_support: bool = True
     tracer: Tracer | None = None  # Default tracer for iteration tracing
     request_id: str | None = None  # User-provided correlation ID
+    temperature: float | None = None  # Default sampling temperature
 
 
 # Default run config used when none provided

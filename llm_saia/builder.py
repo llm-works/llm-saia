@@ -44,6 +44,7 @@ class SAIABuilder:
         self._timeout_secs: float = 0
         self._max_retries: int = 1
         self._retry_escalation: str | None = None
+        self._temperature: float | None = None
 
     def backend(self, backend: Backend) -> SAIABuilder:
         """Set the LLM backend (required)."""
@@ -146,6 +147,11 @@ class SAIABuilder:
         self._request_id = request_id
         return self
 
+    def temperature(self, temp: float) -> SAIABuilder:
+        """Set sampling temperature."""
+        self._temperature = temp
+        return self
+
     def build(self) -> SAIA:
         """Build the SAIA instance.
 
@@ -176,5 +182,6 @@ class SAIABuilder:
             warn_tool_support=self._warn_tool_support,
             tracer=self._tracer,
             request_id=self._request_id,
+            temperature=self._temperature,
         )
         return SAIA(config)

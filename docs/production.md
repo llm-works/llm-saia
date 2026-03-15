@@ -259,6 +259,7 @@ saia = (
     .timeout_secs(120)           # Stop after N seconds
     .max_total_tokens(50000)     # Stop after N total tokens
     .max_call_tokens(4096)       # Limit per-call output
+    .temperature(0.7)            # Sampling temperature (default: backend decides)
     .build()
 )
 

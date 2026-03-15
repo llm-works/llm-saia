@@ -240,7 +240,18 @@ class Verb(ABC):
         )
         tracer.write(record)
 
-    async def _chat(self, messages: list[Message], max_tokens: int | None) -> AgentResponse:
+    def _resolve_temperature(self, run: RunConfig | None) -> float | None:
+        """Resolve temperature: RunConfig > Config > None."""
+        if run is not None and run.temperature is not None:
+            return run.temperature
+        return self._config.temperature
+
+    async def _chat(
+        self,
+        messages: list[Message],
+        max_tokens: int | None,
+        temperature: float | None = None,
+    ) -> AgentResponse:
         """Execute a single chat call."""
         call_id = self._generate_id()
         if self._lg:
@@ -259,6 +270,7 @@ class Verb(ABC):
             system=self._config.system,
             tools=self._config.tools if self._config.tools else None,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
         response.call_id = call_id
         return response
@@ -278,9 +290,10 @@ class Verb(ABC):
 
         self._log_loop_start(config)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
+        temperature = self._resolve_temperature(run)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(messages, max_tokens)
+            response = await self._chat(messages, max_tokens, temperature)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
             messages.append(self._to_message(response))
@@ -388,6 +401,7 @@ class Verb(ABC):
                 [Message(role="user", content=structured_prompt)],
                 system=self._config.system,
                 response_schema=json_schema,
+                temperature=self._config.temperature,
             )
             response.call_id = self._generate_id()
             self._write_base_trace(response, trace_id=trace_id, phase="finalize")
@@ -420,6 +434,7 @@ class Verb(ABC):
         response = await self._backend.chat(
             [Message(role="user", content=prompt)],
             system=self._config.system,
+            temperature=self._config.temperature,
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
@@ -438,6 +453,7 @@ class Verb(ABC):
             [Message(role="user", content=prompt)],
             system=self._config.system,
             response_schema=json_schema,
+            temperature=self._config.temperature,
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
