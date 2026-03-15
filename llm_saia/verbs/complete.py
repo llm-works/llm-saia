@@ -210,6 +210,7 @@ class Complete(Verb):
             terminal=None,
             lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
+            temperature=self._config.temperature,
         )
         run = self._config.run or DEFAULT_COMPLETE_RUN
         return DefaultController(

@@ -306,10 +306,10 @@ class Verb(ABC):
                 iteration += 1
             else:
                 self._log_loop_complete(iteration, start_time, total_tokens, response.content)
-                return await self._finalize(prompt, response.content, schema, trace_id)
+                return await self._finalize(prompt, response.content, schema, trace_id, temperature)
 
         self._log_limit_reached(config, iteration, start_time, total_tokens)
-        return await self._finalize(prompt, last_content, schema, trace_id)
+        return await self._finalize(prompt, last_content, schema, trace_id, temperature)
 
     def _should_stop(
         self, config: RunConfig, iteration: int, start_time: float, total_tokens: int
@@ -390,7 +390,12 @@ class Verb(ABC):
             )
 
     async def _finalize(
-        self, prompt: str, content: str, schema: type[T] | None, trace_id: str = ""
+        self,
+        prompt: str,
+        content: str,
+        schema: type[T] | None,
+        trace_id: str = "",
+        temperature: float | None = None,
     ) -> tuple[str, T | None]:
         """Finalize result, optionally parsing structured output."""
         if schema:
@@ -401,7 +406,7 @@ class Verb(ABC):
                 [Message(role="user", content=structured_prompt)],
                 system=self._config.system,
                 response_schema=json_schema,
-                temperature=self._config.temperature,
+                temperature=temperature if temperature is not None else self._config.temperature,
             )
             response.call_id = self._generate_id()
             self._write_base_trace(response, trace_id=trace_id, phase="finalize")
