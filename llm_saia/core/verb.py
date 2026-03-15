@@ -430,25 +430,27 @@ class Verb(ABC):
 
     # --- High-level helpers for verbs ---
 
-    async def _complete(self, prompt: str) -> str:
+    async def _complete(self, prompt: str, run: RunConfig | None = None) -> str:
         """Complete with tools if available, otherwise direct."""
         if self._has_tools():
-            content, _ = await self._loop(prompt)
+            content, _ = await self._loop(prompt, run=run)
             return content
         trace_id = self._generate_id()
         response = await self._backend.chat(
             [Message(role="user", content=prompt)],
             system=self._config.system,
-            temperature=self._config.temperature,
+            temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         return response.content
 
-    async def _complete_structured(self, prompt: str, schema: type[T]) -> T:
+    async def _complete_structured(
+        self, prompt: str, schema: type[T], run: RunConfig | None = None
+    ) -> T:
         """Complete structured with tools if available, otherwise direct."""
         if self._has_tools():
-            _, result = await self._loop(prompt, schema=schema)
+            _, result = await self._loop(prompt, run=run, schema=schema)
             if result is not None:
                 return result
         # Direct structured completion
@@ -458,7 +460,7 @@ class Verb(ABC):
             [Message(role="user", content=prompt)],
             system=self._config.system,
             response_schema=json_schema,
-            temperature=self._config.temperature,
+            temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
