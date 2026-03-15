@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from llm_saia.core.backend import AgentResponse, Message, ToolCall
-from llm_saia.core.config import RunConfig
+from llm_saia.core.config import CallOptions
 from llm_saia.core.controller import (
     Action,
     ActionType,
@@ -20,8 +20,8 @@ from llm_saia.core.trace import Tracer, build_trace
 from llm_saia.core.types import DecisionReason, LoopScore, TaskResult
 from llm_saia.core.verb import Verb
 
-# Default run config for complete (unlimited iterations)
-DEFAULT_COMPLETE_RUN = RunConfig(max_iterations=0)
+# Default call options for complete (unlimited iterations)
+DEFAULT_COMPLETE_CALL = CallOptions(max_iterations=0)
 
 # Reasons that count as productive despite being INSTRUCT
 _PRODUCTIVE_INSTRUCT_REASONS = frozenset({DecisionReason.TERMINAL_CONFIRMATION_REQUEST})
@@ -36,7 +36,7 @@ class _LoopCtx:
     ctrl: LoopController
     tracer: Tracer | None
     on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None
-    run_config: RunConfig
+    run_config: CallOptions
     messages: list[Message]
     tool_names: list[str]
     acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
@@ -65,7 +65,7 @@ class Complete(Verb):
             raise ValueError("Complete requires tools and executor to be configured.")
 
         trace_id = self._generate_id()
-        request_id = self._config.request_id
+        request_id = self._call.request_id
         ctrl = controller or self._default_controller()
         ctrl.reset()
 
@@ -110,7 +110,7 @@ class Complete(Verb):
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
     ) -> TaskResult:
         """Execute the main tool-calling loop."""
-        run_config = self._config.run or DEFAULT_COMPLETE_RUN
+        run_config = self._config.call or DEFAULT_COMPLETE_CALL
         ctx = _LoopCtx(
             task=task,
             trace_id=trace_id,
@@ -198,31 +198,34 @@ class Complete(Verb):
 
     def _default_controller(self) -> DefaultController:
         """Create default controller with config from this verb."""
-        from llm_saia.core.config import Config
+        from llm_saia.core.config import CallOptions, Config
 
-        # Controller needs a config for classifier calls (no tools)
+        # Controller needs a config for classifier calls (no tools).
+        # Copy call options with system and temperature from current config.
+        call_options = CallOptions(
+            system=self._call.system,
+            temperature=self._call.temperature,
+        )
         llm_config = Config(
             backend=self._config.backend,
             tools=[],
             executor=None,
-            system=self._config.system,
-            run=None,
+            call=call_options,
             terminal=None,
             lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
-            temperature=self._config.temperature,
         )
-        run = self._config.run or DEFAULT_COMPLETE_RUN
+        call = self._config.call or DEFAULT_COMPLETE_CALL
         return DefaultController(
             config=ControllerConfig(
                 llm_config=llm_config,
                 terminal=self._config.terminal,
-                max_failure_retries=run.max_retries,
+                max_failure_retries=call.max_retries,
             ),
         )
 
     async def _run_iteration(
-        self, messages: list[Message], config: RunConfig
+        self, messages: list[Message], config: CallOptions
     ) -> tuple[AgentResponse, int]:
         """Run one LLM iteration and return response with token count."""
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
@@ -397,7 +400,7 @@ class Complete(Verb):
             trace_id=trace_id,
             verb="Complete",
             phase="loop",
-            request_id=self._config.request_id,
+            request_id=self._call.request_id,
             classifier_called=classifier_called,
             iterations_since_nudge=iterations_since_nudge,
             consecutive_degenerate=consecutive_degenerate,

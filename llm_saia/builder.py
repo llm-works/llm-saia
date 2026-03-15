@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from llm_saia.core import trace
 from llm_saia.core.backend import Backend, ToolDef
-from llm_saia.core.config import Config, RunConfig, TerminalConfig
+from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.logger import Logger
 
 if TYPE_CHECKING:
@@ -31,20 +31,20 @@ class SAIABuilder:
         self._backend: Backend | None = None
         self._tools: list[ToolDef] = []
         self._executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None
-        self._system: str | None = None
         self._terminal: TerminalConfig | None = None
         self._lg: Logger | None = None
         self._warn_tool_support: bool = True
         self._tracer: trace.Tracer | None = None
-        self._request_id: str | None = None
-        # RunConfig fields (defaults match RunConfig)
+        # CallOptions fields (defaults match CallOptions)
+        self._system: str | None = None
+        self._temperature: float | None = None
         self._max_iterations: int = 3
         self._max_call_tokens: int = 0
         self._max_total_tokens: int = 0
         self._timeout_secs: float = 0
         self._max_retries: int = 1
         self._retry_escalation: str | None = None
-        self._temperature: float | None = None
+        self._request_id: str | None = None
 
     def backend(self, backend: Backend) -> SAIABuilder:
         """Set the LLM backend (required)."""
@@ -163,25 +163,25 @@ class SAIABuilder:
 
         from llm_saia.saia import SAIA
 
-        run = RunConfig(
-            max_iterations=self._max_iterations,
+        call = CallOptions(
+            system=self._system,
+            temperature=self._temperature,
             max_call_tokens=self._max_call_tokens,
             max_total_tokens=self._max_total_tokens,
             timeout_secs=self._timeout_secs,
+            max_iterations=self._max_iterations,
             max_retries=self._max_retries,
             retry_escalation=self._retry_escalation,
+            request_id=self._request_id,
         )
         config = Config(
             backend=self._backend,
             tools=self._tools,
             executor=self._executor,
-            system=self._system,
-            run=run,
+            call=call,
             terminal=self._terminal,
             lg=self._lg,
-            warn_tool_support=self._warn_tool_support,
             tracer=self._tracer,
-            request_id=self._request_id,
-            temperature=self._temperature,
+            warn_tool_support=self._warn_tool_support,
         )
         return SAIA(config)

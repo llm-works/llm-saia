@@ -4,12 +4,11 @@ from typing import Any
 
 import pytest
 
-from llm_saia.core.config import Config
+from llm_saia.core.config import CallOptions, Config
 from llm_saia.core.types import (
     AgentResponse,
     ClassifyResult,
     DecisionReason,
-    RunConfig,
     ToolCall,
     ToolDef,
 )
@@ -228,7 +227,7 @@ class TestTask:
     ) -> None:
         """Task stops after soft timeout."""
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
-        saia = saia.with_timeout_secs(0.001)
+        saia = saia.with_timeout(0.001)
 
         # Queue enough responses for multiple iterations
         for _ in range(10):
@@ -251,7 +250,7 @@ class TestTask:
     ) -> None:
         """Task with max_iterations=0 runs until complete."""
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
-        saia = saia.with_run_config(RunConfig(max_iterations=0))
+        saia = saia.with_call_options(CallOptions(max_iterations=0))
 
         # Queue 5 "not done" responses, then one "done"
         for _ in range(5):
@@ -461,7 +460,7 @@ class TestTask:
             terminal_tool="finish",
         )
         # Needs enough iterations for: 1st finish, reconsider, 2nd finish, confirm
-        saia = saia.with_run_config(RunConfig(max_iterations=0))
+        saia = saia.with_call_options(CallOptions(max_iterations=0))
 
         # First: LLM prematurely calls terminal tool
         mock_backend.queue_tool_response(
@@ -646,9 +645,8 @@ class TestTask:
             backend=mock_backend,
             tools=sample_tools + [terminal_tool_def],
             executor=dummy_executor,
-            system=None,
             terminal=TerminalConfig(tool="finish", failure_values=("stuck", "failed")),
-            run=RunConfig(max_retries=0),  # No failure retries
+            call=CallOptions(max_retries=0),  # No failure retries
         )
         from llm_saia import SAIA
 
@@ -695,7 +693,7 @@ class TestDefaultController:
         """Controller detects continuation signals in confirmation."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         # Should detect contradiction
@@ -712,7 +710,7 @@ class TestDefaultController:
         """Default backoff iterations is 3."""
         from llm_saia.core.controller import ControllerConfig
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config)
         assert ctrl_config.backoff_iterations == 3
 
@@ -720,7 +718,7 @@ class TestDefaultController:
         """Empty response detected when no content and no tool calls."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         # No content, no tool calls → empty
@@ -744,7 +742,7 @@ class TestDefaultController:
         """Text tool pattern detected when LLM writes tool names as text."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         tools = ["read_file", "run_command", "execute", "search"]
@@ -771,7 +769,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
         controller.reset()
         # Set last nudge to current iteration (normally would cause backoff)
@@ -800,7 +798,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
         controller.reset()
         controller._last_nudge_iteration = 5
@@ -832,7 +830,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=2)
         controller = DefaultController(config=ctrl_config)
         controller.reset()
@@ -872,7 +870,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=1)
         controller = DefaultController(config=ctrl_config)
         controller.reset()
@@ -927,7 +925,7 @@ class TestTaskStateClassifier:
         """Classifier returns COMPLETED when LLM classifies as completed."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -944,7 +942,7 @@ class TestTaskStateClassifier:
         """Classifier returns STUCK when LLM classifies as stuck."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -962,7 +960,7 @@ class TestTaskStateClassifier:
         """Classifier falls back to WANTS_CONTINUE on invalid category."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None, system=None)
+        config = Config(backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -1010,7 +1008,7 @@ class TestLoopScore:
     ) -> None:
         """Score is attached even when loop hits iteration limit."""
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
-        saia = saia.with_run_config(RunConfig(max_iterations=1))
+        saia = saia.with_call_options(CallOptions(max_iterations=1))
         mock_backend.queue_tool_response(
             AgentResponse(
                 content="",

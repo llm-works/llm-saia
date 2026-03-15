@@ -36,7 +36,7 @@ pytestmark = pytest.mark.unit
 
 def make_config(backend: MockBackend) -> Config:
     """Create a Config with no tools (direct backend calls)."""
-    return Config(backend=backend, tools=[], executor=None, system=None)
+    return Config(backend=backend, tools=[], executor=None)
 
 
 class TestAsk:

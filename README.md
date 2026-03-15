@@ -126,7 +126,7 @@ result = await saia.with_single_call().verify(code, "compiles")
 result = await saia.with_max_iterations(5).instruct(task)
 
 # Timeout
-result = await saia.with_timeout_secs(30).decompose(problem)
+result = await saia.with_timeout(30).decompose(problem)
 
 # Correlation ID for tracing
 result = await saia.with_request_id("req-123").ask(doc, question)

@@ -61,7 +61,7 @@ Full control over the tool-calling loop with optional structured finalization.
 async def __call__(self, task: str) -> str:
     content, _ = await self._loop(
         prompt=f"Complete: {task}",
-        run=RunConfig(max_iterations=5, timeout_secs=60),
+        run=CallOptions(max_iterations=5, timeout_secs=60),
     )
     return content
 ```
@@ -121,7 +121,7 @@ print(summary.key_points)
 
 ```python
 from dataclasses import dataclass
-from llm_saia import Verb, Config, RunConfig
+from llm_saia import Verb, Config, CallOptions
 
 @dataclass
 class Investigation:
@@ -146,7 +146,7 @@ class Investigate(Verb):
 
 Use tools to gather information, then provide your findings."""
 
-        run = RunConfig(max_iterations=max_iterations)
+        run = CallOptions(max_iterations=max_iterations)
         content, result = await self._loop(prompt, run=run, schema=Investigation)
 
         if result:
