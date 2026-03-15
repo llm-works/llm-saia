@@ -9,8 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `temperature` parameter to `Backend.chat()` protocol for sampling variance control
-- `temperature` field in `Config` (instance default) and `RunConfig` (per-call override)
+- `CallOptions` dataclass for all per-call configuration (replaces `RunConfig`)
+- `Configurable` interface providing fluent `with_*()` methods
+- `with_temperature()` method for per-call temperature override
+- `with_system()` method for per-call system prompt override
 - `.temperature()` method on `SAIABuilder` for fluent configuration
+
+### Changed
+- **BREAKING**: Renamed `RunConfig` → `CallOptions`
+- **BREAKING**: Renamed `Config.run` → `Config.call`
+- **BREAKING**: Moved `system`, `temperature`, `request_id` from `Config` to `CallOptions`
+- **BREAKING**: Renamed `saia.run_config` → `saia.call_options`
+- **BREAKING**: Renamed `with_run_config()` → `with_call_options()`
+- **BREAKING**: Renamed `with_timeout_secs()` → `with_timeout()`
+- `SAIA` now inherits from `Configurable` interface
 
 ## [0.1.0] - 2026-02-25
 

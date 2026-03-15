@@ -30,7 +30,7 @@ class TestSAIABuilder:
         assert saia._config.backend is mock_backend
         assert saia._config.tools == []
         assert saia._config.executor is None
-        assert saia._config.system is None
+        assert saia._config.call.system is None
 
     def test_build_with_tools(self, mock_backend: MockBackend) -> None:
         """Build with tools and executor."""
@@ -48,7 +48,7 @@ class TestSAIABuilder:
         """Build with system prompt."""
         saia = SAIA.builder().backend(mock_backend).system("You are helpful").build()
 
-        assert saia._config.system == "You are helpful"
+        assert saia._config.call.system == "You are helpful"
 
     def test_build_with_terminal_tool(self, mock_backend: MockBackend) -> None:
         """Build with terminal tool."""
@@ -76,32 +76,32 @@ class TestSAIABuilder:
         """Build with max_iterations."""
         saia = SAIA.builder().backend(mock_backend).max_iterations(10).build()
 
-        assert saia.run_config.max_iterations == 10
+        assert saia.call_options.max_iterations == 10
 
     def test_build_with_max_call_tokens(self, mock_backend: MockBackend) -> None:
         """Build with max_call_tokens."""
         saia = SAIA.builder().backend(mock_backend).max_call_tokens(4096).build()
 
-        assert saia.run_config.max_call_tokens == 4096
+        assert saia.call_options.max_call_tokens == 4096
 
     def test_build_with_max_tokens(self, mock_backend: MockBackend) -> None:
         """Build with max_tokens (total budget)."""
         saia = SAIA.builder().backend(mock_backend).max_tokens(10000).build()
 
-        assert saia.run_config.max_total_tokens == 10000
+        assert saia.call_options.max_total_tokens == 10000
 
     def test_build_with_timeout(self, mock_backend: MockBackend) -> None:
         """Build with timeout."""
         saia = SAIA.builder().backend(mock_backend).timeout(30.0).build()
 
-        assert saia.run_config.timeout_secs == 30.0
+        assert saia.call_options.timeout_secs == 30.0
 
     def test_build_with_retries(self, mock_backend: MockBackend) -> None:
         """Build with retries."""
         saia = SAIA.builder().backend(mock_backend).retries(3, "Try harder").build()
 
-        assert saia.run_config.max_retries == 3
-        assert saia.run_config.retry_escalation == "Try harder"
+        assert saia.call_options.max_retries == 3
+        assert saia.call_options.retry_escalation == "Try harder"
 
     def test_fluent_chaining(self, mock_backend: MockBackend) -> None:
         """All methods return self for chaining."""
@@ -126,12 +126,12 @@ class TestSAIABuilder:
 
         assert saia._config.backend is mock_backend
         assert saia._config.tools == tools
-        assert saia._config.system == "You are helpful"
+        assert saia._config.call.system == "You are helpful"
         assert saia._config.terminal is not None
         assert saia._config.terminal.tool == "finish"
-        assert saia.run_config.max_iterations == 5
-        assert saia.run_config.max_call_tokens == 2048
-        assert saia.run_config.max_total_tokens == 8000
-        assert saia.run_config.timeout_secs == 60.0
-        assert saia.run_config.max_retries == 2
-        assert saia.run_config.retry_escalation == "Be more careful"
+        assert saia.call_options.max_iterations == 5
+        assert saia.call_options.max_call_tokens == 2048
+        assert saia.call_options.max_total_tokens == 8000
+        assert saia.call_options.timeout_secs == 60.0
+        assert saia.call_options.max_retries == 2
+        assert saia.call_options.retry_escalation == "Be more careful"

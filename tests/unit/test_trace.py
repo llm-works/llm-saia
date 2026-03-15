@@ -462,7 +462,9 @@ class TestBaseVerbTrace:
         buf = StringIO()
         tracer = TracerFactory.stream(buf)
         saia = make_saia(mock_backend)
-        saia._config = replace(saia._config, tracer=tracer, request_id="req-42")
+        # Update call options with request_id and add tracer to config
+        new_call = replace(saia._config.call, request_id="req-42")
+        saia._config = replace(saia._config, tracer=tracer, call=new_call)
         saia._init_verbs()
         mock_backend.set_complete_response("The answer")
 
@@ -512,8 +514,8 @@ class TestWithRequestId:
         saia = make_saia(mock_backend)
         tagged = saia.with_request_id("req-1")
         assert tagged is not saia
-        assert tagged.config.request_id == "req-1"
-        assert saia.config.request_id is None
+        assert tagged.config.call.request_id == "req-1"
+        assert saia.config.call.request_id is None
 
     async def test_with_request_id_shares_memory(self, mock_backend: MockBackend) -> None:
         """with_request_id shares memory with parent."""

@@ -264,7 +264,7 @@ saia = (
 )
 
 # Override per-call
-result = await saia.with_max_iterations(5).with_timeout_secs(30).complete(task)
+result = await saia.with_max_iterations(5).with_timeout(30).complete(task)
 ```
 
 ### Single-Call Mode

@@ -10,7 +10,7 @@ import pytest
 
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
-from llm_saia.core.config import Config, TerminalConfig
+from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.logger import Logger
 from llm_saia.core.types import (
     AgentResponse,
@@ -183,11 +183,12 @@ def make_saia(
 ) -> SAIA:
     """Helper to create SAIA instances for tests."""
     terminal = TerminalConfig(tool=terminal_tool) if terminal_tool else None
+    call = CallOptions(system=system) if system is not None else None
     config = Config(
         backend=backend,
         tools=tools or [],
         executor=executor,
-        system=system,
+        call=call,
         terminal=terminal,
         lg=lg,
     )

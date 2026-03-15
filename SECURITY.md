@@ -157,7 +157,7 @@ saia = (
 )
 
 # Runtime limits
-result = await saia.with_timeout_secs(30).instruct(task)
+result = await saia.with_timeout(30).instruct(task)
 result = await saia.with_max_iterations(5).complete(prompt, tools)
 ```
 
