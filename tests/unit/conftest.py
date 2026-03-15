@@ -55,6 +55,7 @@ class MockBackend(Backend):
         self.last_system: str | None = None
         self.last_tools: list[ToolDef] | None = None
         self.last_response_schema: dict[str, Any] | None = None
+        self.last_temperature: float | None = None
         self._response_content: str = "mock response"
         self._queued_responses: list[AgentResponse] = []
         self._structured_responses: dict[str, dict[str, Any]] = _default_structured_responses()
