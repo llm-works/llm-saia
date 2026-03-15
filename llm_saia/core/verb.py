@@ -240,7 +240,18 @@ class Verb(ABC):
         )
         tracer.write(record)
 
-    async def _chat(self, messages: list[Message], max_tokens: int | None) -> AgentResponse:
+    def _resolve_temperature(self, run: RunConfig | None) -> float | None:
+        """Resolve temperature: RunConfig > Config > None."""
+        if run is not None and run.temperature is not None:
+            return run.temperature
+        return self._config.temperature
+
+    async def _chat(
+        self,
+        messages: list[Message],
+        max_tokens: int | None,
+        temperature: float | None = None,
+    ) -> AgentResponse:
         """Execute a single chat call."""
         call_id = self._generate_id()
         if self._lg:
@@ -259,6 +270,7 @@ class Verb(ABC):
             system=self._config.system,
             tools=self._config.tools if self._config.tools else None,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
         response.call_id = call_id
         return response
@@ -278,9 +290,10 @@ class Verb(ABC):
 
         self._log_loop_start(config)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
+        temperature = self._resolve_temperature(run)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(messages, max_tokens)
+            response = await self._chat(messages, max_tokens, temperature)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
             messages.append(self._to_message(response))
@@ -293,10 +306,10 @@ class Verb(ABC):
                 iteration += 1
             else:
                 self._log_loop_complete(iteration, start_time, total_tokens, response.content)
-                return await self._finalize(prompt, response.content, schema, trace_id)
+                return await self._finalize(prompt, response.content, schema, trace_id, temperature)
 
         self._log_limit_reached(config, iteration, start_time, total_tokens)
-        return await self._finalize(prompt, last_content, schema, trace_id)
+        return await self._finalize(prompt, last_content, schema, trace_id, temperature)
 
     def _should_stop(
         self, config: RunConfig, iteration: int, start_time: float, total_tokens: int
@@ -377,7 +390,12 @@ class Verb(ABC):
             )
 
     async def _finalize(
-        self, prompt: str, content: str, schema: type[T] | None, trace_id: str = ""
+        self,
+        prompt: str,
+        content: str,
+        schema: type[T] | None,
+        trace_id: str = "",
+        temperature: float | None = None,
     ) -> tuple[str, T | None]:
         """Finalize result, optionally parsing structured output."""
         if schema:
@@ -388,6 +406,7 @@ class Verb(ABC):
                 [Message(role="user", content=structured_prompt)],
                 system=self._config.system,
                 response_schema=json_schema,
+                temperature=temperature,
             )
             response.call_id = self._generate_id()
             self._write_base_trace(response, trace_id=trace_id, phase="finalize")
@@ -411,24 +430,27 @@ class Verb(ABC):
 
     # --- High-level helpers for verbs ---
 
-    async def _complete(self, prompt: str) -> str:
+    async def _complete(self, prompt: str, run: RunConfig | None = None) -> str:
         """Complete with tools if available, otherwise direct."""
         if self._has_tools():
-            content, _ = await self._loop(prompt)
+            content, _ = await self._loop(prompt, run=run)
             return content
         trace_id = self._generate_id()
         response = await self._backend.chat(
             [Message(role="user", content=prompt)],
             system=self._config.system,
+            temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         return response.content
 
-    async def _complete_structured(self, prompt: str, schema: type[T]) -> T:
+    async def _complete_structured(
+        self, prompt: str, schema: type[T], run: RunConfig | None = None
+    ) -> T:
         """Complete structured with tools if available, otherwise direct."""
         if self._has_tools():
-            _, result = await self._loop(prompt, schema=schema)
+            _, result = await self._loop(prompt, run=run, schema=schema)
             if result is not None:
                 return result
         # Direct structured completion
@@ -438,6 +460,7 @@ class Verb(ABC):
             [Message(role="user", content=prompt)],
             system=self._config.system,
             response_schema=json_schema,
+            temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")

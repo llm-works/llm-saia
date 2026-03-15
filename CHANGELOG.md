@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `temperature` parameter to `Backend.chat()` protocol for sampling variance control
+- `temperature` field in `Config` (instance default) and `RunConfig` (per-call override)
+- `.temperature()` method on `SAIABuilder` for fluent configuration
+
 ## [0.1.0] - 2026-02-25
 
 ### Added

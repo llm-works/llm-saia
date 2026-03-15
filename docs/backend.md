@@ -18,6 +18,7 @@ class MyBackend(Backend):
         tools: list[ToolDef] | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AgentResponse:
         # Your implementation here
         ...
@@ -95,6 +96,7 @@ class OpenAIBackend(Backend):
         tools: list[ToolDef] | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AgentResponse:
         # Build API messages
         api_messages = []
@@ -108,6 +110,8 @@ class OpenAIBackend(Backend):
         request = {"model": self._model, "messages": api_messages}
         if max_tokens is not None:
             request["max_tokens"] = max_tokens
+        if temperature is not None:
+            request["temperature"] = temperature
         if tools:
             request["tools"] = self._convert_tools(tools)
         if response_schema:

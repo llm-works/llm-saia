@@ -210,6 +210,7 @@ class Complete(Verb):
             terminal=None,
             lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
+            temperature=self._config.temperature,
         )
         run = self._config.run or DEFAULT_COMPLETE_RUN
         return DefaultController(
@@ -225,7 +226,8 @@ class Complete(Verb):
     ) -> tuple[AgentResponse, int]:
         """Run one LLM iteration and return response with token count."""
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
-        response = await self._chat(messages, max_tokens)
+        temperature = self._resolve_temperature(config)
+        response = await self._chat(messages, max_tokens, temperature)
         return response, response.input_tokens + response.output_tokens
 
     async def _execute_action(
