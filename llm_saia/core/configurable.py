@@ -38,7 +38,10 @@ class Configurable(ABC):
 
     def _with_call(self, **kwargs: Any) -> Self:
         """Return new instance with modified CallOptions fields."""
-        new_call = replace(self._config.call, **kwargs)  # type: ignore[type-var]
+        from llm_saia.core.config import DEFAULT_CALL
+
+        base_call = self._config.call or DEFAULT_CALL
+        new_call = replace(base_call, **kwargs)
         return self._with_config(call=new_call)
 
     # --- Call Options Overrides ---

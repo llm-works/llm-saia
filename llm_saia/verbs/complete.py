@@ -198,7 +198,7 @@ class Complete(Verb):
 
     def _default_controller(self) -> DefaultController:
         """Create default controller with config from this verb."""
-        from llm_saia.core.config import CallOptions, Config
+        from llm_saia.core.config import Config
 
         # Controller needs a config for classifier calls (no tools).
         # Copy call options with system and temperature from current config.
