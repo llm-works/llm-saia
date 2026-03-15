@@ -406,7 +406,7 @@ class Verb(ABC):
                 [Message(role="user", content=structured_prompt)],
                 system=self._config.system,
                 response_schema=json_schema,
-                temperature=temperature if temperature is not None else self._config.temperature,
+                temperature=temperature,
             )
             response.call_id = self._generate_id()
             self._write_base_trace(response, trace_id=trace_id, phase="finalize")
