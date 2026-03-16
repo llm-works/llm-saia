@@ -10,7 +10,7 @@ import pytest
 
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
-from llm_saia.core.config import Config, TerminalConfig
+from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.logger import Logger
 from llm_saia.core.types import (
     AgentResponse,
@@ -55,6 +55,7 @@ class MockBackend(Backend):
         self.last_system: str | None = None
         self.last_tools: list[ToolDef] | None = None
         self.last_response_schema: dict[str, Any] | None = None
+        self.last_temperature: float | None = None
         self._response_content: str = "mock response"
         self._queued_responses: list[AgentResponse] = []
         self._structured_responses: dict[str, dict[str, Any]] = _default_structured_responses()
@@ -138,12 +139,14 @@ class MockBackend(Backend):
         tools: list[ToolDef] | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AgentResponse:
         """Return predetermined response."""
         self.last_messages = messages
         self.last_system = system
         self.last_tools = tools
         self.last_response_schema = response_schema
+        self.last_temperature = temperature
 
         # Check structured output first (these calls have response_schema set)
         if response_schema:
@@ -180,11 +183,12 @@ def make_saia(
 ) -> SAIA:
     """Helper to create SAIA instances for tests."""
     terminal = TerminalConfig(tool=terminal_tool) if terminal_tool else None
+    call = CallOptions(system=system) if system is not None else None
     config = Config(
         backend=backend,
         tools=tools or [],
         executor=executor,
-        system=system,
+        call=call,
         terminal=terminal,
         lg=lg,
     )

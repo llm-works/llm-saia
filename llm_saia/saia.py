@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
-from llm_saia.core.config import DEFAULT_RUN, Config, RunConfig
+from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
+from llm_saia.core.configurable import Configurable
 
 if TYPE_CHECKING:
     from llm_saia.builder import SAIABuilder
@@ -26,7 +27,7 @@ from llm_saia.verbs import (
 )
 
 
-class SAIA:
+class SAIA(Configurable):
     """Framework-agnostic verb vocabulary for LLM agents.
 
     Example:
@@ -37,6 +38,7 @@ class SAIA:
         ...     .build())
         >>> result = await saia.verify(code, "compiles")
         >>> result = await saia.with_single_call().verify(claim)
+        >>> result = await saia.with_temperature(1.0).verify(claim)
     """
 
     @classmethod
@@ -48,12 +50,16 @@ class SAIA:
 
     def __init__(self, config: Config, *, _memory: dict[str, Any] | None = None):
         """Initialize SAIA with configuration."""
-        # Apply default run config if not specified
-        if config.run is None:
-            config = replace(config, run=DEFAULT_RUN)
+        # Apply default call options if not specified
+        if config.call is None:
+            config = replace(config, call=DEFAULT_CALL)
         self._config = config
         self._memory = _memory if _memory is not None else {}
         self._init_verbs()
+
+    def _clone(self, config: Config) -> Self:
+        """Create a new instance with modified config. Preserves memory."""
+        return self.__class__(config, _memory=self._memory)
 
     def _init_verbs(self) -> None:
         """Initialize verb instances with current config."""
@@ -77,50 +83,9 @@ class SAIA:
         return self._config
 
     @property
-    def run_config(self) -> RunConfig:
-        """Current run configuration."""
-        return self._config.run  # type: ignore[return-value]
-
-    def _with_modified_run(self, **kwargs: Any) -> SAIA:
-        """Return new SAIA with modified run config. Shares memory."""
-        # run is guaranteed non-None after __init__ applies DEFAULT_RUN
-        new_run = replace(self._config.run, **kwargs)  # type: ignore[type-var]
-        new_config = replace(self._config, run=new_run)
-        return SAIA(new_config, _memory=self._memory)
-
-    def with_run_config(self, run: RunConfig) -> SAIA:
-        """Return new SAIA with different run config. Shares memory."""
-        new_config = replace(self._config, run=run)
-        return SAIA(new_config, _memory=self._memory)
-
-    def with_single_call(self) -> SAIA:
-        """Return new SAIA for single LLM call (no looping). Shares memory."""
-        return self._with_modified_run(max_iterations=1)
-
-    def with_max_iterations(self, n: int) -> SAIA:
-        """Return new SAIA with specified max iterations. Shares memory."""
-        return self._with_modified_run(max_iterations=n)
-
-    def with_timeout_secs(self, secs: float) -> SAIA:
-        """Return new SAIA with specified timeout. Shares memory."""
-        return self._with_modified_run(timeout_secs=secs)
-
-    def with_max_tokens(self, n: int) -> SAIA:
-        """Return new SAIA with specified total token budget. Shares memory."""
-        return self._with_modified_run(max_total_tokens=n)
-
-    def with_max_call_tokens(self, n: int) -> SAIA:
-        """Return new SAIA with specified per-call token limit. Shares memory."""
-        return self._with_modified_run(max_call_tokens=n)
-
-    def with_retries(self, max_retries: int, escalation: str | None = None) -> SAIA:
-        """Return new SAIA with retry settings. Shares memory."""
-        return self._with_modified_run(max_retries=max_retries, retry_escalation=escalation)
-
-    def with_request_id(self, request_id: str) -> SAIA:
-        """Return new SAIA with a user-provided correlation ID. Shares memory."""
-        new_config = replace(self._config, request_id=request_id)
-        return SAIA(new_config, _memory=self._memory)
+    def call_options(self) -> CallOptions:
+        """Current call options."""
+        return self._config.call  # type: ignore[return-value]
 
     # --- Memory Verbs ---
 

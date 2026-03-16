@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
-    {name = "serendip-ml (github.com/serendip-ml)"}
+    {name = "LLM Works LLC", email = "info@llm-works.ai"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -37,9 +37,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/serendip-ml/llm-saia"
-Repository = "https://github.com/serendip-ml/llm-saia"
-Issues = "https://github.com/serendip-ml/llm-saia/issues"
+Homepage = "https://github.com/llm-works/llm-saia"
+Repository = "https://github.com/llm-works/llm-saia"
+Issues = "https://github.com/llm-works/llm-saia/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

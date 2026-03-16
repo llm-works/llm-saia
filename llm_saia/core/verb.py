@@ -10,7 +10,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from llm_saia.core.backend import AgentResponse, Message, ToolCall
-from llm_saia.core.config import DEFAULT_RUN, Config, RunConfig
+from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
 from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
 
@@ -46,11 +46,16 @@ class Verb(ABC):
         """Check if tools are configured."""
         return bool(self._config.tools and self._config.executor)
 
-    def _get_run_config(self, run: RunConfig | None = None) -> RunConfig:
-        """Get effective run config: call override > instance default > global default."""
-        return run or self._config.run or DEFAULT_RUN
+    @property
+    def _call(self) -> CallOptions:
+        """Get effective call options (instance default or global default)."""
+        return self._config.call or DEFAULT_CALL
 
-    def _log_loop_start(self, config: RunConfig) -> None:
+    def _get_call_options(self, override: CallOptions | None = None) -> CallOptions:
+        """Get effective call options: override > instance default > global default."""
+        return override or self._call
+
+    def _log_loop_start(self, config: CallOptions) -> None:
         """Log verb loop start if logger available."""
         if self._lg:
             self._lg.debug(
@@ -95,7 +100,7 @@ class Verb(ABC):
             )
 
     def _log_limit_reached(
-        self, config: RunConfig, iteration: int, start_time: float, total_tokens: int
+        self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
     ) -> None:
         """Log when loop limit is reached."""
         if self._lg:
@@ -236,11 +241,22 @@ class Verb(ABC):
             iteration=iteration,
             verb=self.__class__.__name__,
             phase=phase,
-            request_id=self._config.request_id,
+            request_id=self._call.request_id,
         )
         tracer.write(record)
 
-    async def _chat(self, messages: list[Message], max_tokens: int | None) -> AgentResponse:
+    def _resolve_temperature(self, override: CallOptions | None) -> float | None:
+        """Resolve temperature: override CallOptions > instance CallOptions."""
+        if override is not None and override.temperature is not None:
+            return override.temperature
+        return self._call.temperature
+
+    async def _chat(
+        self,
+        messages: list[Message],
+        max_tokens: int | None,
+        temperature: float | None = None,
+    ) -> AgentResponse:
         """Execute a single chat call."""
         call_id = self._generate_id()
         if self._lg:
@@ -256,9 +272,10 @@ class Verb(ABC):
             )
         response = await self._backend.chat(
             messages,
-            system=self._config.system,
+            system=self._call.system,
             tools=self._config.tools if self._config.tools else None,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
         response.call_id = call_id
         return response
@@ -266,21 +283,22 @@ class Verb(ABC):
     async def _loop(
         self,
         prompt: str,
-        run: RunConfig | None = None,
+        run: CallOptions | None = None,
         schema: type[T] | None = None,
         trace_id: str = "",
     ) -> tuple[str, T | None]:
         """Execute prompt with tool-calling loop."""
-        config = self._get_run_config(run)
+        config = self._get_call_options(run)
         messages: list[Message] = [Message(role="user", content=prompt)]
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
         self._log_loop_start(config)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
+        temperature = self._resolve_temperature(run)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(messages, max_tokens)
+            response = await self._chat(messages, max_tokens, temperature)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
             messages.append(self._to_message(response))
@@ -293,13 +311,13 @@ class Verb(ABC):
                 iteration += 1
             else:
                 self._log_loop_complete(iteration, start_time, total_tokens, response.content)
-                return await self._finalize(prompt, response.content, schema, trace_id)
+                return await self._finalize(prompt, response.content, schema, trace_id, temperature)
 
         self._log_limit_reached(config, iteration, start_time, total_tokens)
-        return await self._finalize(prompt, last_content, schema, trace_id)
+        return await self._finalize(prompt, last_content, schema, trace_id, temperature)
 
     def _should_stop(
-        self, config: RunConfig, iteration: int, start_time: float, total_tokens: int
+        self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
     ) -> bool:
         """Check if loop should stop."""
         if config.max_iterations > 0 and iteration >= config.max_iterations:
@@ -311,7 +329,7 @@ class Verb(ABC):
         return False
 
     def _get_limit_type(
-        self, config: RunConfig, iteration: int, elapsed_secs: float, total_tokens: int
+        self, config: CallOptions, iteration: int, elapsed_secs: float, total_tokens: int
     ) -> str:
         """Determine which limit caused the loop to stop."""
         if config.max_iterations > 0 and iteration >= config.max_iterations:
@@ -377,7 +395,12 @@ class Verb(ABC):
             )
 
     async def _finalize(
-        self, prompt: str, content: str, schema: type[T] | None, trace_id: str = ""
+        self,
+        prompt: str,
+        content: str,
+        schema: type[T] | None,
+        trace_id: str = "",
+        temperature: float | None = None,
     ) -> tuple[str, T | None]:
         """Finalize result, optionally parsing structured output."""
         if schema:
@@ -386,8 +409,9 @@ class Verb(ABC):
             json_schema = dataclass_to_json_schema(schema)
             response = await self._backend.chat(
                 [Message(role="user", content=structured_prompt)],
-                system=self._config.system,
+                system=self._call.system,
                 response_schema=json_schema,
+                temperature=temperature,
             )
             response.call_id = self._generate_id()
             self._write_base_trace(response, trace_id=trace_id, phase="finalize")
@@ -411,24 +435,27 @@ class Verb(ABC):
 
     # --- High-level helpers for verbs ---
 
-    async def _complete(self, prompt: str) -> str:
+    async def _complete(self, prompt: str, run: CallOptions | None = None) -> str:
         """Complete with tools if available, otherwise direct."""
         if self._has_tools():
-            content, _ = await self._loop(prompt)
+            content, _ = await self._loop(prompt, run=run)
             return content
         trace_id = self._generate_id()
         response = await self._backend.chat(
             [Message(role="user", content=prompt)],
-            system=self._config.system,
+            system=self._call.system,
+            temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         return response.content
 
-    async def _complete_structured(self, prompt: str, schema: type[T]) -> T:
+    async def _complete_structured(
+        self, prompt: str, schema: type[T], run: CallOptions | None = None
+    ) -> T:
         """Complete structured with tools if available, otherwise direct."""
         if self._has_tools():
-            _, result = await self._loop(prompt, schema=schema)
+            _, result = await self._loop(prompt, run=run, schema=schema)
             if result is not None:
                 return result
         # Direct structured completion
@@ -436,8 +463,9 @@ class Verb(ABC):
         json_schema = dataclass_to_json_schema(schema)
         response = await self._backend.chat(
             [Message(role="user", content=prompt)],
-            system=self._config.system,
+            system=self._call.system,
             response_schema=json_schema,
+            temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
         self._write_base_trace(response, trace_id=trace_id, phase="direct")

@@ -4,10 +4,10 @@
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
-[![Coverage](https://codecov.io/gh/serendip-ml/llm-saia/branch/main/graph/badge.svg)](https://codecov.io/gh/serendip-ml/llm-saia)
+[![Coverage](https://codecov.io/gh/llm-works/llm-saia/branch/main/graph/badge.svg)](https://codecov.io/gh/llm-works/llm-saia)
 [![Typed](https://img.shields.io/badge/typed-PEP%20561-brightgreen.svg)](https://peps.python.org/pep-0561/)
 [![Linting: Ruff](https://img.shields.io/badge/linting-ruff-brightgreen)](https://github.com/astral-sh/ruff)
-[![CI](https://github.com/serendip-ml/llm-saia/actions/workflows/ci.yml/badge.svg)](https://github.com/serendip-ml/llm-saia/actions/workflows/ci.yml)
+[![CI](https://github.com/llm-works/llm-saia/actions/workflows/ci.yml/badge.svg)](https://github.com/llm-works/llm-saia/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 
 SAIA provides a fixed vocabulary of semantic verbs for LLM interactions. Instead of writing raw
@@ -126,7 +126,7 @@ result = await saia.with_single_call().verify(code, "compiles")
 result = await saia.with_max_iterations(5).instruct(task)
 
 # Timeout
-result = await saia.with_timeout_secs(30).decompose(problem)
+result = await saia.with_timeout(30).decompose(problem)
 
 # Correlation ID for tracing
 result = await saia.with_request_id("req-123").ask(doc, question)

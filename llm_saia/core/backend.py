@@ -81,6 +81,7 @@ class Backend(ABC):
         tools: list[ToolDef] | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> AgentResponse:
         """Send a chat completion request.
 
@@ -90,6 +91,7 @@ class Backend(ABC):
             tools: Optional tools the LLM can call.
             response_schema: Optional JSON schema for structured output.
             max_tokens: Maximum tokens to generate.
+            temperature: Sampling temperature (None = backend default).
 
         Returns:
             AgentResponse with content, tool calls, and token usage.

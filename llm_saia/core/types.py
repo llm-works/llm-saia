@@ -9,8 +9,8 @@ from typing import Any
 # Re-export backend types for convenience
 from llm_saia.core.backend import AgentResponse, Message, ToolCall, ToolDef
 
-# Re-export config types for backwards compatibility
-from llm_saia.core.config import Config, RunConfig
+# Re-export config types for convenience
+from llm_saia.core.config import CallOptions, Config
 
 
 class DecisionReason(Enum):
@@ -54,7 +54,7 @@ __all__ = [
     "ToolCall",
     "ToolDef",
     # Config types (re-exported from config.py)
-    "RunConfig",
+    "CallOptions",
     "Config",
     # Verb results
     "ChooseResult",
