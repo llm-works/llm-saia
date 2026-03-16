@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-16
+
 ### Added
 - `temperature` parameter to `Backend.chat()` protocol for sampling variance control
 - `CallOptions` dataclass for all per-call configuration (replaces `RunConfig`)
@@ -61,5 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/llm-works/llm-saia/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/llm-works/llm-saia/releases/tag/v0.1.0
