@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `find` verb - filter items matching criteria, returns `FindResult(indices, reason)`
+- Schema support for `Literal[...]` types (maps to JSON enum)
+- Schema support for `Enum` types (maps to JSON enum)
+- Schema support for nested dataclasses (recursive conversion)
+- Schema support for `list[MyDataclass]` (recursive parsing)
+
+### Fixed
+- Schema generation now raises clear `TypeError` for recursive dataclasses
+- Schema generation validates Literal values are same type (prevents invalid JSON schema)
+- Parsing raises `TypeError` for type mismatches instead of silent coercion
 
 ## [0.2.0] - 2026-03-16
 
