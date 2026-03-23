@@ -456,7 +456,7 @@ class Verb(ABC):
         """Complete structured with tools if available, otherwise direct.
 
         Supports automatic retry on StructuredOutputError with feedback to the LLM.
-        Retry count is controlled by CallOptions.parse_retries (default: 1).
+        Retry count is controlled by CallOptions.parse_retries (default: 0).
         """
         config = self._get_call_options(run)
         max_attempts = 1 + config.parse_retries

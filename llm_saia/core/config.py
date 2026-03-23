@@ -50,6 +50,11 @@ class CallOptions:
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
 
+    def __post_init__(self) -> None:
+        """Validate options after initialization."""
+        if self.parse_retries < 0:
+            raise ValueError("parse_retries must be non-negative")
+
 
 @dataclass
 class TerminalConfig:

@@ -190,3 +190,8 @@ class TestParseRetry:
 
         assert result.value == "fluent"
         assert result.score == 5
+
+    def test_negative_parse_retries_rejected(self) -> None:
+        """parse_retries must be non-negative."""
+        with pytest.raises(ValueError, match="parse_retries must be non-negative"):
+            CallOptions(parse_retries=-1)
