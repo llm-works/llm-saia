@@ -58,6 +58,9 @@ class TestAsk:
         assert result == "custom answer"
 
 
+_FIND_RESPONSE = "_FindResponse"
+
+
 class TestFind:
     async def test_find_returns_result(self, mock_backend: MockBackend) -> None:
         find = Find(make_config(mock_backend))
@@ -87,9 +90,8 @@ class TestFind:
         assert "No items" in result.reason
 
     async def test_find_filters_invalid_indices(self, mock_backend: MockBackend) -> None:
-        # Set up response with out-of-range indices
         mock_backend.set_structured_response(
-            "_FindResponse", {"matching_numbers": [1, 5, 10], "reason": "includes invalid"}
+            _FIND_RESPONSE, {"matching_numbers": [1, 5, 10], "reason": "includes invalid"}
         )
         find = Find(make_config(mock_backend))
         result = await find(["a", "b", "c"], "criteria")
@@ -98,15 +100,23 @@ class TestFind:
         assert result.indices == [0]
 
     async def test_find_deduplicates_indices(self, mock_backend: MockBackend) -> None:
-        # Set up response with duplicate indices
         mock_backend.set_structured_response(
-            "_FindResponse", {"matching_numbers": [2, 1, 2, 1], "reason": "has duplicates"}
+            _FIND_RESPONSE, {"matching_numbers": [2, 1, 2, 1], "reason": "has duplicates"}
         )
         find = Find(make_config(mock_backend))
         result = await find(["a", "b", "c"], "criteria")
 
         # Duplicates removed, sorted order
         assert result.indices == [0, 1]
+
+    async def test_find_rejects_too_many_items(self, mock_backend: MockBackend) -> None:
+        from llm_saia.verbs.find import MAX_ITEMS
+
+        find = Find(make_config(mock_backend))
+        items = [f"item {i}" for i in range(MAX_ITEMS + 1)]
+
+        with pytest.raises(ValueError, match="Too many items"):
+            await find(items, "criteria")
 
 
 class TestExtract:
