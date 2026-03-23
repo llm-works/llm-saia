@@ -19,6 +19,7 @@ from llm_saia.verbs import (
     Critique_,
     Decompose,
     Extract,
+    Find,
     Ground,
     Instruct,
     Refine,
@@ -70,9 +71,10 @@ class SAIA(Configurable):
         self.constrain = Constrain(self._config)
         self.critique = Critique_(self._config)
         self.decompose = Decompose(self._config)
+        self.extract = Extract(self._config)
+        self.find = Find(self._config)
         self.ground = Ground(self._config)
         self.instruct = Instruct(self._config)
-        self.extract = Extract(self._config)
         self.refine = Refine(self._config)
         self.synthesize = Synthesize(self._config)
         self.verify = Verify(self._config)

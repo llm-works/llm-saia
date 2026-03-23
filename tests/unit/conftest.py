@@ -42,6 +42,8 @@ def _default_structured_responses() -> dict[str, dict[str, Any]]:
             "reason": "test classification reason",
         },
         "ChooseResult": {"choice": "option_a", "reason": "test choice reason"},
+        # Find verb uses _FindResponse internally (1-indexed matching_numbers)
+        "_FindResponse": {"matching_numbers": [1, 3], "reason": "test find reason"},
         # Generic fallbacks
         "DecomposeResult": {"subtasks": ["task 1", "task 2"]},
     }

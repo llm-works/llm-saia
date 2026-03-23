@@ -61,6 +61,7 @@ __all__ = [
     "ClassifyResult",
     "Critique",
     "Evidence",
+    "FindResult",
     "VerbResult",
     "VerifyResult",
     # Task types
@@ -122,6 +123,14 @@ class ChooseResult:
     """Result from CHOOSE verb."""
 
     choice: str
+    reason: str
+
+
+@dataclass
+class FindResult:
+    """Result from FIND verb."""
+
+    indices: list[int]  # 0-indexed indices of matching items
     reason: str
 
 
