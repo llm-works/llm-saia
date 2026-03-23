@@ -88,6 +88,7 @@ async def main():
 | `extract` | Pull structured data from text | `T` (structured) |
 | `classify` | Categorize into predefined classes | `ClassifyResult(label, confidence)` |
 | `choose` | Select best option from choices | `ChooseResult(choice, reasoning)` |
+| `find` | Filter items matching criteria | `FindResult(indices, reason)` |
 | `constrain` | Parse into structured schema | `T` (structured) |
 | `ground` | Anchor claims to source evidence | `list[Evidence]` |
 | `instruct` | Execute open-ended instructions | `str` |

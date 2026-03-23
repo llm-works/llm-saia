@@ -19,6 +19,7 @@ from llm_saia.core.types import (
     Critique,
     DecisionReason,
     Evidence,
+    FindResult,
     LoopScore,
     TaskResult,
     VerbResult,
@@ -50,6 +51,7 @@ __all__ = [
     "ClassifyResult",
     "Critique",
     "Evidence",
+    "FindResult",
     "VerifyResult",
     "VerbResult",
     # Task types

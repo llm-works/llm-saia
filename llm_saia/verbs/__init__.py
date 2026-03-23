@@ -10,6 +10,7 @@ from llm_saia.verbs.constrain import Constrain
 from llm_saia.verbs.critique import Critique_
 from llm_saia.verbs.decompose import Decompose
 from llm_saia.verbs.extract import Extract
+from llm_saia.verbs.find import Find
 from llm_saia.verbs.ground import Ground
 from llm_saia.verbs.instruct import Instruct
 from llm_saia.verbs.memory import recall, store
@@ -29,9 +30,10 @@ __all__ = [
     "Constrain",
     "Critique_",
     "Decompose",
+    "Extract",
+    "Find",
     "Ground",
     "Instruct",
-    "Extract",
     "Refine",
     "Synthesize",
     "Verify",
