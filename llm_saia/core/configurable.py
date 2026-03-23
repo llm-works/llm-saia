@@ -85,3 +85,15 @@ class Configurable(ABC):
     def with_system(self, system: str | None) -> Self:
         """Return new instance with different system prompt (None to clear)."""
         return self._with_call(system=system)
+
+    def with_parse_retries(self, n: int) -> Self:
+        """Return new instance with specified parse retry attempts.
+
+        When structured output parsing fails (StructuredOutputError), SAIA will
+        retry with feedback to the LLM about what went wrong. This is useful
+        for local/smaller LLMs that may produce malformed JSON.
+
+        Args:
+            n: Number of retry attempts. 0 = no retry (default), 1 = one retry, etc.
+        """
+        return self._with_call(parse_retries=n)

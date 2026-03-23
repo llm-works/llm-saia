@@ -44,8 +44,16 @@ class CallOptions:
     max_retries: int = 1  # Number of retry attempts (1 = no retry)
     retry_escalation: str | None = None  # Prompt added on retry attempts
 
+    # Parse retry (structured output)
+    parse_retries: int = 0  # Retry attempts on StructuredOutputError (0 = no retry)
+
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
+
+    def __post_init__(self) -> None:
+        """Validate options after initialization."""
+        if self.parse_retries < 0:
+            raise ValueError("parse_retries must be non-negative")
 
 
 @dataclass

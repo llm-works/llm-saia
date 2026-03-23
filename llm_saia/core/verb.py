@@ -453,7 +453,41 @@ class Verb(ABC):
     async def _complete_structured(
         self, prompt: str, schema: type[T], run: CallOptions | None = None
     ) -> T:
-        """Complete structured with tools if available, otherwise direct."""
+        """Complete structured with tools if available, otherwise direct.
+
+        Supports automatic retry on StructuredOutputError with feedback to the LLM.
+        Retry count is controlled by CallOptions.parse_retries (default: 0).
+        """
+        config = self._get_call_options(run)
+        max_attempts = 1 + config.parse_retries
+        last_error: StructuredOutputError | None = None
+
+        for attempt in range(max_attempts):
+            try:
+                if attempt == 0:
+                    return await self._complete_structured_attempt(prompt, schema, run)
+                else:
+                    # Retry with feedback about the error
+                    retry_prompt = self._build_parse_retry_prompt(
+                        prompt,
+                        schema,
+                        last_error,  # type: ignore[arg-type]
+                    )
+                    return await self._complete_structured_attempt(retry_prompt, schema, run)
+            except StructuredOutputError as e:
+                last_error = e
+                if attempt < max_attempts - 1:
+                    self._log_parse_retry(schema.__name__, attempt + 1, max_attempts, e)
+                    continue
+                raise
+
+        # Should not reach here, but satisfy type checker
+        raise last_error  # type: ignore[misc]
+
+    async def _complete_structured_attempt(
+        self, prompt: str, schema: type[T], run: CallOptions | None = None
+    ) -> T:
+        """Single attempt at structured completion."""
         if self._has_tools():
             _, result = await self._loop(prompt, run=run, schema=schema)
             if result is not None:
@@ -474,6 +508,42 @@ class Verb(ABC):
         except json.JSONDecodeError as e:
             raise self._structured_output_error(e, response.content, schema.__name__) from e
         return parse_json_to_dataclass(data, schema)
+
+    def _build_parse_retry_prompt(
+        self, original_prompt: str, schema: type[T], error: StructuredOutputError
+    ) -> str:
+        """Build a retry prompt with feedback about the parse failure."""
+        parts = [original_prompt, "\n\n---\n\nYour previous response could not be parsed."]
+
+        if error.parse_error:
+            parts.append(f"\n\nParse error: {error.parse_error}")
+
+        if error.raw_content:
+            # Truncate raw content to avoid token bloat
+            raw = error.raw_content
+            if len(raw) > 500:
+                raw = raw[:500] + "... (truncated)"
+            parts.append(f"\n\nYour response was:\n```\n{raw}\n```")
+
+        parts.append(
+            f"\n\nPlease provide a valid JSON response matching the {schema.__name__} schema."
+        )
+        return "".join(parts)
+
+    def _log_parse_retry(
+        self, schema_name: str, attempt: int, max_attempts: int, error: StructuredOutputError
+    ) -> None:
+        """Log parse retry attempt."""
+        if self._lg:
+            self._lg.debug(
+                "parse retry",
+                extra={
+                    "schema": schema_name,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "parse_error": error.parse_error,
+                },
+            )
 
     def _structured_output_error(
         self, error: json.JSONDecodeError, content: str, schema_name: str
