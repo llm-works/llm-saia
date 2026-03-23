@@ -1,7 +1,8 @@
 """Tests for shared schema conversion utilities."""
 
+import enum
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import pytest
 
@@ -64,6 +65,61 @@ class TestPythonTypeToJsonSchema:
     def test_unsupported_type(self) -> None:
         with pytest.raises(TypeError, match="Unsupported type"):
             python_type_to_json_schema(set)  # type: ignore[arg-type]
+
+    def test_literal_int(self) -> None:
+        schema = python_type_to_json_schema(Literal[1, 2, 3, 4, 5])
+        assert schema["type"] == "integer"
+        assert schema["enum"] == [1, 2, 3, 4, 5]
+
+    def test_literal_str(self) -> None:
+        schema = python_type_to_json_schema(Literal["low", "medium", "high"])
+        assert schema["type"] == "string"
+        assert schema["enum"] == ["low", "medium", "high"]
+
+    def test_literal_bool(self) -> None:
+        schema = python_type_to_json_schema(Literal[True, False])
+        assert schema["type"] == "boolean"
+        assert schema["enum"] == [True, False]
+
+    def test_enum_str_values(self) -> None:
+        class Priority(enum.Enum):
+            LOW = "low"
+            MEDIUM = "medium"
+            HIGH = "high"
+
+        schema = python_type_to_json_schema(Priority)
+        assert schema["type"] == "string"
+        assert schema["enum"] == ["low", "medium", "high"]
+
+    def test_enum_int_values(self) -> None:
+        class Rating(enum.Enum):
+            ONE = 1
+            TWO = 2
+            THREE = 3
+
+        schema = python_type_to_json_schema(Rating)
+        assert schema["type"] == "integer"
+        assert schema["enum"] == [1, 2, 3]
+
+    def test_nested_dataclass(self) -> None:
+        @dataclass
+        class Inner:
+            value: int
+
+        schema = python_type_to_json_schema(Inner)
+        assert schema["type"] == "object"
+        assert schema["properties"]["value"]["type"] == "integer"
+        assert schema["required"] == ["value"]
+
+    def test_list_of_dataclass(self) -> None:
+        @dataclass
+        class Item:
+            name: str
+
+        schema = python_type_to_json_schema(list[Item])
+        assert schema["type"] == "array"
+        assert schema["items"]["type"] == "object"
+        assert schema["items"]["properties"]["name"]["type"] == "string"
 
 
 class TestDataclassToJsonSchema:
@@ -193,3 +249,85 @@ class TestParseJsonToDataclass:
         # Extra fields should not be present
         assert not hasattr(result, "_note")
         assert not hasattr(result, "confidence")
+
+    def test_parse_nested_dataclass(self) -> None:
+        @dataclass
+        class Inner:
+            value: int
+
+        @dataclass
+        class Outer:
+            name: str
+            inner: Inner
+
+        data = {"name": "test", "inner": {"value": 42}}
+        result = parse_json_to_dataclass(data, Outer)
+
+        assert isinstance(result, Outer)
+        assert result.name == "test"
+        assert isinstance(result.inner, Inner)
+        assert result.inner.value == 42
+
+    def test_parse_list_of_dataclass(self) -> None:
+        @dataclass
+        class Item:
+            name: str
+            score: int
+
+        @dataclass
+        class Container:
+            items: list[Item]
+
+        data = {"items": [{"name": "a", "score": 1}, {"name": "b", "score": 2}]}
+        result = parse_json_to_dataclass(data, Container)
+
+        assert isinstance(result, Container)
+        assert len(result.items) == 2
+        assert isinstance(result.items[0], Item)
+        assert result.items[0].name == "a"
+        assert result.items[1].score == 2
+
+    def test_parse_enum(self) -> None:
+        class Priority(enum.Enum):
+            LOW = "low"
+            HIGH = "high"
+
+        @dataclass
+        class Task:
+            name: str
+            priority: Priority
+
+        data = {"name": "test", "priority": "high"}
+        result = parse_json_to_dataclass(data, Task)
+
+        assert isinstance(result, Task)
+        assert result.priority == Priority.HIGH
+
+    def test_parse_literal(self) -> None:
+        @dataclass
+        class Rating:
+            score: Literal[1, 2, 3, 4, 5]
+
+        data = {"score": 4}
+        result = parse_json_to_dataclass(data, Rating)
+
+        assert isinstance(result, Rating)
+        assert result.score == 4
+
+    def test_parse_optional_nested(self) -> None:
+        @dataclass
+        class Inner:
+            value: int
+
+        @dataclass
+        class Outer:
+            inner: Inner | None
+
+        # With value
+        result = parse_json_to_dataclass({"inner": {"value": 42}}, Outer)
+        assert result.inner is not None
+        assert result.inner.value == 42
+
+        # With None
+        result = parse_json_to_dataclass({"inner": None}, Outer)
+        assert result.inner is None

@@ -89,7 +89,7 @@ async def main():
 | `classify` | Categorize into predefined classes | `ClassifyResult(label, confidence)` |
 | `choose` | Select best option from choices | `ChooseResult(choice, reasoning)` |
 | `find` | Filter items matching criteria | `FindResult(indices, reason)` (0-indexed) |
-| `constrain` | Parse into structured schema | `T` (structured) |
+| `constrain` | Rewrite text to comply with rules | `str` |
 | `ground` | Anchor claims to source evidence | `list[Evidence]` |
 | `instruct` | Execute open-ended instructions | `str` |
 
