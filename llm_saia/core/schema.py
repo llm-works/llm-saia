@@ -24,26 +24,10 @@ def dataclass_to_json_schema(schema: type) -> dict[str, Any]:
     if not dataclasses.is_dataclass(schema):
         raise TypeError(f"Schema must be a dataclass, got {type(schema)}")
 
-    hints = get_type_hints(schema)
-    properties: dict[str, Any] = {}
-    required: list[str] = []
-
-    for field in dataclasses.fields(schema):
-        field_type = hints[field.name]
-        properties[field.name] = python_type_to_json_schema(field_type)
-
-        # Check if field has a default
-        if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
-            required.append(field.name)
-
     return {
         "name": schema.__name__,
         "description": schema.__doc__ or f"Structured output for {schema.__name__}",
-        "schema": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        },
+        "schema": _build_object_schema(schema, seen=set()),
     }
 
 
@@ -73,20 +57,32 @@ _PRIMITIVE_TYPE_MAP: dict[type, str] = {
 }
 
 
-def python_type_to_json_schema(python_type: type) -> dict[str, Any]:
+def python_type_to_json_schema(
+    python_type: type, *, _seen: set[type] | None = None
+) -> dict[str, Any]:
     """Convert Python type hints to JSON schema.
 
     Supported types:
         - Primitives: str, int, float, bool
         - Collections: list[T], dict
         - Constrained: Literal[...], Enum subclasses
-        - Nested: dataclasses (recursive)
+        - Nested: dataclasses (recursive, but not self-referential)
         - Special: Any, Optional[T], T | None
+
+    Args:
+        python_type: The Python type to convert.
+        _seen: Internal parameter for cycle detection. Do not pass directly.
+
+    Raises:
+        TypeError: If the type is unsupported or contains cycles.
     """
+    if _seen is None:
+        _seen = set()
+
     # Handle Optional[T] / T | None
     unwrapped = _unwrap_optional(python_type)
     if unwrapped is not None:
-        return python_type_to_json_schema(unwrapped)
+        return python_type_to_json_schema(unwrapped, _seen=_seen)
 
     # Handle primitives
     if python_type in _PRIMITIVE_TYPE_MAP:
@@ -96,7 +92,7 @@ def python_type_to_json_schema(python_type: type) -> dict[str, Any]:
         return {"type": "string"}
 
     # Try complex types (generic, enum, dataclass)
-    result = _try_complex_type_to_json_schema(python_type)
+    result = _try_complex_type_to_json_schema(python_type, _seen)
     if result is not None:
         return result
 
@@ -107,7 +103,7 @@ def python_type_to_json_schema(python_type: type) -> dict[str, Any]:
     )
 
 
-def _try_complex_type_to_json_schema(python_type: type) -> dict[str, Any] | None:
+def _try_complex_type_to_json_schema(python_type: type, seen: set[type]) -> dict[str, Any] | None:
     """Try to convert complex types (generic, enum, dataclass) to JSON schema."""
     origin = get_origin(python_type)
 
@@ -115,34 +111,62 @@ def _try_complex_type_to_json_schema(python_type: type) -> dict[str, Any] | None
         return _literal_to_json_schema(get_args(python_type))
     if origin is list:
         args = get_args(python_type) or (Any,)
-        return {"type": "array", "items": python_type_to_json_schema(args[0])}
+        return {"type": "array", "items": python_type_to_json_schema(args[0], _seen=seen)}
     if origin is dict:
         return {"type": "object"}
     if isinstance(python_type, type) and issubclass(python_type, enum.Enum):
         return _enum_to_json_schema(python_type)
     if dataclasses.is_dataclass(python_type):
-        return _nested_dataclass_to_json_schema(python_type)
+        return _build_object_schema(python_type, seen)
 
     return None
 
 
+def _get_literal_type_info(value: Any) -> tuple[str, type]:
+    """Get JSON type string and Python type for a Literal value."""
+    if isinstance(value, bool):
+        return "boolean", bool
+    if isinstance(value, int):
+        return "integer", int
+    if isinstance(value, str):
+        return "string", str
+    if isinstance(value, float):
+        return "number", float
+    raise TypeError(
+        f"Unsupported Literal value type: {type(value).__name__}. "
+        "Literal values must be str, int, float, or bool."
+    )
+
+
+def _validate_literal_type_consistency(args: tuple[Any, ...], expected_type: type) -> None:
+    """Validate all Literal args match the expected type."""
+    for i, arg in enumerate(args[1:], start=1):
+        # bool is subclass of int, so check bool first
+        if isinstance(arg, bool) and expected_type is not bool:
+            raise TypeError(
+                f"Mixed types in Literal: index 0 is {expected_type.__name__}, "
+                f"index {i} is bool. All values must be the same type."
+            )
+        if not isinstance(arg, expected_type) or (expected_type is int and isinstance(arg, bool)):
+            raise TypeError(
+                f"Mixed types in Literal: index 0 is {expected_type.__name__}, "
+                f"index {i} is {type(arg).__name__}. All values must be the same type."
+            )
+
+
 def _literal_to_json_schema(args: tuple[Any, ...]) -> dict[str, Any]:
-    """Convert Literal type arguments to JSON schema with enum."""
+    """Convert Literal type arguments to JSON schema with enum.
+
+    All values must be of the same type. Mixed-type Literals (e.g., Literal["a", 1])
+    are not supported as they produce invalid JSON schemas.
+    """
     if not args:
         raise TypeError("Literal type must have at least one value")
 
-    first = args[0]
-    if isinstance(first, int) and not isinstance(first, bool):
-        return {"type": "integer", "enum": list(args)}
-    elif isinstance(first, str):
-        return {"type": "string", "enum": list(args)}
-    elif isinstance(first, bool):
-        return {"type": "boolean", "enum": list(args)}
-    elif isinstance(first, float):
-        return {"type": "number", "enum": list(args)}
-    else:
-        # Mixed or complex types - just use enum without type constraint
-        return {"enum": list(args)}
+    json_type, expected_type = _get_literal_type_info(args[0])
+    _validate_literal_type_consistency(args, expected_type)
+
+    return {"type": json_type, "enum": list(args)}
 
 
 def _enum_to_json_schema(enum_type: type[enum.Enum]) -> dict[str, Any]:
@@ -160,15 +184,31 @@ def _enum_to_json_schema(enum_type: type[enum.Enum]) -> dict[str, Any]:
         return {"enum": values}
 
 
-def _nested_dataclass_to_json_schema(schema: type) -> dict[str, Any]:
-    """Convert a nested dataclass to inline JSON schema (object type)."""
+def _build_object_schema(schema: type, seen: set[type]) -> dict[str, Any]:
+    """Build JSON schema object type from a dataclass with cycle detection.
+
+    Args:
+        schema: The dataclass type to convert.
+        seen: Set of types already being processed (for cycle detection).
+
+    Raises:
+        TypeError: If a cycle is detected (self-referential dataclass).
+    """
+    if schema in seen:
+        raise TypeError(
+            f"Recursive type detected: {schema.__name__}. "
+            "Self-referential dataclasses are not supported in JSON schema generation."
+        )
+
+    seen = seen | {schema}  # Create new set to avoid mutating caller's set
+
     hints = get_type_hints(schema)
     properties: dict[str, Any] = {}
     required: list[str] = []
 
     for field in dataclasses.fields(schema):
         field_type = hints[field.name]
-        properties[field.name] = python_type_to_json_schema(field_type)
+        properties[field.name] = python_type_to_json_schema(field_type, _seen=seen)
 
         if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
             required.append(field.name)
@@ -212,7 +252,11 @@ def parse_json_to_dataclass(data: object, schema: type[T]) -> T:
 
 
 def _parse_field_value(value: Any, field_type: type) -> Any:
-    """Parse a field value according to its type hint."""
+    """Parse a field value according to its type hint.
+
+    Raises:
+        TypeError: If value type doesn't match expected field type for structured types.
+    """
     if value is None:
         return None
 
@@ -223,28 +267,33 @@ def _parse_field_value(value: Any, field_type: type) -> Any:
 
     origin = get_origin(field_type)
 
-    # Literal - value is already the right type from JSON
     if origin is Literal:
         return value
-    # list[T] - may contain nested dataclasses
     if origin is list:
-        return _parse_list_value(value, field_type)
-    # Enum - convert value back to enum member
+        return _parse_list_field(value, field_type)
     if isinstance(field_type, type) and issubclass(field_type, enum.Enum):
         return field_type(value)
-    # Nested dataclass
-    if dataclasses.is_dataclass(field_type) and isinstance(value, dict):
-        return parse_json_to_dataclass(value, field_type)
-    # Primitives and other types - return as-is
+    if dataclasses.is_dataclass(field_type):
+        return _parse_dataclass_field(value, field_type)
+
     return value
 
 
-def _parse_list_value(value: Any, field_type: type) -> Any:
-    """Parse a list value, recursively parsing items if needed."""
+def _parse_list_field(value: Any, field_type: type) -> list[Any]:
+    """Parse a list field, validating type and recursively parsing items."""
     if not isinstance(value, list):
-        return value
+        raise TypeError(f"Expected list for field type {field_type}, got {type(value).__name__}")
     args = get_args(field_type)
     if not args:
         return value
     item_type = args[0]
     return [_parse_field_value(item, item_type) for item in value]
+
+
+def _parse_dataclass_field(value: Any, field_type: type) -> Any:
+    """Parse a nested dataclass field, validating type."""
+    if not isinstance(value, dict):
+        raise TypeError(
+            f"Expected dict for dataclass field {field_type.__name__}, got {type(value).__name__}"
+        )
+    return parse_json_to_dataclass(value, field_type)

@@ -121,6 +121,29 @@ class TestPythonTypeToJsonSchema:
         assert schema["items"]["type"] == "object"
         assert schema["items"]["properties"]["name"]["type"] == "string"
 
+    def test_literal_mixed_types_raises(self) -> None:
+        with pytest.raises(TypeError, match="Mixed types in Literal"):
+            python_type_to_json_schema(Literal["a", 1])  # type: ignore[arg-type]
+
+    def test_literal_mixed_int_bool_raises(self) -> None:
+        # bool is subclass of int, but we should still reject mixing them
+        with pytest.raises(TypeError, match="Mixed types in Literal"):
+            python_type_to_json_schema(Literal[1, True])  # type: ignore[arg-type]
+
+    def test_recursive_dataclass_raises(self) -> None:
+        # Test cycle detection via the internal function directly.
+        # Forward references in local scopes don't work with get_type_hints,
+        # but cycle detection works when called with already-seen types.
+        from llm_saia.core.schema import _build_object_schema
+
+        @dataclass
+        class Node:
+            value: int
+
+        # Simulate cycle detection by pre-populating the seen set
+        with pytest.raises(TypeError, match="Recursive type detected"):
+            _build_object_schema(Node, seen={Node})
+
 
 class TestDataclassToJsonSchema:
     def test_simple_dataclass(self) -> None:
@@ -331,3 +354,23 @@ class TestParseJsonToDataclass:
         # With None
         result = parse_json_to_dataclass({"inner": None}, Outer)
         assert result.inner is None
+
+    def test_parse_nested_wrong_type_raises(self) -> None:
+        @dataclass
+        class Inner:
+            value: int
+
+        @dataclass
+        class Outer:
+            inner: Inner
+
+        with pytest.raises(TypeError, match="Expected dict for dataclass field"):
+            parse_json_to_dataclass({"inner": "not a dict"}, Outer)
+
+    def test_parse_list_wrong_type_raises(self) -> None:
+        @dataclass
+        class Container:
+            items: list[str]
+
+        with pytest.raises(TypeError, match="Expected list for field type"):
+            parse_json_to_dataclass({"items": "not a list"}, Container)
