@@ -26,6 +26,11 @@ class SequencedMockBackend(MockBackend):
         self._raw_sequence: list[str] = []
         self._sequence_index = 0
 
+    @property
+    def call_count(self) -> int:
+        """Number of chat calls made to this backend."""
+        return self._sequence_index
+
     def queue_raw_response(self, content: str) -> None:
         """Queue a raw response (can be invalid JSON)."""
         self._raw_sequence.append(content)
@@ -80,7 +85,8 @@ class TestParseRetry:
         # Second call returns valid JSON
         backend.queue_raw_response(json.dumps({"value": "success", "score": 42}))
 
-        extract = Extract(make_config(backend))
+        call = CallOptions(parse_retries=1)
+        extract = Extract(make_config(backend, call=call))
         result = await extract("test content", SimpleSchema)
 
         assert result.value == "success"
@@ -93,7 +99,8 @@ class TestParseRetry:
         backend.queue_raw_response("invalid 1")
         backend.queue_raw_response("invalid 2")
 
-        extract = Extract(make_config(backend))
+        call = CallOptions(parse_retries=1)
+        extract = Extract(make_config(backend, call=call))
         with pytest.raises(StructuredOutputError):
             await extract("test content", SimpleSchema)
 
@@ -112,7 +119,7 @@ class TestParseRetry:
             await extract("test content", SimpleSchema)
 
         # Verify only one call was made (sequence index should be 1)
-        assert backend._sequence_index == 1
+        assert backend.call_count == 1
 
     async def test_retry_prompt_includes_error_feedback(self) -> None:
         """Retry prompt should include the parse error from the first attempt."""
@@ -122,7 +129,8 @@ class TestParseRetry:
         # Second call returns valid JSON
         backend.queue_raw_response(json.dumps({"value": "ok", "score": 1}))
 
-        extract = Extract(make_config(backend))
+        call = CallOptions(parse_retries=1)
+        extract = Extract(make_config(backend, call=call))
         await extract("test content", SimpleSchema)
 
         # Check the retry prompt (second message sent to backend)
@@ -149,7 +157,7 @@ class TestParseRetry:
 
         assert result.value == "third"
         assert result.score == 3
-        assert backend._sequence_index == 3
+        assert backend.call_count == 3
 
     async def test_first_success_no_retry(self) -> None:
         """When first attempt succeeds, no retry should happen."""
@@ -162,7 +170,7 @@ class TestParseRetry:
 
         assert result.value == "immediate"
         assert result.score == 100
-        assert backend._sequence_index == 1  # Only one call made
+        assert backend.call_count == 1  # Only one call made
 
     async def test_with_parse_retries_fluent_api(self) -> None:
         """Test using with_parse_retries() fluent API."""

@@ -94,6 +94,6 @@ class Configurable(ABC):
         for local/smaller LLMs that may produce malformed JSON.
 
         Args:
-            n: Number of retry attempts. 0 = no retry, 1 = one retry (default).
+            n: Number of retry attempts. 0 = no retry (default), 1 = one retry, etc.
         """
         return self._with_call(parse_retries=n)

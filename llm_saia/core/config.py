@@ -45,7 +45,7 @@ class CallOptions:
     retry_escalation: str | None = None  # Prompt added on retry attempts
 
     # Parse retry (structured output)
-    parse_retries: int = 1  # Retry attempts on StructuredOutputError (0 = no retry)
+    parse_retries: int = 0  # Retry attempts on StructuredOutputError (0 = no retry)
 
     # Tracing
     request_id: str | None = None  # User-provided correlation ID

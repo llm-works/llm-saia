@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Schema support for `Enum` types (maps to JSON enum)
 - Schema support for nested dataclasses (recursive conversion)
 - Schema support for `list[MyDataclass]` (recursive parsing)
-- Parse retry with feedback - auto-retry on `StructuredOutputError` with LLM feedback
-- `with_parse_retries(n)` fluent API for controlling retry attempts (default: 1)
+- Parse retry with feedback - retry on `StructuredOutputError` with LLM feedback (opt-in)
+- `with_parse_retries(n)` fluent API for enabling retry attempts (default: 0 = disabled)
 
 ### Fixed
 - Schema generation now raises clear `TypeError` for recursive dataclasses
