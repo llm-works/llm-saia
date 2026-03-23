@@ -170,18 +170,55 @@ def _literal_to_json_schema(args: tuple[Any, ...]) -> dict[str, Any]:
 
 
 def _enum_to_json_schema(enum_type: type[enum.Enum]) -> dict[str, Any]:
-    """Convert Enum type to JSON schema with enum values."""
+    """Convert Enum type to JSON schema with enum values.
+
+    All member values must be of the same type. Mixed-type Enums will raise TypeError.
+    """
     values = [member.value for member in enum_type]
     if not values:
         raise TypeError(f"Enum {enum_type.__name__} has no members")
 
     first = values[0]
-    if isinstance(first, int) and not isinstance(first, bool):
-        return {"type": "integer", "enum": values}
-    elif isinstance(first, str):
-        return {"type": "string", "enum": values}
-    else:
+    json_type, expected_type = _get_enum_type_info(first, enum_type)
+    _validate_enum_type_consistency(values, expected_type, enum_type)
+
+    if json_type is None:
         return {"enum": values}
+    return {"type": json_type, "enum": values}
+
+
+def _get_enum_type_info(first: Any, enum_type: type) -> tuple[str | None, type | None]:
+    """Get JSON type string and Python type for an enum's first value."""
+    if isinstance(first, bool):
+        return "boolean", bool
+    if isinstance(first, int):
+        return "integer", int
+    if isinstance(first, str):
+        return "string", str
+    if isinstance(first, float):
+        return "number", float
+    # Unsupported type - will emit enum without type constraint
+    return None, None
+
+
+def _validate_enum_type_consistency(
+    values: list[Any], expected_type: type | None, enum_type: type
+) -> None:
+    """Validate all enum values are the same type."""
+    if expected_type is None:
+        return  # No type constraint for unsupported types
+
+    for i, val in enumerate(values[1:], start=1):
+        if isinstance(val, bool) and expected_type is not bool:
+            raise TypeError(
+                f"Mixed types in Enum {enum_type.__name__}: "
+                f"member 0 is {expected_type.__name__}, member {i} is bool."
+            )
+        if not isinstance(val, expected_type) or (expected_type is int and isinstance(val, bool)):
+            raise TypeError(
+                f"Mixed types in Enum {enum_type.__name__}: "
+                f"member 0 is {expected_type.__name__}, member {i} is {type(val).__name__}."
+            )
 
 
 def _build_object_schema(schema: type, seen: set[type]) -> dict[str, Any]:
@@ -268,15 +305,31 @@ def _parse_field_value(value: Any, field_type: type) -> Any:
     origin = get_origin(field_type)
 
     if origin is Literal:
-        return value
+        return _parse_literal_field(value, field_type)
     if origin is list:
         return _parse_list_field(value, field_type)
     if isinstance(field_type, type) and issubclass(field_type, enum.Enum):
-        return field_type(value)
+        return _parse_enum_field(value, field_type)
     if dataclasses.is_dataclass(field_type):
         return _parse_dataclass_field(value, field_type)
 
     return value
+
+
+def _parse_literal_field(value: Any, field_type: type) -> Any:
+    """Parse a Literal field, validating value is in allowed set."""
+    allowed = get_args(field_type)
+    if value not in allowed:
+        raise TypeError(f"Value {value!r} not in Literal{list(allowed)}")
+    return value
+
+
+def _parse_enum_field(value: Any, enum_type: type[enum.Enum]) -> enum.Enum:
+    """Parse an enum field, converting value to enum member."""
+    try:
+        return enum_type(value)
+    except ValueError as e:
+        raise TypeError(f"Invalid value {value!r} for enum {enum_type.__name__}: {e}") from e
 
 
 def _parse_list_field(value: Any, field_type: type) -> list[Any]:

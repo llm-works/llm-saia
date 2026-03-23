@@ -101,6 +101,14 @@ class TestPythonTypeToJsonSchema:
         assert schema["type"] == "integer"
         assert schema["enum"] == [1, 2, 3]
 
+    def test_enum_mixed_types_raises(self) -> None:
+        class MixedEnum(enum.Enum):
+            A = "string"
+            B = 123
+
+        with pytest.raises(TypeError, match="Mixed types in Enum"):
+            python_type_to_json_schema(MixedEnum)
+
     def test_nested_dataclass(self) -> None:
         @dataclass
         class Inner:
@@ -374,3 +382,23 @@ class TestParseJsonToDataclass:
 
         with pytest.raises(TypeError, match="Expected list for field type"):
             parse_json_to_dataclass({"items": "not a list"}, Container)
+
+    def test_parse_literal_invalid_value_raises(self) -> None:
+        @dataclass
+        class Rating:
+            score: Literal[1, 2, 3, 4, 5]
+
+        with pytest.raises(TypeError, match="not in Literal"):
+            parse_json_to_dataclass({"score": 99}, Rating)
+
+    def test_parse_enum_invalid_value_raises(self) -> None:
+        class Priority(enum.Enum):
+            LOW = "low"
+            HIGH = "high"
+
+        @dataclass
+        class Task:
+            priority: Priority
+
+        with pytest.raises(TypeError, match="Invalid value.*for enum"):
+            parse_json_to_dataclass({"priority": "invalid"}, Task)
