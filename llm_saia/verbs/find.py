@@ -35,8 +35,8 @@ class Find(Verb):
             f"If none match, return an empty list."
         )
         result = await self._complete_structured(prompt, _FindResponse)
-        # Convert 1-indexed to 0-indexed, filter invalid indices
-        indices = [i - 1 for i in result.matching_numbers if 1 <= i <= len(items)]
+        # Convert 1-indexed to 0-indexed, filter invalid indices, deduplicate
+        indices = sorted({i - 1 for i in result.matching_numbers if 1 <= i <= len(items)})
         return FindResult(indices=indices, reason=result.reason)
 
 

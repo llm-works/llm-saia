@@ -97,6 +97,17 @@ class TestFind:
         # Only index 1 is valid (maps to 0), 5 and 10 are out of range
         assert result.indices == [0]
 
+    async def test_find_deduplicates_indices(self, mock_backend: MockBackend) -> None:
+        # Set up response with duplicate indices
+        mock_backend.set_structured_response(
+            "_FindResponse", {"matching_numbers": [2, 1, 2, 1], "reason": "has duplicates"}
+        )
+        find = Find(make_config(mock_backend))
+        result = await find(["a", "b", "c"], "criteria")
+
+        # Duplicates removed, sorted order
+        assert result.indices == [0, 1]
+
 
 class TestExtract:
     async def test_extract_uses_structured_output(self, mock_backend: MockBackend) -> None:
