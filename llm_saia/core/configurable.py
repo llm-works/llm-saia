@@ -100,15 +100,14 @@ class Configurable(ABC):
         return self._with_call(parse_retries=n)
 
     def with_guard(self, guard: OutputGuard) -> Self:
-        """Add an output guard that validates structured output and retries if invalid.
+        """Add an output guard that validates output and retries if invalid.
 
-        Guards are applied after successful structured output completion (including
-        parse retries). If validation fails, the request is retried with the guard's
-        retry_instruction appended to the prompt.
+        Guards are applied after completion. If validation fails, the request
+        is retried with the guard's retry_instruction appended to the prompt.
 
-        Note: Guards only apply to structured output verbs (e.g., Extract). They are
-        silently ignored for text-returning verbs. This is by design - guards validate
-        parsed dataclass results, not raw text responses.
+        Guards work with both:
+        - Text verbs (Ask, etc.) - validator receives the text string
+        - Structured output verbs (Extract, etc.) - validator receives the parsed object
 
         Multiple guards can be chained and are applied in order. If a guard retry
         produces a different result, all guards are re-validated from the beginning.
@@ -119,7 +118,7 @@ class Configurable(ABC):
             ...     saia
             ...     .with_guard(english_only())
             ...     .with_guard(max_length(500))
-            ...     .extract(text, Summary)  # Structured output verb
+            ...     .ask(artifact, question)
             ... )
 
         Args:
@@ -135,13 +134,14 @@ class Configurable(ABC):
         """Add multiple output guards at once.
 
         Convenience method equivalent to chaining multiple with_guard() calls.
+        See with_guard() for details on guard behavior.
 
         Example:
             >>> from llm_saia.guards import english_only, max_length, no_preamble
             >>> result = await (
             ...     saia
             ...     .with_guards(english_only(), max_length(500), no_preamble())
-            ...     .extract(text, Summary)
+            ...     .ask(artifact, question)
             ... )
 
         Args:

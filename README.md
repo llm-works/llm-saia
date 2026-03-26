@@ -133,6 +133,39 @@ result = await saia.with_timeout(30).decompose(problem)
 result = await saia.with_request_id("req-123").ask(doc, question)
 ```
 
+### Output Guards
+
+Guards validate LLM output and automatically retry with feedback if validation fails.
+
+```python
+from llm_saia.guards import english_only, max_length, no_preamble
+
+# Apply guards to any verb
+result = await (
+    saia
+    .with_guards(english_only(), no_preamble(), max_length(500))
+    .ask(article, "summarize this")
+)
+```
+
+Field-level guards for structured output:
+
+```python
+from typing import Annotated
+from llm_saia import Guarded
+from llm_saia.guards import english_only, max_length
+
+@dataclass
+class Summary:
+    title: Annotated[str, Guarded(english_only(), max_length(100))]
+    body: Annotated[str, Guarded(english_only())]
+
+result = await saia.extract(article, Summary)
+```
+
+Pre-built guards: `english_only()`, `ascii_only()`, `max_length(n)`, `no_emoji()`,
+`no_markdown()`, `no_preamble()`.
+
 ## Examples
 
 See the [examples/](examples/) directory:

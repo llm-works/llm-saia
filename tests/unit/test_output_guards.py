@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 
-from llm_saia import OutputGuard, OutputGuardError
+from llm_saia import Guarded, OutputGuard, OutputGuardError
 from llm_saia.core.backend import AgentResponse, Message
 from llm_saia.core.config import Config
 from llm_saia.core.types import ToolDef
@@ -20,7 +20,7 @@ from llm_saia.guards import (
     no_markdown,
     no_preamble,
 )
-from llm_saia.verbs import Extract
+from llm_saia.verbs import Ask, Extract
 from tests.unit.conftest import MockBackend
 
 pytestmark = pytest.mark.unit
@@ -487,3 +487,181 @@ class TestGuardWithParseRetries:
 
         assert result.text == "Good"
         assert backend.call_count == 3  # 1 parse fail + 1 guard fail + 1 success
+
+
+class TestTextGuards:
+    """Tests for guards applied to text-returning verbs (Ask, etc.)."""
+
+    async def test_guard_passes_on_valid_text(self) -> None:
+        """Guard that returns None allows text through."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response("Hello world")
+
+        guard = OutputGuard(
+            validator=lambda x: None,  # Always valid
+            retry_instruction="Fix it.",
+        )
+
+        config = make_config(backend)
+        ask = Ask(config).with_guard(guard)
+        result = await ask("artifact", "question")
+
+        assert result == "Hello world"
+        assert backend.call_count == 1
+
+    async def test_guard_retries_on_invalid_text(self) -> None:
+        """Guard triggers retry when validator returns error string."""
+        backend = SequencedMockBackend()
+        # First response fails validation
+        backend.queue_json_response("Bad 日本語 text")
+        # Second response passes
+        backend.queue_json_response("Good English text")
+
+        guard = OutputGuard(
+            validator=lambda x: "Non-ASCII" if any(ord(c) > 127 for c in str(x)) else None,
+            retry_instruction="ASCII only.",
+            max_retries=1,
+        )
+
+        config = make_config(backend)
+        ask = Ask(config).with_guard(guard)
+        result = await ask("artifact", "question")
+
+        assert result == "Good English text"
+        assert backend.call_count == 2
+
+    async def test_text_guard_exhausts_retries(self) -> None:
+        """OutputGuardError raised when all retries exhausted for text."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response("Bad text 1")
+        backend.queue_json_response("Bad text 2")
+
+        guard = OutputGuard(
+            validator=lambda x: "Always fails",
+            retry_instruction="Try again.",
+            max_retries=1,
+            name="always_fail",
+        )
+
+        config = make_config(backend)
+        ask = Ask(config).with_guard(guard)
+
+        with pytest.raises(OutputGuardError) as exc_info:
+            await ask("artifact", "question")
+
+        assert exc_info.value.guard_name == "always_fail"
+        assert exc_info.value.attempts == 2
+
+
+class TestFieldLevelGuards:
+    """Tests for field-level guards via Annotated[..., Guarded(...)]."""
+
+    async def test_field_guard_passes_valid_field(self) -> None:
+        """Field-level guard passes when field is valid."""
+
+        @dataclass
+        class Article:
+            title: Annotated[str, Guarded(english_only())]
+            body: str
+
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"title": "Hello", "body": "World"}))
+
+        config = make_config(backend)
+        extract = Extract(config)
+        result = await extract("test", Article)
+
+        assert result.title == "Hello"
+        assert result.body == "World"
+        assert backend.call_count == 1
+
+    async def test_field_guard_retries_invalid_field(self) -> None:
+        """Field-level guard triggers retry when field fails validation."""
+
+        @dataclass
+        class Article:
+            title: Annotated[str, Guarded(english_only())]
+            body: str
+
+        backend = SequencedMockBackend()
+        # First: title has non-English
+        backend.queue_json_response(json.dumps({"title": "Hello 日本語", "body": "World"}))
+        # Second: all good
+        backend.queue_json_response(json.dumps({"title": "Hello English", "body": "World"}))
+
+        config = make_config(backend)
+        extract = Extract(config)
+        result = await extract("test", Article)
+
+        assert result.title == "Hello English"
+        assert backend.call_count == 2
+
+    async def test_field_guard_only_validates_annotated_field(self) -> None:
+        """Field-level guard only applies to the annotated field, not others."""
+
+        @dataclass
+        class Article:
+            title: Annotated[str, Guarded(english_only())]
+            body: str  # Not guarded - can have non-English
+
+        backend = SequencedMockBackend()
+        # body has non-English but title is fine - should pass
+        backend.queue_json_response(json.dumps({"title": "Hello", "body": "日本語テキスト"}))
+
+        config = make_config(backend)
+        extract = Extract(config)
+        result = await extract("test", Article)
+
+        assert result.title == "Hello"
+        assert result.body == "日本語テキスト"
+        assert backend.call_count == 1
+
+    async def test_multiple_guards_on_field(self) -> None:
+        """Multiple guards can be applied to a single field."""
+
+        @dataclass
+        class Article:
+            title: Annotated[str, Guarded(english_only(), max_length(20))]
+
+        backend = SequencedMockBackend()
+        # Title is English but too long
+        backend.queue_json_response(
+            json.dumps({"title": "This is a very long title that exceeds the limit"})
+        )
+        # Second attempt: short and English
+        backend.queue_json_response(json.dumps({"title": "Short title"}))
+
+        config = make_config(backend)
+        extract = Extract(config)
+        result = await extract("test", Article)
+
+        assert result.title == "Short title"
+        assert backend.call_count == 2
+
+    async def test_combined_instance_and_field_guards(self) -> None:
+        """Both instance-level and field-level guards are applied."""
+
+        @dataclass
+        class Article:
+            title: Annotated[str, Guarded(max_length(50))]
+            body: str
+
+        # Instance-level guard checks entire result
+        instance_guard = OutputGuard(
+            validator=lambda x: "Has emoji" if "😀" in str(x) else None,
+            retry_instruction="No emoji.",
+        )
+
+        backend = SequencedMockBackend()
+        # First: instance guard fails (emoji in body)
+        backend.queue_json_response(json.dumps({"title": "Hello", "body": "World 😀"}))
+        # Second: passes instance guard, passes field guard
+        backend.queue_json_response(json.dumps({"title": "Hello", "body": "World"}))
+
+        config = make_config(backend)
+        extract = Extract(config).with_guard(instance_guard)
+        result = await extract("test", Article)
+
+        assert result.title == "Hello"
+        assert result.body == "World"
+        assert backend.call_count == 2
