@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from llm_saia.core.backend import AgentResponse, Message, ToolCall
 from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
+from llm_saia.core.configurable import Configurable
 from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
+from llm_saia.core.guard import OutputGuard, OutputGuardError
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-class Verb(ABC):
+class Verb(Configurable):
     """Base class for all verbs. Subclass this to create custom verbs."""
 
     # Truncation limit for log previews
@@ -31,6 +33,11 @@ class Verb(ABC):
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
         self._config = config
+        self._memory: dict[str, Any] = {}  # Verbs don't use memory
+
+    def _clone(self, config: Config) -> Self:
+        """Create a new instance with the given config."""
+        return self.__class__(config)
 
     @property
     def _backend(self) -> Backend:
@@ -457,6 +464,8 @@ class Verb(ABC):
 
         Supports automatic retry on StructuredOutputError with feedback to the LLM.
         Retry count is controlled by CallOptions.parse_retries (default: 0).
+
+        After successful parsing, output guards are applied if configured.
         """
         config = self._get_call_options(run)
         max_attempts = 1 + config.parse_retries
@@ -464,16 +473,17 @@ class Verb(ABC):
 
         for attempt in range(max_attempts):
             try:
-                if attempt == 0:
-                    return await self._complete_structured_attempt(prompt, schema, run)
-                else:
-                    # Retry with feedback about the error
-                    retry_prompt = self._build_parse_retry_prompt(
+                use_prompt = (
+                    prompt
+                    if attempt == 0
+                    else self._build_parse_retry_prompt(
                         prompt,
                         schema,
                         last_error,  # type: ignore[arg-type]
                     )
-                    return await self._complete_structured_attempt(retry_prompt, schema, run)
+                )
+                result = await self._complete_structured_attempt(use_prompt, schema, run)
+                return await self._apply_guards(prompt, result, schema, run)
             except StructuredOutputError as e:
                 last_error = e
                 if attempt < max_attempts - 1:
@@ -545,6 +555,84 @@ class Verb(ABC):
                     "attempt": attempt,
                     "max_attempts": max_attempts,
                     "parse_error": error.parse_error,
+                },
+            )
+
+    # --- Output Guard Methods ---
+
+    async def _apply_guards(
+        self,
+        prompt: str,
+        result: T,
+        schema: type[T],
+        run: CallOptions | None,
+    ) -> T:
+        """Apply output guards sequentially, retrying on failure."""
+        config = self._get_call_options(run)
+
+        for guard in config.output_guards:
+            result = await self._apply_single_guard(prompt, result, schema, guard, run)
+
+        return result
+
+    async def _apply_single_guard(
+        self,
+        prompt: str,
+        result: T,
+        schema: type[T],
+        guard: OutputGuard,
+        run: CallOptions | None,
+    ) -> T:
+        """Apply one guard with retries."""
+        for attempt in range(1 + guard.max_retries):
+            # Validate - convert to string for text-based validators
+            output = str(result) if not isinstance(result, str) else result
+            error = guard.validator(output)
+
+            if error is None:
+                return result  # Passed
+
+            if attempt < guard.max_retries:
+                self._log_guard_retry(guard, attempt + 1, error)
+                retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error)
+                result = await self._complete_structured_attempt(retry_prompt, schema, run)
+            else:
+                raise OutputGuardError(guard.name, error, attempt + 1)
+
+        return result  # Unreachable, satisfies type checker
+
+    def _build_guard_retry_prompt(
+        self,
+        original_prompt: str,
+        failed_result: Any,
+        guard: OutputGuard,
+        error: str,
+    ) -> str:
+        """Build retry prompt with guard feedback."""
+        # Truncate result for prompt
+        result_str = str(failed_result)
+        if len(result_str) > 300:
+            result_str = result_str[:300] + "..."
+
+        return (
+            f"{original_prompt}\n\n"
+            f"---\n\n"
+            f"Your previous response did not meet requirements.\n\n"
+            f"Issue: {error}\n\n"
+            f"Your response was:\n```\n{result_str}\n```\n\n"
+            f"{guard.retry_instruction}"
+        )
+
+    def _log_guard_retry(self, guard: OutputGuard, attempt: int, error: str) -> None:
+        """Log guard retry attempt."""
+        if self._lg:
+            self._lg.debug(
+                "guard retry",
+                extra={
+                    "guard": guard.name,
+                    "attempt": attempt,
+                    "max_retries": guard.max_retries,
+                    "error": error,
                 },
             )
 
