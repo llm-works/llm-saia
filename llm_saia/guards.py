@@ -13,6 +13,7 @@ Example:
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from llm_saia.core.guard import OutputGuard
 
@@ -58,7 +59,8 @@ def max_length(n: int, max_retries: int = 2) -> OutputGuard:
         OutputGuard configured for length validation.
     """
 
-    def check(text: str) -> str | None:
+    def check(result: Any) -> str | None:
+        text = str(result)
         length = len(text)
         if length <= n:
             return None
@@ -178,8 +180,9 @@ _ALLOWED_PUNCTUATION = {
 }
 
 
-def _is_english(text: str) -> str | None:
+def _is_english(result: Any) -> str | None:
     """Check for non-Latin script characters."""
+    text = str(result)
     for char in text:
         cp = ord(char)
         # Allow: Basic Latin, Latin-1 Supplement, Latin Extended-A/B, common punctuation
@@ -188,8 +191,9 @@ def _is_english(text: str) -> str | None:
     return None
 
 
-def _has_no_markdown(text: str) -> str | None:
+def _has_no_markdown(result: Any) -> str | None:
     """Check for markdown patterns."""
+    text = str(result)
     patterns = [
         (r"^#{1,6}\s", "headers (#)"),
         (r"^\s*[-*]\s", "bullet points"),
@@ -204,8 +208,9 @@ def _has_no_markdown(text: str) -> str | None:
     return None
 
 
-def _has_no_preamble(text: str) -> str | None:
+def _has_no_preamble(result: Any) -> str | None:
     """Check for conversational preamble."""
+    text = str(result)
     preambles = [
         "sure",
         "certainly",
@@ -229,8 +234,9 @@ def _has_no_preamble(text: str) -> str | None:
     return None
 
 
-def _is_ascii(text: str) -> str | None:
+def _is_ascii(result: Any) -> str | None:
     """Check for non-ASCII characters."""
+    text = str(result)
     for char in text:
         if ord(char) > 127:
             return f"Contains non-ASCII: '{char}' (U+{ord(char):04X})"
@@ -314,8 +320,9 @@ def _is_emoji(cp: int) -> bool:
     return False
 
 
-def _has_no_emoji(text: str) -> str | None:
+def _has_no_emoji(result: Any) -> str | None:
     """Check for emoji characters."""
+    text = str(result)
     for char in text:
         cp = ord(char)
         if _is_emoji(cp):

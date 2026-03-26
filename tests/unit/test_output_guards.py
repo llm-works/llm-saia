@@ -100,6 +100,15 @@ class TestOutputGuard:
         with pytest.raises(AttributeError):  # FrozenInstanceError raises AttributeError
             guard.name = "changed"  # type: ignore[misc]
 
+    def test_guard_rejects_negative_max_retries(self) -> None:
+        """OutputGuard raises ValueError for negative max_retries."""
+        with pytest.raises(ValueError, match="max_retries must be >= 0"):
+            OutputGuard(
+                validator=lambda x: None,
+                retry_instruction="Fix it.",
+                max_retries=-1,
+            )
+
 
 class TestGuardExecution:
     """Tests for guard execution during verb calls."""
@@ -130,7 +139,8 @@ class TestGuardExecution:
         # Second response passes
         backend.queue_response(json.dumps({"text": "Good English", "score": 2}))
 
-        def reject_non_ascii(text: str) -> str | None:
+        def reject_non_ascii(result: Any) -> str | None:
+            text = str(result)
             for c in text:
                 if ord(c) > 127:
                     return f"Non-ASCII character: {c}"
@@ -206,7 +216,7 @@ class TestGuardExecution:
 
         # Validator checks if "Too long" appears in the string representation
         guard = OutputGuard(
-            validator=lambda x: "Contains forbidden text!" if "Too long" in x else None,
+            validator=lambda x: "Contains forbidden text!" if "Too long" in str(x) else None,
             retry_instruction="Be concise.",
             max_retries=1,
         )
@@ -434,7 +444,7 @@ class TestGuardWithParseRetries:
         backend.queue_response(json.dumps({"text": "Good", "score": 2}))
 
         guard = OutputGuard(
-            validator=lambda x: "Non-ASCII" if any(ord(c) > 127 for c in x) else None,
+            validator=lambda x: "Non-ASCII" if any(ord(c) > 127 for c in str(x)) else None,
             retry_instruction="ASCII only.",
             max_retries=1,
         )

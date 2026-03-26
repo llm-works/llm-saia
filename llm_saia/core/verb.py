@@ -567,13 +567,25 @@ class Verb(Configurable):
         schema: type[T],
         run: CallOptions | None,
     ) -> T:
-        """Apply output guards sequentially, retrying on failure."""
+        """Apply output guards sequentially, retrying on failure.
+
+        If a guard retry produces a different result, all guards are re-validated
+        from the beginning to ensure the new result passes all guards.
+        """
         config = self._get_call_options(run)
+        guards = config.output_guards
 
-        for guard in config.output_guards:
-            result = await self._apply_single_guard(prompt, result, schema, guard, run)
-
-        return result
+        while True:
+            original_result = result
+            for guard in guards:
+                result = await self._apply_single_guard(prompt, result, schema, guard, run)
+                # If result changed (retry occurred), restart validation from first guard
+                if result != original_result:
+                    break
+            else:
+                # All guards passed without changes
+                return result
+            # Result changed, loop continues to re-validate all guards
 
     async def _apply_single_guard(
         self,
@@ -590,10 +602,9 @@ class Verb(Configurable):
         so JSON structure is expected to be stable on retry.
         """
         for attempt in range(1 + guard.max_retries):
-            # Validate - convert to string for text-based validators
-            output = str(result) if not isinstance(result, str) else result
+            # Pass original result to validator - validators handle type conversion
             try:
-                error = guard.validator(output)
+                error = guard.validator(result)
             except Exception as e:
                 # Validator raised instead of returning str - treat as validation failure
                 error = f"Validator raised {type(e).__name__}: {e}"

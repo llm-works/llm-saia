@@ -100,13 +100,18 @@ class Configurable(ABC):
         return self._with_call(parse_retries=n)
 
     def with_guard(self, guard: OutputGuard) -> Self:
-        """Add an output guard that validates results and retries if invalid.
+        """Add an output guard that validates structured output and retries if invalid.
 
-        Guards are applied after successful completion (including parse retries
-        for structured output). If validation fails, the request is retried with
-        the guard's retry_instruction appended to the prompt.
+        Guards are applied after successful structured output completion (including
+        parse retries). If validation fails, the request is retried with the guard's
+        retry_instruction appended to the prompt.
 
-        Multiple guards can be chained and are applied in order.
+        Note: Guards only apply to structured output verbs (e.g., Extract). They are
+        silently ignored for text-returning verbs. This is by design - guards validate
+        parsed dataclass results, not raw text responses.
+
+        Multiple guards can be chained and are applied in order. If a guard retry
+        produces a different result, all guards are re-validated from the beginning.
 
         Example:
             >>> from llm_saia.guards import english_only, max_length
@@ -114,7 +119,7 @@ class Configurable(ABC):
             ...     saia
             ...     .with_guard(english_only())
             ...     .with_guard(max_length(500))
-            ...     .summarize(text)
+            ...     .extract(text, Summary)  # Structured output verb
             ... )
 
         Args:
