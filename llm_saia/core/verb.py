@@ -791,11 +791,14 @@ class Verb(Configurable):
                 self._log_guard_retry(guard, attempt + 1, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error)
                 # Retry text completion
+                trace_id = self._generate_id()
                 response = await self._backend.chat(
                     [Message(role="user", content=retry_prompt)],
                     system=self._call.system,
                     temperature=self._resolve_temperature(run),
                 )
+                response.call_id = self._generate_id()
+                self._write_base_trace(response, trace_id=trace_id, phase="guard_retry")
                 text = response.content
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)

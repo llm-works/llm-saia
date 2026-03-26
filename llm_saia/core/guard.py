@@ -77,7 +77,12 @@ class Guarded:
 
         Args:
             *guards: OutputGuard instances to apply to the annotated field.
+
+        Raises:
+            ValueError: If no guards are provided.
         """
+        if not guards:
+            raise ValueError("Guarded requires at least one guard")
         self.guards: tuple[OutputGuard, ...] = guards
 
 

@@ -110,6 +110,28 @@ class TestOutputGuard:
             )
 
 
+class TestGuarded:
+    """Tests for Guarded marker class."""
+
+    def test_guarded_requires_at_least_one_guard(self) -> None:
+        """Guarded raises ValueError when no guards provided."""
+        with pytest.raises(ValueError, match="Guarded requires at least one guard"):
+            Guarded()
+
+    def test_guarded_accepts_single_guard(self) -> None:
+        """Guarded can be created with a single guard."""
+        guard = OutputGuard(validator=lambda x: None, retry_instruction="Fix it.")
+        guarded = Guarded(guard)
+        assert guarded.guards == (guard,)
+
+    def test_guarded_accepts_multiple_guards(self) -> None:
+        """Guarded can be created with multiple guards."""
+        guard1 = OutputGuard(validator=lambda x: None, retry_instruction="Fix 1.")
+        guard2 = OutputGuard(validator=lambda x: None, retry_instruction="Fix 2.")
+        guarded = Guarded(guard1, guard2)
+        assert guarded.guards == (guard1, guard2)
+
+
 class TestGuardExecution:
     """Tests for guard execution during verb calls."""
 
