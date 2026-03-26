@@ -495,10 +495,13 @@ class Verb(ABC):
         # Direct structured completion
         trace_id = self._generate_id()
         json_schema = dataclass_to_json_schema(schema)
+        config = self._get_call_options(run)
+        max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         response = await self._backend.chat(
             [Message(role="user", content=prompt)],
             system=self._call.system,
             response_schema=json_schema,
+            max_tokens=max_tokens,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()

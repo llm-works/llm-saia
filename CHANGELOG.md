@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Schema generation now raises clear `TypeError` for recursive dataclasses
 - Schema generation validates Literal values are same type (prevents invalid JSON schema)
 - Parsing raises `TypeError` for type mismatches instead of silent coercion
+- `max_call_tokens` now respected in direct structured output completion
 
 ## [0.2.0] - 2026-03-16
 
