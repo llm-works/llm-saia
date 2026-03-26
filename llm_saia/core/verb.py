@@ -7,13 +7,22 @@ import time
 import uuid
 from abc import abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Self, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Self,
+    TypeVar,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from llm_saia.core.backend import AgentResponse, Message, ToolCall
 from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
 from llm_saia.core.configurable import Configurable
 from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
-from llm_saia.core.guard import OutputGuard, OutputGuardError
+from llm_saia.core.guard import Guarded, OutputGuard, OutputGuardError
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
@@ -443,7 +452,30 @@ class Verb(Configurable):
     # --- High-level helpers for verbs ---
 
     async def _complete(self, prompt: str, run: CallOptions | None = None) -> str:
-        """Complete with tools if available, otherwise direct."""
+        """Complete with tools if available, otherwise direct.
+
+        Applies output guards if configured.
+        """
+        if self._has_tools():
+            content, _ = await self._loop(prompt, run=run)
+            return await self._apply_text_guards(prompt, content, run)
+        trace_id = self._generate_id()
+        response = await self._backend.chat(
+            [Message(role="user", content=prompt)],
+            system=self._call.system,
+            temperature=self._resolve_temperature(run),
+        )
+        response.call_id = self._generate_id()
+        self._write_base_trace(response, trace_id=trace_id, phase="direct")
+        return await self._apply_text_guards(prompt, response.content, run)
+
+    async def _complete_text_attempt(
+        self, prompt: str, run: CallOptions | None = None, phase: str = "direct"
+    ) -> str:
+        """Single attempt at text completion without applying guards.
+
+        Used by guard retry logic to avoid recursion.
+        """
         if self._has_tools():
             content, _ = await self._loop(prompt, run=run)
             return content
@@ -454,7 +486,7 @@ class Verb(Configurable):
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
-        self._write_base_trace(response, trace_id=trace_id, phase="direct")
+        self._write_base_trace(response, trace_id=trace_id, phase=phase)
         return response.content
 
     async def _complete_structured(
@@ -569,23 +601,132 @@ class Verb(Configurable):
     ) -> T:
         """Apply output guards sequentially, retrying on failure.
 
+        Applies both instance-level guards (from with_guard/with_guards) and
+        field-level guards (from Annotated[..., Guarded(...)] type hints).
+
         If a guard retry produces a different result, all guards are re-validated
         from the beginning to ensure the new result passes all guards.
         """
         config = self._get_call_options(run)
-        guards = config.output_guards
+        instance_guards = config.output_guards
+        field_guards = self._extract_field_guards(schema)
 
         while True:
             original_result = result
-            for guard in guards:
+
+            # Apply instance-level guards (validate entire result)
+            for guard in instance_guards:
                 result = await self._apply_single_guard(prompt, result, schema, guard, run)
-                # If result changed (retry occurred), restart validation from first guard
                 if result != original_result:
                     break
             else:
-                # All guards passed without changes
-                return result
+                # Apply field-level guards
+                for field_name, guards in field_guards.items():
+                    for guard in guards:
+                        result = await self._apply_field_guard(
+                            prompt, result, schema, field_name, guard, run
+                        )
+                        if result != original_result:
+                            break
+                    if result != original_result:
+                        break
+                else:
+                    # All guards passed without changes
+                    return result
+
             # Result changed, loop continues to re-validate all guards
+
+    def _extract_field_guards(self, schema: type[T]) -> dict[str, tuple[OutputGuard, ...]]:
+        """Extract field-level guards from Annotated type hints.
+
+        Returns:
+            Dict mapping field name to tuple of guards for that field.
+        """
+        result: dict[str, tuple[OutputGuard, ...]] = {}
+
+        try:
+            hints = get_type_hints(schema, include_extras=True)
+        except Exception:
+            # Schema doesn't support type hints (e.g., not a dataclass)
+            return result
+
+        for field_name, hint in hints.items():
+            if get_origin(hint) is Annotated:
+                args = get_args(hint)
+                for arg in args[1:]:  # Skip the actual type (first arg)
+                    if isinstance(arg, Guarded):
+                        result[field_name] = arg.guards
+                        break  # Only one Guarded per field
+
+        return result
+
+    async def _apply_field_guard(
+        self,
+        prompt: str,
+        result: T,
+        schema: type[T],
+        field_name: str,
+        guard: OutputGuard,
+        run: CallOptions | None,
+    ) -> T:
+        """Apply a guard to a specific field of the result."""
+        for attempt in range(1 + guard.max_retries):
+            field_value = getattr(result, field_name, None)
+
+            try:
+                error = guard.validator(field_value)
+            except Exception as e:
+                error = f"Validator raised {type(e).__name__}: {e}"
+
+            if error is None:
+                return result  # Passed
+
+            if attempt < guard.max_retries:
+                guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
+                self._log_guard_retry(
+                    OutputGuard(
+                        guard.validator, guard.retry_instruction, guard.max_retries, guard_name
+                    ),
+                    attempt + 1,
+                    error,
+                )
+                # Build retry prompt mentioning the specific field
+                retry_prompt = self._build_field_guard_retry_prompt(
+                    prompt, result, field_name, field_value, guard, error
+                )
+                result = await self._complete_structured_attempt(retry_prompt, schema, run)
+            else:
+                guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
+                raise OutputGuardError(guard_name, error, attempt + 1)
+
+        return result  # Unreachable, satisfies type checker
+
+    def _build_field_guard_retry_prompt(
+        self,
+        original_prompt: str,
+        failed_result: Any,
+        field_name: str,
+        field_value: Any,
+        guard: OutputGuard,
+        error: str,
+    ) -> str:
+        """Build retry prompt for field-specific guard failure."""
+        result_str = str(failed_result)
+        if len(result_str) > 300:
+            result_str = result_str[:300] + "..."
+
+        field_str = str(field_value)
+        if len(field_str) > 200:
+            field_str = field_str[:200] + "..."
+
+        return (
+            f"{original_prompt}\n\n"
+            f"---\n\n"
+            f"Your previous response did not meet requirements.\n\n"
+            f"Issue with field '{field_name}': {error}\n\n"
+            f"Field value was:\n```\n{field_str}\n```\n\n"
+            f"{guard.retry_instruction}"
+        )
 
     async def _apply_single_guard(
         self,
@@ -620,6 +761,60 @@ class Verb(Configurable):
                 raise OutputGuardError(guard.name, error, attempt + 1)
 
         return result  # Unreachable, satisfies type checker
+
+    async def _apply_text_guards(
+        self,
+        prompt: str,
+        text: str,
+        run: CallOptions | None,
+    ) -> str:
+        """Apply output guards to text completion results.
+
+        Similar to _apply_guards but for plain text (not structured output).
+        Guards validate the text string directly.
+        """
+        config = self._get_call_options(run)
+        guards = config.output_guards
+        if not guards:
+            return text
+
+        while True:
+            original_text = text
+            for guard in guards:
+                text = await self._apply_single_text_guard(prompt, text, guard, run)
+                # If text changed (retry occurred), restart validation from first guard
+                if text != original_text:
+                    break
+            else:
+                # All guards passed without changes
+                return text
+            # Text changed, loop continues to re-validate all guards
+
+    async def _apply_single_text_guard(
+        self,
+        prompt: str,
+        text: str,
+        guard: OutputGuard,
+        run: CallOptions | None,
+    ) -> str:
+        """Apply one guard to text with retries."""
+        for attempt in range(1 + guard.max_retries):
+            try:
+                error = guard.validator(text)
+            except Exception as e:
+                error = f"Validator raised {type(e).__name__}: {e}"
+
+            if error is None:
+                return text  # Passed
+
+            if attempt < guard.max_retries:
+                self._log_guard_retry(guard, attempt + 1, error)
+                retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error)
+                text = await self._complete_text_attempt(retry_prompt, run, phase="guard_retry")
+            else:
+                raise OutputGuardError(guard.name, error, attempt + 1)
+
+        return text  # Unreachable, satisfies type checker
 
     def _build_guard_retry_prompt(
         self,

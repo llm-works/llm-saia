@@ -11,7 +11,7 @@ from llm_saia.core.errors import (
     ToolExecutionError,
     TruncatedResponseError,
 )
-from llm_saia.core.guard import OutputGuard, OutputGuardError
+from llm_saia.core.guard import Guarded, OutputGuard, OutputGuardError
 from llm_saia.core.logger import Logger, NullLogger
 from llm_saia.core.trace import CallbackTracer, Tracer, TracerFactory
 from llm_saia.core.types import (
@@ -46,6 +46,7 @@ __all__ = [
     "ToolExecutionError",
     "TruncatedResponseError",
     # Guards
+    "Guarded",
     "OutputGuard",
     # Logger
     "NullLogger",

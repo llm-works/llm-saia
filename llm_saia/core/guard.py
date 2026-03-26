@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from llm_saia.core.errors import Error
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["OutputGuard", "OutputGuardError"]
+__all__ = ["Guarded", "OutputGuard", "OutputGuardError"]
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,42 @@ class OutputGuard:
             raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
 
 
-class OutputGuardError(Exception):
+class Guarded:
+    """Marker for field-level guards in Annotated types.
+
+    Use with typing.Annotated to specify guards for individual dataclass fields.
+    These guards validate only the annotated field, not the entire result.
+
+    Example:
+        >>> from typing import Annotated
+        >>> from dataclasses import dataclass
+        >>> from llm_saia import Guarded
+        >>> from llm_saia.guards import english_only, max_length
+        >>>
+        >>> @dataclass
+        ... class Article:
+        ...     title: Annotated[str, Guarded(english_only(), max_length(100))]
+        ...     body: Annotated[str, Guarded(english_only())]
+        ...     metadata: str  # Not guarded
+    """
+
+    __slots__ = ("guards",)
+
+    def __init__(self, *guards: OutputGuard) -> None:
+        """Initialize with one or more guards.
+
+        Args:
+            *guards: OutputGuard instances to apply to the annotated field.
+
+        Raises:
+            ValueError: If no guards are provided.
+        """
+        if not guards:
+            raise ValueError("Guarded requires at least one guard")
+        self.guards: tuple[OutputGuard, ...] = guards
+
+
+class OutputGuardError(Error):
     """Raised when output fails guard validation after all retries exhausted."""
 
     def __init__(self, guard_name: str | None, error: str, attempts: int) -> None:
