@@ -39,8 +39,8 @@ class SequencedMockBackend(MockBackend):
         """Number of chat calls made to this backend."""
         return self._sequence_index
 
-    def queue_response(self, content: str) -> None:
-        """Queue a response (valid JSON expected)."""
+    def queue_json_response(self, content: str) -> None:
+        """Queue a raw JSON string response."""
         self._response_sequence.append(content)
 
     async def chat(
@@ -116,7 +116,7 @@ class TestGuardExecution:
     async def test_guard_passes_on_valid_output(self) -> None:
         """Guard that returns None allows output through."""
         backend = SequencedMockBackend()
-        backend.queue_response(json.dumps({"text": "Hello", "score": 10}))
+        backend.queue_json_response(json.dumps({"text": "Hello", "score": 10}))
 
         guard = OutputGuard(
             validator=lambda x: None,  # Always valid
@@ -135,9 +135,9 @@ class TestGuardExecution:
         """Guard triggers retry when validator returns error string."""
         backend = SequencedMockBackend()
         # First response fails validation
-        backend.queue_response(json.dumps({"text": "Bad 日本語", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Bad 日本語", "score": 1}))
         # Second response passes
-        backend.queue_response(json.dumps({"text": "Good English", "score": 2}))
+        backend.queue_json_response(json.dumps({"text": "Good English", "score": 2}))
 
         def reject_non_ascii(result: Any) -> str | None:
             text = str(result)
@@ -163,8 +163,8 @@ class TestGuardExecution:
         """OutputGuardError raised when all retries exhausted."""
         backend = SequencedMockBackend()
         # All responses fail validation
-        backend.queue_response(json.dumps({"text": "Bad 1", "score": 1}))
-        backend.queue_response(json.dumps({"text": "Bad 2", "score": 2}))
+        backend.queue_json_response(json.dumps({"text": "Bad 1", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Bad 2", "score": 2}))
 
         guard = OutputGuard(
             validator=lambda x: "Always fails",
@@ -187,15 +187,15 @@ class TestGuardExecution:
     async def test_multiple_guards_applied_in_order(self) -> None:
         """Multiple guards are applied sequentially."""
         backend = SequencedMockBackend()
-        backend.queue_response(json.dumps({"text": "Short", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Short", "score": 1}))
 
         call_order: list[str] = []
 
-        def guard1_validator(x: str) -> str | None:
+        def guard1_validator(x: Any) -> str | None:
             call_order.append("guard1")
             return None
 
-        def guard2_validator(x: str) -> str | None:
+        def guard2_validator(x: Any) -> str | None:
             call_order.append("guard2")
             return None
 
@@ -211,8 +211,8 @@ class TestGuardExecution:
     async def test_retry_prompt_includes_feedback(self) -> None:
         """Retry prompt includes error and instruction."""
         backend = SequencedMockBackend()
-        backend.queue_response(json.dumps({"text": "Too long text here", "score": 1}))
-        backend.queue_response(json.dumps({"text": "Short", "score": 2}))
+        backend.queue_json_response(json.dumps({"text": "Too long text here", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Short", "score": 2}))
 
         # Validator checks if "Too long" appears in the string representation
         guard = OutputGuard(
@@ -437,11 +437,11 @@ class TestGuardWithParseRetries:
         """Guards are applied after successful parsing (including parse retries)."""
         backend = SequencedMockBackend()
         # First: invalid JSON (triggers parse retry)
-        backend.queue_response("not json")
+        backend.queue_json_response("not json")
         # Second: valid JSON but fails guard
-        backend.queue_response(json.dumps({"text": "Bad 日本語", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Bad 日本語", "score": 1}))
         # Third: valid JSON and passes guard
-        backend.queue_response(json.dumps({"text": "Good", "score": 2}))
+        backend.queue_json_response(json.dumps({"text": "Good", "score": 2}))
 
         guard = OutputGuard(
             validator=lambda x: "Non-ASCII" if any(ord(c) > 127 for c in str(x)) else None,
