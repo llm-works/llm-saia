@@ -583,11 +583,20 @@ class Verb(Configurable):
         guard: OutputGuard,
         run: CallOptions | None,
     ) -> T:
-        """Apply one guard with retries."""
+        """Apply one guard with retries.
+
+        Note: Guard retries call _complete_structured_attempt directly, bypassing
+        parse_retries. This is intentional - guards run after parsing succeeds,
+        so JSON structure is expected to be stable on retry.
+        """
         for attempt in range(1 + guard.max_retries):
             # Validate - convert to string for text-based validators
             output = str(result) if not isinstance(result, str) else result
-            error = guard.validator(output)
+            try:
+                error = guard.validator(output)
+            except Exception as e:
+                # Validator raised instead of returning str - treat as validation failure
+                error = f"Validator raised {type(e).__name__}: {e}"
 
             if error is None:
                 return result  # Passed

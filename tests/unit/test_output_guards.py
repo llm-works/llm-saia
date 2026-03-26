@@ -16,6 +16,7 @@ from llm_saia.guards import (
     ascii_only,
     english_only,
     max_length,
+    no_emoji,
     no_markdown,
     no_preamble,
 )
@@ -291,6 +292,132 @@ class TestPrebuiltGuards:
         assert guard.validator("Café") is not None  # é
         assert guard.validator("Hello 👋") is not None  # emoji
         assert guard.validator("日本語") is not None  # Japanese
+
+
+class TestNoEmojiGuard:
+    """Tests for no_emoji guard."""
+
+    def test_no_emoji_passes_plain_text(self) -> None:
+        """no_emoji passes plain ASCII text."""
+        guard = no_emoji()
+        assert guard.validator("Hello, World!") is None
+
+    def test_no_emoji_passes_unicode_letters(self) -> None:
+        """no_emoji allows non-ASCII letters (accents, CJK, etc.)."""
+        guard = no_emoji()
+        assert guard.validator("Café résumé") is None
+        assert guard.validator("日本語テキスト") is None
+        assert guard.validator("Привет мир") is None
+        assert guard.validator("مرحبا بالعالم") is None
+
+    def test_no_emoji_rejects_common_emoji(self) -> None:
+        """no_emoji rejects common emoji."""
+        guard = no_emoji()
+
+        # Emoticons
+        assert guard.validator("Hello 😀") is not None
+        assert guard.validator("Goodbye 👋") is not None
+
+        # Symbols
+        assert guard.validator("Check ✅") is not None
+        assert guard.validator("Star ⭐") is not None
+        assert guard.validator("Heart ❤") is not None
+
+    def test_no_emoji_rejects_zwj_sequences(self) -> None:
+        """no_emoji rejects ZWJ emoji sequences."""
+        guard = no_emoji()
+
+        # Family emoji (multiple code points joined with ZWJ)
+        family = "👨‍👩‍👧‍👦"
+        error = guard.validator(f"Family: {family}")
+        assert error is not None
+
+    def test_no_emoji_error_shows_character(self) -> None:
+        """no_emoji error message includes the emoji."""
+        guard = no_emoji()
+        error = guard.validator("Hello 🎉 party")
+        assert error is not None
+        assert "🎉" in error
+        assert "U+1F389" in error
+
+
+class TestUnicodeHandling:
+    """Tests for Unicode handling across all guards."""
+
+    def test_english_only_rejects_emoji(self) -> None:
+        """english_only rejects emoji (not Latin script)."""
+        guard = english_only()
+        error = guard.validator("Hello 👋 World")
+        assert error is not None
+        assert "U+1F44B" in error
+
+    def test_english_only_allows_smart_quotes(self) -> None:
+        """english_only allows common typographic punctuation."""
+        guard = english_only()
+        # Smart quotes, em-dash, ellipsis
+        assert guard.validator('He said "hello" — well…') is None
+
+    def test_ascii_only_rejects_emoji(self) -> None:
+        """ascii_only rejects emoji."""
+        guard = ascii_only()
+        error = guard.validator("Hello 👋")
+        assert error is not None
+
+    def test_ascii_only_rejects_accents(self) -> None:
+        """ascii_only rejects accented characters."""
+        guard = ascii_only()
+        error = guard.validator("Café")
+        assert error is not None
+        assert "é" in error
+
+    def test_max_length_counts_code_points(self) -> None:
+        """max_length counts Unicode code points, not bytes."""
+        guard = max_length(5)
+
+        # 5 single-codepoint emoji = 5 chars
+        assert guard.validator("👋👋👋👋👋") is None
+
+        # 6 emoji = 6 chars, exceeds limit
+        error = guard.validator("👋👋👋👋👋👋")
+        assert error is not None
+        assert "6 chars" in error
+
+    def test_max_length_zwj_counts_all_codepoints(self) -> None:
+        """max_length counts all code points in ZWJ sequences."""
+        guard = max_length(10)
+
+        # Family emoji = 7 code points (4 people + 3 ZWJ)
+        family = "👨‍👩‍👧‍👦"
+        assert len(family) == 7
+        assert guard.validator(family) is None
+
+        # With limit of 5, family emoji exceeds
+        guard_strict = max_length(5)
+        error = guard_strict.validator(family)
+        assert error is not None
+
+    def test_no_markdown_works_with_unicode(self) -> None:
+        """no_markdown works correctly with Unicode text."""
+        guard = no_markdown()
+
+        # Plain Unicode text passes
+        assert guard.validator("日本語で書かれたテキスト") is None
+        assert guard.validator("Ümläuts and äccénts") is None
+
+        # Markdown in Unicode text still detected
+        assert guard.validator("# 日本語ヘッダー") is not None
+        assert guard.validator("**太字テキスト**") is not None
+
+    def test_no_preamble_works_with_unicode(self) -> None:
+        """no_preamble works correctly with Unicode text."""
+        guard = no_preamble()
+
+        # Unicode text without preamble passes
+        assert guard.validator("日本語で始まる文章です") is None
+        assert guard.validator("Réponse directe") is None
+
+        # English preamble still detected
+        assert guard.validator("Sure! 日本語で答えます") is not None
 
 
 class TestGuardWithParseRetries:
