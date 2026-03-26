@@ -208,6 +208,35 @@ class TestGuardExecution:
 
         assert call_order == ["guard1", "guard2"]
 
+    async def test_with_guards_adds_multiple_at_once(self) -> None:
+        """with_guards() adds multiple guards in a single call."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"text": "Short", "score": 1}))
+
+        call_order: list[str] = []
+
+        def guard1_validator(x: Any) -> str | None:
+            call_order.append("guard1")
+            return None
+
+        def guard2_validator(x: Any) -> str | None:
+            call_order.append("guard2")
+            return None
+
+        def guard3_validator(x: Any) -> str | None:
+            call_order.append("guard3")
+            return None
+
+        guard1 = OutputGuard(validator=guard1_validator, retry_instruction="G1")
+        guard2 = OutputGuard(validator=guard2_validator, retry_instruction="G2")
+        guard3 = OutputGuard(validator=guard3_validator, retry_instruction="G3")
+
+        config = make_config(backend)
+        extract = Extract(config).with_guards(guard1, guard2, guard3)
+        await extract("test", SimpleResult)
+
+        assert call_order == ["guard1", "guard2", "guard3"]
+
     async def test_retry_prompt_includes_feedback(self) -> None:
         """Retry prompt includes error and instruction."""
         backend = SequencedMockBackend()

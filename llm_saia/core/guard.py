@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from llm_saia.core.errors import Error
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -49,7 +51,7 @@ class OutputGuard:
             raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
 
 
-class OutputGuardError(Exception):
+class OutputGuardError(Error):
     """Raised when output fails guard validation after all retries exhausted."""
 
     def __init__(self, guard_name: str | None, error: str, attempts: int) -> None:

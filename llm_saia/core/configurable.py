@@ -130,3 +130,25 @@ class Configurable(ABC):
         base_call = self._config.call or DEFAULT_CALL
         new_guards = base_call.output_guards + (guard,)
         return self._with_call(output_guards=new_guards)
+
+    def with_guards(self, *guards: OutputGuard) -> Self:
+        """Add multiple output guards at once.
+
+        Convenience method equivalent to chaining multiple with_guard() calls.
+
+        Example:
+            >>> from llm_saia.guards import english_only, max_length, no_preamble
+            >>> result = await (
+            ...     saia
+            ...     .with_guards(english_only(), max_length(500), no_preamble())
+            ...     .extract(text, Summary)
+            ... )
+
+        Args:
+            *guards: OutputGuard instances to add.
+        """
+        from llm_saia.core.config import DEFAULT_CALL
+
+        base_call = self._config.call or DEFAULT_CALL
+        new_guards = base_call.output_guards + tuple(guards)
+        return self._with_call(output_guards=new_guards)
