@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
     from llm_saia.core.config import CallOptions, Config
+    from llm_saia.core.guard import OutputGuard
 
 __all__ = ["Configurable"]
 
@@ -97,3 +98,35 @@ class Configurable(ABC):
             n: Number of retry attempts. 0 = no retry (default), 1 = one retry, etc.
         """
         return self._with_call(parse_retries=n)
+
+    def with_guard(self, guard: OutputGuard) -> Self:
+        """Add an output guard that validates structured output and retries if invalid.
+
+        Guards are applied after successful structured output completion (including
+        parse retries). If validation fails, the request is retried with the guard's
+        retry_instruction appended to the prompt.
+
+        Note: Guards only apply to structured output verbs (e.g., Extract). They are
+        silently ignored for text-returning verbs. This is by design - guards validate
+        parsed dataclass results, not raw text responses.
+
+        Multiple guards can be chained and are applied in order. If a guard retry
+        produces a different result, all guards are re-validated from the beginning.
+
+        Example:
+            >>> from llm_saia.guards import english_only, max_length
+            >>> result = await (
+            ...     saia
+            ...     .with_guard(english_only())
+            ...     .with_guard(max_length(500))
+            ...     .extract(text, Summary)  # Structured output verb
+            ... )
+
+        Args:
+            guard: OutputGuard with validator and retry instruction.
+        """
+        from llm_saia.core.config import DEFAULT_CALL
+
+        base_call = self._config.call or DEFAULT_CALL
+        new_guards = base_call.output_guards + (guard,)
+        return self._with_call(output_guards=new_guards)

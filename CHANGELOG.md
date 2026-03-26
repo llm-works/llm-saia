@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Schema support for `list[MyDataclass]` (recursive parsing)
 - Parse retry with feedback - retry on `StructuredOutputError` with LLM feedback (opt-in)
 - `with_parse_retries(n)` fluent API for enabling retry attempts (default: 0 = disabled)
+- Output guards - validators with automatic retry for structured output
+- `with_guard()` fluent API for adding output guards (chainable)
+- Pre-built guards: `english_only()`, `max_length()`, `no_emoji()`, `no_markdown()`, `no_preamble()`, `ascii_only()`
+- `OutputGuard` dataclass for custom validators with retry instructions
+- `OutputGuardError` raised when all guard retries exhausted
 
 ### Fixed
 - Schema generation now raises clear `TypeError` for recursive dataclasses

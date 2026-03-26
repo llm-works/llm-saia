@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from llm_saia.core.backend import Backend, ToolDef
+    from llm_saia.core.guard import OutputGuard
     from llm_saia.core.logger import Logger
     from llm_saia.core.trace import Tracer
 
@@ -46,6 +47,9 @@ class CallOptions:
 
     # Parse retry (structured output)
     parse_retries: int = 0  # Retry attempts on StructuredOutputError (0 = no retry)
+
+    # Output guards (validators with retry)
+    output_guards: tuple[OutputGuard, ...] = field(default_factory=tuple)
 
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
