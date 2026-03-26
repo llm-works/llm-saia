@@ -469,6 +469,26 @@ class Verb(Configurable):
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         return await self._apply_text_guards(prompt, response.content, run)
 
+    async def _complete_text_attempt(
+        self, prompt: str, run: CallOptions | None = None, phase: str = "direct"
+    ) -> str:
+        """Single attempt at text completion without applying guards.
+
+        Used by guard retry logic to avoid recursion.
+        """
+        if self._has_tools():
+            content, _ = await self._loop(prompt, run=run)
+            return content
+        trace_id = self._generate_id()
+        response = await self._backend.chat(
+            [Message(role="user", content=prompt)],
+            system=self._call.system,
+            temperature=self._resolve_temperature(run),
+        )
+        response.call_id = self._generate_id()
+        self._write_base_trace(response, trace_id=trace_id, phase=phase)
+        return response.content
+
     async def _complete_structured(
         self, prompt: str, schema: type[T], run: CallOptions | None = None
     ) -> T:
@@ -790,16 +810,7 @@ class Verb(Configurable):
             if attempt < guard.max_retries:
                 self._log_guard_retry(guard, attempt + 1, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error)
-                # Retry text completion
-                trace_id = self._generate_id()
-                response = await self._backend.chat(
-                    [Message(role="user", content=retry_prompt)],
-                    system=self._call.system,
-                    temperature=self._resolve_temperature(run),
-                )
-                response.call_id = self._generate_id()
-                self._write_base_trace(response, trace_id=trace_id, phase="guard_retry")
-                text = response.content
+                text = await self._complete_text_attempt(retry_prompt, run, phase="guard_retry")
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
 

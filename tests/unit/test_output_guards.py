@@ -259,6 +259,15 @@ class TestGuardExecution:
 
         assert call_order == ["guard1", "guard2", "guard3"]
 
+    def test_with_guards_requires_at_least_one_guard(self) -> None:
+        """with_guards() raises ValueError when no guards provided."""
+        backend = SequencedMockBackend()
+        config = make_config(backend)
+        extract = Extract(config)
+
+        with pytest.raises(ValueError, match="with_guards requires at least one guard"):
+            extract.with_guards()
+
     async def test_retry_prompt_includes_feedback(self) -> None:
         """Retry prompt includes error and instruction."""
         backend = SequencedMockBackend()

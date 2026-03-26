@@ -146,7 +146,13 @@ class Configurable(ABC):
 
         Args:
             *guards: OutputGuard instances to add.
+
+        Raises:
+            ValueError: If no guards are provided.
         """
+        if not guards:
+            raise ValueError("with_guards requires at least one guard")
+
         from llm_saia.core.config import DEFAULT_CALL
 
         base_call = self._config.call or DEFAULT_CALL
