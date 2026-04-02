@@ -26,11 +26,9 @@ import httpx
 from llm_saia.core.backend import (
     AgentResponse,
     Backend,
-    Message,
-    Role,
-    ToolCall,
     ToolDef,
 )
+from llm_saia.core.conversation import Message, Role, ToolCall
 from llm_saia.core.logger import Logger as Logger
 
 # ---------------------------------------------------------------------------
