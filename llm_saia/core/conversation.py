@@ -19,6 +19,7 @@ __all__ = [
     "Message",
     "MessageAppendable",
     "Role",
+    "ToolCall",
 ]
 
 

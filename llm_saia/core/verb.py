@@ -326,7 +326,7 @@ class Verb(Configurable):
         """
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
-        conv.append(Message(role="user", content=prompt))
+        conv.append(Message(role=Role.USER, content=prompt))
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
@@ -380,7 +380,7 @@ class Verb(Configurable):
     def _to_message(self, response: AgentResponse) -> Message:
         """Convert AgentResponse to Message."""
         return Message(
-            role="assistant",
+            role=Role.ASSISTANT,
             content=response.content,
             tool_calls=response.tool_calls if response.tool_calls else None,
         )
@@ -450,7 +450,7 @@ class Verb(Configurable):
             structured_prompt = f"{prompt}\n\nBased on the following information:\n{content}"
             json_schema = dataclass_to_json_schema(schema)
             response = await self._backend.chat(
-                [Message(role="user", content=structured_prompt)],
+                [Message(role=Role.USER, content=structured_prompt)],
                 system=self._call.system,
                 response_schema=json_schema,
                 temperature=temperature,
@@ -487,7 +487,7 @@ class Verb(Configurable):
             return await self._apply_text_guards(prompt, content, run)
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
+            [Message(role=Role.USER, content=prompt)],
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
@@ -507,7 +507,7 @@ class Verb(Configurable):
             return content
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
+            [Message(role=Role.USER, content=prompt)],
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
@@ -566,7 +566,7 @@ class Verb(Configurable):
         config = self._get_call_options(run)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
+            [Message(role=Role.USER, content=prompt)],
             system=self._call.system,
             response_schema=json_schema,
             max_tokens=max_tokens,

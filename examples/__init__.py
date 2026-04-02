@@ -27,6 +27,7 @@ from llm_saia.core.backend import (
     AgentResponse,
     Backend,
     Message,
+    Role,
     ToolCall,
     ToolDef,
 )
@@ -243,9 +244,9 @@ class OpenAIBackend(Backend):
 
     def _convert_message(self, msg: Message) -> dict[str, Any]:
         """Convert a single SAIA message to OpenAI format."""
-        if msg.role == "tool_result":
+        if msg.role == Role.TOOL:
             if not msg.tool_call_id:
-                raise ValueError("tool_call_id is required for tool_result messages")
+                raise ValueError("tool_call_id is required for tool messages")
             return {
                 "role": "tool",
                 "tool_call_id": msg.tool_call_id,

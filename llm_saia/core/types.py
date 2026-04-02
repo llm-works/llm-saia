@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from llm_saia.core.conversation import Message
+from typing import Any
 
 # Re-export backend types for convenience
 from llm_saia.core.backend import AgentResponse, ToolDef
