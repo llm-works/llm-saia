@@ -9,8 +9,9 @@ from typing import Annotated, Any
 import pytest
 
 from llm_saia import Guarded, OutputGuard, OutputGuardError
-from llm_saia.core.backend import AgentResponse, Message
+from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import Config
+from llm_saia.core.conversation import Message
 from llm_saia.core.types import ToolDef
 from llm_saia.guards import (
     ascii_only,

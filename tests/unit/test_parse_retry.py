@@ -8,8 +8,9 @@ from typing import Any
 
 import pytest
 
-from llm_saia.core.backend import AgentResponse, Message
+from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import CallOptions, Config
+from llm_saia.core.conversation import Message
 from llm_saia.core.errors import StructuredOutputError
 from llm_saia.core.types import ToolDef
 from llm_saia.verbs import Extract

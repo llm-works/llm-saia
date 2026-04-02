@@ -18,9 +18,17 @@ from typing import (
     get_type_hints,
 )
 
-from llm_saia.core.backend import AgentResponse, Message, ToolCall
+from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
 from llm_saia.core.configurable import Configurable
+from llm_saia.core.conversation import (
+    ConversationLike,
+    ListConversation,
+    Message,
+    MessageAppendable,
+    Role,
+    ToolCall,
+)
 from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
 from llm_saia.core.guard import Guarded, OutputGuard, OutputGuardError
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -302,10 +310,23 @@ class Verb(Configurable):
         run: CallOptions | None = None,
         schema: type[T] | None = None,
         trace_id: str = "",
+        conversation: ConversationLike | None = None,
     ) -> tuple[str, T | None]:
-        """Execute prompt with tool-calling loop."""
+        """Execute prompt with tool-calling loop.
+
+        Args:
+            prompt: The user prompt to process.
+            run: Optional call options override.
+            schema: Optional schema for structured output parsing.
+            trace_id: Optional trace ID for correlation.
+            conversation: Optional conversation object for message management.
+                If provided, messages are appended to it and read via as_messages().
+                Enables external systems (e.g., kelt) to handle compaction and persistence.
+                If None, uses a simple internal list (original behavior).
+        """
         config = self._get_call_options(run)
-        messages: list[Message] = [Message(role="user", content=prompt)]
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
@@ -314,16 +335,16 @@ class Verb(Configurable):
         temperature = self._resolve_temperature(run)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(messages, max_tokens, temperature)
+            response = await self._chat(conv.as_messages(), max_tokens, temperature)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
-            messages.append(self._to_message(response))
+            conv.append(self._to_message(response))
             self._log_response(response, iteration, total_tokens)
             self._check_tool_support(response)
             self._write_base_trace(response, trace_id=trace_id, iteration=iteration, phase="loop")
 
             if response.tool_calls:
-                await self._execute_tools(response.tool_calls, messages)
+                await self._execute_tools(response.tool_calls, conv)
                 iteration += 1
             else:
                 self._log_loop_complete(iteration, start_time, total_tokens, response.content)
@@ -359,13 +380,18 @@ class Verb(Configurable):
     def _to_message(self, response: AgentResponse) -> Message:
         """Convert AgentResponse to Message."""
         return Message(
-            role="assistant",
+            role=Role.ASSISTANT,
             content=response.content,
             tool_calls=response.tool_calls if response.tool_calls else None,
         )
 
-    async def _execute_tools(self, tool_calls: list[ToolCall], messages: list[Message]) -> None:
-        """Execute tool calls and append results."""
+    async def _execute_tools(self, tool_calls: list[ToolCall], messages: MessageAppendable) -> None:
+        """Execute tool calls and append results.
+
+        Args:
+            tool_calls: Tool calls to execute.
+            messages: Object supporting append() - either list[Message] or ConversationLike.
+        """
         if not self._config.executor:
             if self._lg:
                 self._lg.warning(
@@ -375,7 +401,7 @@ class Verb(Configurable):
             return
         for tc in tool_calls:
             result = await self._execute_single_tool(tc)
-            messages.append(Message(role="tool_result", content=str(result), tool_call_id=tc.id))
+            messages.append(Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id))
 
     async def _execute_single_tool(self, tc: ToolCall) -> str:
         """Execute a single tool call with logging."""
@@ -424,7 +450,7 @@ class Verb(Configurable):
             structured_prompt = f"{prompt}\n\nBased on the following information:\n{content}"
             json_schema = dataclass_to_json_schema(schema)
             response = await self._backend.chat(
-                [Message(role="user", content=structured_prompt)],
+                [Message(role=Role.USER, content=structured_prompt)],
                 system=self._call.system,
                 response_schema=json_schema,
                 temperature=temperature,
@@ -461,7 +487,7 @@ class Verb(Configurable):
             return await self._apply_text_guards(prompt, content, run)
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
+            [Message(role=Role.USER, content=prompt)],
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
@@ -481,7 +507,7 @@ class Verb(Configurable):
             return content
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
+            [Message(role=Role.USER, content=prompt)],
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
@@ -540,7 +566,7 @@ class Verb(Configurable):
         config = self._get_call_options(run)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
+            [Message(role=Role.USER, content=prompt)],
             system=self._call.system,
             response_schema=json_schema,
             max_tokens=max_tokens,

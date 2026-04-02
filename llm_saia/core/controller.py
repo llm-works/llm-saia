@@ -19,8 +19,9 @@ from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 from llm_saia.core.types import DecisionReason
 
 if TYPE_CHECKING:
-    from llm_saia.core.backend import AgentResponse, Message, ToolCall
+    from llm_saia.core.backend import AgentResponse
     from llm_saia.core.config import Config, TerminalConfig
+    from llm_saia.core.conversation import Message, ToolCall
 
 
 @dataclass

@@ -9,8 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from llm_saia.core.backend import AgentResponse, ToolCall, ToolDef
+from llm_saia.core.backend import AgentResponse, ToolDef
 from llm_saia.core.controller import Action, ActionType, Observation
+from llm_saia.core.conversation import ToolCall
 from llm_saia.core.trace import Tracer, TracerFactory, build_base_trace, build_trace
 from llm_saia.core.types import ClassifyResult, DecisionReason
 from llm_saia.core.verb import Verb
@@ -37,7 +38,7 @@ class TestCallId:
         """_chat() attaches a call_id to the response."""
         saia = make_saia(mock_backend)
         verb = saia.complete
-        from llm_saia.core.backend import Message
+        from llm_saia.core.conversation import Message
 
         response = await verb._chat([Message(role="user", content="hi")], None)
         assert response.call_id

@@ -6,7 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from llm_saia.core.backend import AgentResponse, Message, ToolCall
+from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import CallOptions
 from llm_saia.core.controller import (
     Action,
@@ -16,6 +16,7 @@ from llm_saia.core.controller import (
     LoopController,
     Observation,
 )
+from llm_saia.core.conversation import Message, Role, ToolCall
 from llm_saia.core.trace import Tracer, build_trace
 from llm_saia.core.types import DecisionReason, LoopScore, TaskResult
 from llm_saia.core.verb import Verb
@@ -118,7 +119,7 @@ class Complete(Verb):
             tracer=tracer,
             on_iteration=on_iteration,
             call_options=call_options,
-            messages=[Message(role="user", content=task)],
+            messages=[Message(role=Role.USER, content=task)],
             tool_names=[t.name for t in (self._config.tools or [])],
         )
         self._log_loop_start(call_options)
@@ -250,13 +251,13 @@ class Complete(Verb):
                 self._add_response_if_needed(messages, response)
                 self._ack_response_tools(response, messages)
                 if action.message:
-                    messages.append(Message(role="user", content=action.message))
+                    messages.append(Message(role=Role.USER, content=action.message))
                 return None
 
             case ActionType.SKIP:
                 self._add_response_if_needed(messages, response)
                 self._ack_response_tools(response, messages)
-                messages.append(Message(role="user", content="Continue."))
+                messages.append(Message(role=Role.USER, content="Continue."))
                 return None
 
             case ActionType.COMPLETE:
@@ -293,10 +294,10 @@ class Complete(Verb):
         execute_ids: list[str] | None,
         messages: list[Message],
     ) -> None:
-        """Add synthetic tool_results for tool calls that won't be executed.
+        """Add synthetic tool results for tool calls that won't be executed.
 
         LLM APIs require every tool_call in an assistant message to have a
-        matching tool_result. When we skip executing a tool (e.g., the terminal
+        matching tool result. When we skip executing a tool (e.g., the terminal
         tool during confirmation), we still need to provide a result.
         """
         if execute_ids is None:
@@ -306,7 +307,7 @@ class Complete(Verb):
             if call.id in skip_ids:
                 messages.append(
                     Message(
-                        role="tool_result",
+                        role=Role.TOOL,
                         content="Acknowledged. Awaiting confirmation.",
                         tool_call_id=call.id,
                     )
@@ -326,7 +327,7 @@ class Complete(Verb):
         if messages:
             last = messages[-1]
             if (
-                last.role == "assistant"
+                last.role == Role.ASSISTANT
                 and last.content == response.content
                 and last.tool_calls == (response.tool_calls or None)
             ):

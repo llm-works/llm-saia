@@ -1,8 +1,9 @@
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
 from llm_saia.builder import SAIABuilder
-from llm_saia.core.backend import AgentResponse, Backend, Message, ToolCall, ToolDef
+from llm_saia.core.backend import AgentResponse, Backend, ToolDef
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
+from llm_saia.core.conversation import Message, Role, ToolCall
 from llm_saia.core.errors import (
     BackendError,
     ConfigurationError,
@@ -17,10 +18,12 @@ from llm_saia.core.trace import CallbackTracer, Tracer, TracerFactory
 from llm_saia.core.types import (
     ChooseResult,
     ClassifyResult,
+    ConversationLike,
     Critique,
     DecisionReason,
     Evidence,
     FindResult,
+    ListConversation,
     LoopScore,
     TaskResult,
     VerbResult,
@@ -65,9 +68,13 @@ __all__ = [
     "LoopScore",
     "Message",
     "CallOptions",
+    "Role",
     "TaskResult",
     "ToolCall",
     "ToolDef",
+    # Conversation protocol
+    "ConversationLike",
+    "ListConversation",
     # Terminal
     "TerminalConfig",
     # Tracing
