@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **BREAKING**: Message role for tool results changed from `"tool_result"` to `"tool"` (aligns with OpenAI convention; tool calls remain in assistant messages via `tool_calls` field)
-- Moved `Message`, `ToolCall` from `backend.py` to new `conversation.py` module (re-exported for compatibility)
+- Moved `Message`, `ToolCall` from `backend.py` to new `conversation.py` module
+- `llm_saia.core` now re-exports `AgentResponse`, `Message`, `ToolCall`, `ToolDef` (stable public API for downstream consumers)
 - Schema support for `Literal[...]` types (maps to JSON enum)
 - Schema support for `Enum` types (maps to JSON enum)
 - Schema support for nested dataclasses (recursive conversion)
