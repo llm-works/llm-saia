@@ -8,7 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ConversationLike` protocol for pluggable conversation management (compaction, persistence)
+- `ListConversation` default implementation of `ConversationLike`
+- `Role` enum for message roles (`USER`, `ASSISTANT`, `SYSTEM`, `TOOL`)
+- `core/conversation.py` module for conversation/message types
+- `_loop()` now accepts optional `conversation` parameter for external conversation management
 - `find` verb - filter items matching criteria, returns `FindResult(indices, reason)`
+
+### Changed
+- **BREAKING**: Message role for tool results changed from `"tool_result"` to `"tool"` (aligns with OpenAI convention; tool calls remain in assistant messages via `tool_calls` field)
+- Moved `Message`, `ToolCall` from `backend.py` to new `conversation.py` module (re-exported for compatibility)
 - Schema support for `Literal[...]` types (maps to JSON enum)
 - Schema support for `Enum` types (maps to JSON enum)
 - Schema support for nested dataclasses (recursive conversion)

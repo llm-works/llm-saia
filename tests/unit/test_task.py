@@ -9,6 +9,7 @@ from llm_saia.core.types import (
     AgentResponse,
     ClassifyResult,
     DecisionReason,
+    Role,
     ToolCall,
     ToolDef,
 )
@@ -202,7 +203,7 @@ class TestTask:
         result = await saia.complete(task="Try a failing tool")
 
         assert result.completed is True
-        tool_results = [m for m in result.history if m.role == "tool_result"]
+        tool_results = [m for m in result.history if m.role == Role.TOOL]
         assert len(tool_results) == 1
         assert "Error" in tool_results[0].content
 
@@ -625,7 +626,7 @@ class TestTask:
                 matching = [
                     m
                     for m in result.history[idx + 1 :]
-                    if m.role == "tool_result" and m.tool_call_id == tc.id
+                    if m.role == Role.TOOL and m.tool_call_id == tc.id
                 ]
                 assert matching, f"No tool_result for tool_call {tc.id} ({tc.name})"
 

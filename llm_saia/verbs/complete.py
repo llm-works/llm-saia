@@ -6,7 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from llm_saia.core.backend import AgentResponse, Message, ToolCall
+from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import CallOptions
 from llm_saia.core.controller import (
     Action,
@@ -16,6 +16,7 @@ from llm_saia.core.controller import (
     LoopController,
     Observation,
 )
+from llm_saia.core.conversation import Message, Role, ToolCall
 from llm_saia.core.trace import Tracer, build_trace
 from llm_saia.core.types import DecisionReason, LoopScore, TaskResult
 from llm_saia.core.verb import Verb
@@ -306,7 +307,7 @@ class Complete(Verb):
             if call.id in skip_ids:
                 messages.append(
                     Message(
-                        role="tool_result",
+                        role=Role.TOOL,
                         content="Acknowledged. Awaiting confirmation.",
                         tool_call_id=call.id,
                     )

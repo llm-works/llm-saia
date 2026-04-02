@@ -34,10 +34,19 @@ output parsing, state detection.
 ```python
 @dataclass
 class Message:
-    role: str           # "user", "assistant", "tool_result"
+    role: str           # "user", "assistant", "system", "tool"
     content: str
     tool_calls: list[ToolCall] | None = None
-    tool_call_id: str | None = None  # For tool_result messages
+    tool_call_id: str | None = None  # For tool messages
+```
+
+Use the `Role` enum for standard roles:
+
+```python
+from llm_saia import Role
+
+msg = Message(role=Role.USER, content="Hello")
+msg = Message(role=Role.TOOL, content="result", tool_call_id="call_123")
 ```
 
 ### ToolDef
@@ -156,7 +165,7 @@ class OpenAIBackend(Backend):
         )
 
     def _convert_message(self, msg: Message) -> dict:
-        if msg.role == "tool_result":
+        if msg.role == "tool":  # Tool result message
             return {"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content}
         if msg.role == "assistant" and msg.tool_calls:
             return {
@@ -240,7 +249,7 @@ SAIA will execute the tools and continue the conversation.
 Don't add these to your backend - SAIA handles them:
 
 - **Prompt construction**: SAIA builds the prompts, passes them via `messages`
-- **Tool execution**: SAIA calls your executor, passes results back as `tool_result` messages
+- **Tool execution**: SAIA calls your executor, passes results back as `tool` messages
 - **State detection**: SAIA detects loops, repetition, degenerate states
 - **Structured output parsing**: SAIA parses JSON and validates against schemas
 - **Retry logic**: Handle at the transport layer or let errors propagate

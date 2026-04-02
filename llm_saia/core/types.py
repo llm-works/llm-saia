@@ -4,13 +4,55 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from llm_saia.core.conversation import Message
 
 # Re-export backend types for convenience
-from llm_saia.core.backend import AgentResponse, Message, ToolCall, ToolDef
+from llm_saia.core.backend import AgentResponse, ToolDef
 
 # Re-export config types for convenience
 from llm_saia.core.config import CallOptions, Config
+
+# Re-export conversation types for convenience
+from llm_saia.core.conversation import (
+    ConversationLike,
+    ListConversation,
+    Message,
+    MessageAppendable,
+    Role,
+    ToolCall,
+)
+
+__all__ = [
+    # Backend types (re-exported)
+    "AgentResponse",
+    "ToolDef",
+    # Conversation types (re-exported)
+    "ConversationLike",
+    "ListConversation",
+    "Message",
+    "MessageAppendable",
+    "Role",
+    "ToolCall",
+    # Config types (re-exported from config.py)
+    "CallOptions",
+    "Config",
+    # Verb results
+    "ChooseResult",
+    "ClassifyResult",
+    "Critique",
+    "Evidence",
+    "FindResult",
+    "VerbResult",
+    "VerifyResult",
+    # Task types
+    "LoopScore",
+    "TaskResult",
+    # Controller types
+    "DecisionReason",
+]
 
 
 class DecisionReason(Enum):
@@ -45,31 +87,6 @@ class DecisionReason(Enum):
     CONFIRMATION_RETRIES_EXCEEDED = (
         "confirmation_retries_exceeded"  # Too many confirmation attempts
     )
-
-
-__all__ = [
-    # Backend types (re-exported)
-    "AgentResponse",
-    "Message",
-    "ToolCall",
-    "ToolDef",
-    # Config types (re-exported from config.py)
-    "CallOptions",
-    "Config",
-    # Verb results
-    "ChooseResult",
-    "ClassifyResult",
-    "Critique",
-    "Evidence",
-    "FindResult",
-    "VerbResult",
-    "VerifyResult",
-    # Task types
-    "LoopScore",
-    "TaskResult",
-    # Controller types
-    "DecisionReason",
-]
 
 
 @dataclass

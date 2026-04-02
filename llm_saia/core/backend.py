@@ -17,7 +17,17 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-# --- Types for the backend interface ---
+# Import conversation types (re-exported for backward compatibility)
+from llm_saia.core.conversation import Message, Role, ToolCall
+
+__all__ = [
+    "AgentResponse",
+    "Backend",
+    "Message",
+    "Role",
+    "ToolCall",
+    "ToolDef",
+]
 
 
 @dataclass
@@ -30,25 +40,6 @@ class ToolDef:
 
 
 @dataclass
-class ToolCall:
-    """A tool invocation from the LLM."""
-
-    id: str
-    name: str
-    arguments: dict[str, Any]
-
-
-@dataclass
-class Message:
-    """A message in the conversation history."""
-
-    role: str  # "user", "assistant", "tool_result"
-    content: str
-    tool_calls: list[ToolCall] | None = None
-    tool_call_id: str | None = None  # For tool_result messages
-
-
-@dataclass
 class AgentResponse:
     """Response from LLM that may include tool calls."""
 
@@ -58,9 +49,6 @@ class AgentResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     call_id: str = ""  # Set by SAIA per chat() call for tracing
-
-
-# --- Backend ABC ---
 
 
 class Backend(ABC):
