@@ -6,17 +6,7 @@ import json
 import time
 import uuid
 from abc import abstractmethod
-from collections import OrderedDict
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Any,
-    Self,
-    TypeVar,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
@@ -29,19 +19,19 @@ from llm_saia.core.conversation import (
     Role,
     ToolCall,
 )
-from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
-from llm_saia.core.guard import Guarded, OutputGuard, OutputGuardError
+from llm_saia.core.errors import StructuredOutputError
+from llm_saia.core.guards import OutputGuardMixin
+from llm_saia.core.logging import VerbLoggingMixin
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
     from llm_saia.core.backend import Backend
-    from llm_saia.core.logger import Logger
     from llm_saia.core.trace import Tracer
 
 T = TypeVar("T")
 
 
-class Verb(Configurable):
+class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     """Base class for all verbs. Subclass this to create custom verbs."""
 
     # Truncation limit for log previews
@@ -51,6 +41,7 @@ class Verb(Configurable):
         """Initialize verb with configuration."""
         self._config = config
         self._memory: dict[str, Any] = {}  # Verbs don't use memory
+        self._lg = config.lg
 
     def _clone(self, config: Config) -> Self:
         """Create a new instance with the given config."""
@@ -60,11 +51,6 @@ class Verb(Configurable):
     def _backend(self) -> Backend:
         """Get the configured backend."""
         return self._config.backend
-
-    @property
-    def _lg(self) -> Logger | None:
-        """Get the configured logger, if any."""
-        return self._config.lg
 
     def _has_tools(self) -> bool:
         """Check if tools are configured."""
@@ -78,150 +64,6 @@ class Verb(Configurable):
     def _get_call_options(self, override: CallOptions | None = None) -> CallOptions:
         """Get effective call options: override > instance default > global default."""
         return override or self._call
-
-    def _log_loop_start(self, config: CallOptions) -> None:
-        """Log verb loop start if logger available."""
-        if self._lg:
-            self._lg.debug(
-                "verb loop started",
-                extra={
-                    "verb": self.__class__.__name__,
-                    "max_iterations": config.max_iterations,
-                    "timeout_secs": config.timeout_secs,
-                    "max_total_tokens": config.max_total_tokens,
-                },
-            )
-
-    def _log_response(self, response: AgentResponse, iteration: int, total_tokens: int) -> None:
-        """Log LLM response if logger available."""
-        if self._lg:
-            self._lg.debug(
-                "llm response received",
-                extra={
-                    "call_id": response.call_id,
-                    "iters": iteration,
-                    "tokens": {
-                        "input": response.input_tokens,
-                        "output": response.output_tokens,
-                        "total": total_tokens,
-                    },
-                    "finish_reason": response.finish_reason,
-                    "tool_calls": len(response.tool_calls) if response.tool_calls else 0,
-                    "preview": self._truncate(response.content, self._PREVIEW_LIMIT),
-                },
-            )
-            tools = (
-                {
-                    str(i + 1): {"name": tc.name, "args": tc.arguments}
-                    for i, tc in enumerate(response.tool_calls)
-                }
-                if response.tool_calls
-                else None
-            )
-            self._lg.trace(
-                "llm response details",
-                extra=OrderedDict([("tools", tools), ("content", response.content)]),
-            )
-
-    def _log_limit_reached(
-        self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
-    ) -> None:
-        """Log when loop limit is reached."""
-        if self._lg:
-            elapsed_secs = time.monotonic() - start_time
-            self._lg.warning(
-                "verb loop limit reached",
-                extra={
-                    "verb": self.__class__.__name__,
-                    "iterations": iteration,
-                    "total_tokens": total_tokens,
-                    "elapsed_secs": int(elapsed_secs),
-                    "limit_type": self._get_limit_type(
-                        config, iteration, elapsed_secs, total_tokens
-                    ),
-                },
-            )
-
-    def _truncate(self, text: str, limit: int) -> str:
-        """Truncate text with '... (N chars)' suffix if over limit."""
-        if not text or len(text) <= limit:
-            return text
-        return f"{text[:limit]}... ({len(text)} chars)"
-
-    # Tool-call JSON patterns that indicate LLM tried to call tools via text output.
-    # These patterns are specific to common function-calling formats (OpenAI, Anthropic).
-    # We require the pattern to look like a tool invocation structure, not just any JSON.
-    _TOOL_CALL_PATTERNS = (
-        '"function_call":',
-        '"tool_calls":',
-        '"tool_use":',
-    )
-
-    # Minimum expected input tokens per tool definition (conservative estimate)
-    _MIN_TOKENS_PER_TOOL = 50
-
-    def _check_tool_support(self, response: AgentResponse) -> None:
-        """Check for signs that the model may not natively support function calling."""
-        if not self._config.warn_tool_support or not self._has_tools() or not self._lg:
-            return
-        self._warn_low_input_tokens(response)
-        self._warn_tool_json_in_text(response)
-
-    def _warn_low_input_tokens(self, response: AgentResponse) -> None:
-        """Warn if input tokens suggest server ignored tool definitions."""
-        if response.tool_calls:  # Tools working, no warning needed
-            return
-        tool_count = len(self._config.tools)
-        min_expected = tool_count * self._MIN_TOKENS_PER_TOOL
-        if response.input_tokens > 0 and response.input_tokens < min_expected:
-            self._lg.warning(  # type: ignore[union-attr]
-                "input tokens suspiciously low - server may be ignoring tool definitions",
-                extra={
-                    "input_tokens": response.input_tokens,
-                    "tool_count": tool_count,
-                    "min_expected": min_expected,
-                },
-            )
-
-    def _warn_tool_json_in_text(self, response: AgentResponse) -> None:
-        """Warn if LLM outputs tool-call JSON as text instead of using tool_calls."""
-        if response.tool_calls or not response.content:
-            return
-        if self._looks_like_tool_call_json(response.content):
-            self._lg.warning(  # type: ignore[union-attr]
-                "tools configured but LLM returned text instead of tool_calls - "
-                "model may not support function calling",
-                extra={
-                    "content_preview": self._truncate(response.content, self._PREVIEW_LIMIT),
-                    "tool_count": len(self._config.tools),
-                },
-            )
-
-    def _looks_like_tool_call_json(self, content: str) -> bool:
-        """Check if content looks like tool-call JSON (not just any JSON with 'name')."""
-        # Explicit tool-call patterns are definitive
-        if any(pattern in content for pattern in self._TOOL_CALL_PATTERNS):
-            return True
-        # "name" alone is too broad; require it alongside "arguments" or "parameters"
-        has_name = '"name":' in content
-        has_args = '"arguments":' in content or '"parameters":' in content
-        return has_name and has_args
-
-    def _log_loop_complete(
-        self, iteration: int, start_time: float, total_tokens: int, content: str
-    ) -> None:
-        """Log when loop completes normally."""
-        if self._lg:
-            self._lg.debug(
-                "verb loop completed",
-                extra={
-                    "verb": self.__class__.__name__,
-                    "iters": iteration + 1,
-                    "total_tokens": total_tokens,
-                    "elapsed_secs": int(time.monotonic() - start_time),
-                    "preview": self._truncate(content, self._PREVIEW_LIMIT),
-                },
-            )
 
     @staticmethod
     def _generate_id() -> str:
@@ -364,18 +206,6 @@ class Verb(Configurable):
         if config.max_total_tokens > 0 and total_tokens >= config.max_total_tokens:
             return True
         return False
-
-    def _get_limit_type(
-        self, config: CallOptions, iteration: int, elapsed_secs: float, total_tokens: int
-    ) -> str:
-        """Determine which limit caused the loop to stop."""
-        if config.max_iterations > 0 and iteration >= config.max_iterations:
-            return "max_iterations"
-        if config.timeout_secs > 0 and elapsed_secs >= config.timeout_secs:
-            return "timeout"
-        if config.max_total_tokens > 0 and total_tokens >= config.max_total_tokens:
-            return "max_tokens"
-        return "unknown"
 
     def _to_message(self, response: AgentResponse) -> Message:
         """Convert AgentResponse to Message."""
@@ -692,330 +522,6 @@ class Verb(Configurable):
                     "parse_error": error.parse_error,
                 },
             )
-
-    # --- Output Guard Methods ---
-
-    async def _apply_guards(
-        self,
-        prompt: str,
-        result: T,
-        schema: type[T],
-        run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-    ) -> T:
-        """Apply output guards sequentially, retrying on failure.
-
-        Applies both instance-level guards (from with_guard/with_guards) and
-        field-level guards (from Annotated[..., Guarded(...)] type hints).
-
-        If a guard retry produces a different result, all guards are re-validated
-        from the beginning to ensure the new result passes all guards.
-        """
-        config = self._get_call_options(run)
-        instance_guards = config.output_guards
-        field_guards = self._extract_field_guards(schema)
-
-        while True:
-            original_result = result
-
-            # Apply instance-level guards (validate entire result)
-            for guard in instance_guards:
-                result = await self._apply_single_guard(
-                    prompt, result, schema, guard, run, conversation=conversation
-                )
-                if result != original_result:
-                    break
-            else:
-                result, changed = await self._apply_field_guards_once(
-                    prompt,
-                    result,
-                    original_result,
-                    schema,
-                    field_guards,
-                    run,
-                    conversation,
-                )
-                if not changed:
-                    return result
-
-            # Result changed, loop continues to re-validate all guards
-
-    async def _apply_field_guards_once(
-        self,
-        prompt: str,
-        result: T,
-        original_result: T,
-        schema: type[T],
-        field_guards: dict[str, tuple[OutputGuard, ...]],
-        run: CallOptions | None,
-        conversation: ConversationLike | None,
-    ) -> tuple[T, bool]:
-        """Apply field-level guards once, returning (result, changed)."""
-        for field_name, guards in field_guards.items():
-            for guard in guards:
-                result = await self._apply_field_guard(
-                    prompt,
-                    result,
-                    schema,
-                    field_name,
-                    guard,
-                    run,
-                    conversation=conversation,
-                )
-                if result != original_result:
-                    return result, True
-            if result != original_result:
-                return result, True
-        return result, False
-
-    def _extract_field_guards(self, schema: type[T]) -> dict[str, tuple[OutputGuard, ...]]:
-        """Extract field-level guards from Annotated type hints.
-
-        Returns:
-            Dict mapping field name to tuple of guards for that field.
-        """
-        result: dict[str, tuple[OutputGuard, ...]] = {}
-
-        try:
-            hints = get_type_hints(schema, include_extras=True)
-        except Exception:
-            # Schema doesn't support type hints (e.g., not a dataclass)
-            return result
-
-        for field_name, hint in hints.items():
-            if get_origin(hint) is Annotated:
-                args = get_args(hint)
-                for arg in args[1:]:  # Skip the actual type (first arg)
-                    if isinstance(arg, Guarded):
-                        result[field_name] = arg.guards
-                        break  # Only one Guarded per field
-
-        return result
-
-    async def _apply_field_guard(
-        self,
-        prompt: str,
-        result: T,
-        schema: type[T],
-        field_name: str,
-        guard: OutputGuard,
-        run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-    ) -> T:
-        """Apply a guard to a specific field of the result."""
-        guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
-        for attempt in range(1 + guard.max_retries):
-            field_value = getattr(result, field_name, None)
-            try:
-                error = guard.validator(field_value)
-            except Exception as e:
-                error = f"Validator raised {type(e).__name__}: {e}"
-
-            if error is None:
-                return result
-
-            if attempt >= guard.max_retries:
-                raise OutputGuardError(guard_name, error, attempt + 1)
-
-            named = OutputGuard(
-                guard.validator, guard.retry_instruction, guard.max_retries, guard_name
-            )
-            self._log_guard_retry(named, attempt + 1, error)
-            retry_prompt = self._build_field_guard_retry_prompt(
-                prompt, result, field_name, field_value, guard, error
-            )
-            result = await self._complete_structured_attempt(
-                retry_prompt, schema, run, conversation=conversation
-            )
-
-        return result  # Unreachable, satisfies type checker
-
-    def _build_field_guard_retry_prompt(
-        self,
-        original_prompt: str,
-        failed_result: Any,
-        field_name: str,
-        field_value: Any,
-        guard: OutputGuard,
-        error: str,
-    ) -> str:
-        """Build retry prompt for field-specific guard failure."""
-        result_str = str(failed_result)
-        if len(result_str) > 300:
-            result_str = result_str[:300] + "..."
-
-        field_str = str(field_value)
-        if len(field_str) > 200:
-            field_str = field_str[:200] + "..."
-
-        return (
-            f"{original_prompt}\n\n"
-            f"---\n\n"
-            f"Your previous response did not meet requirements.\n\n"
-            f"Issue with field '{field_name}': {error}\n\n"
-            f"Field value was:\n```\n{field_str}\n```\n\n"
-            f"{guard.retry_instruction}"
-        )
-
-    async def _apply_single_guard(
-        self,
-        prompt: str,
-        result: T,
-        schema: type[T],
-        guard: OutputGuard,
-        run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-    ) -> T:
-        """Apply one guard with retries.
-
-        Note: Guard retries call _complete_structured_attempt directly, bypassing
-        parse_retries. This is intentional - guards run after parsing succeeds,
-        so JSON structure is expected to be stable on retry.
-        """
-        for attempt in range(1 + guard.max_retries):
-            # Pass original result to validator - validators handle type conversion
-            try:
-                error = guard.validator(result)
-            except Exception as e:
-                # Validator raised instead of returning str - treat as validation failure
-                error = f"Validator raised {type(e).__name__}: {e}"
-
-            if error is None:
-                return result  # Passed
-
-            if attempt < guard.max_retries:
-                self._log_guard_retry(guard, attempt + 1, error)
-                retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error)
-                result = await self._complete_structured_attempt(
-                    retry_prompt, schema, run, conversation=conversation
-                )
-            else:
-                raise OutputGuardError(guard.name, error, attempt + 1)
-
-        return result  # Unreachable, satisfies type checker
-
-    async def _apply_text_guards(
-        self,
-        prompt: str,
-        text: str,
-        run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-    ) -> str:
-        """Apply output guards to text completion results.
-
-        Similar to _apply_guards but for plain text (not structured output).
-        Guards validate the text string directly.
-        """
-        config = self._get_call_options(run)
-        guards = config.output_guards
-        if not guards:
-            return text
-
-        while True:
-            original_text = text
-            for guard in guards:
-                text = await self._apply_single_text_guard(
-                    prompt, text, guard, run, conversation=conversation
-                )
-                # If text changed (retry occurred), restart validation from first guard
-                if text != original_text:
-                    break
-            else:
-                # All guards passed without changes
-                return text
-            # Text changed, loop continues to re-validate all guards
-
-    async def _apply_single_text_guard(
-        self,
-        prompt: str,
-        text: str,
-        guard: OutputGuard,
-        run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-    ) -> str:
-        """Apply one guard to text with retries."""
-        for attempt in range(1 + guard.max_retries):
-            try:
-                error = guard.validator(text)
-            except Exception as e:
-                error = f"Validator raised {type(e).__name__}: {e}"
-
-            if error is None:
-                return text  # Passed
-
-            if attempt < guard.max_retries:
-                self._log_guard_retry(guard, attempt + 1, error)
-                retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error)
-                text = await self._complete_text_attempt(
-                    retry_prompt, run, phase="guard_retry", conversation=conversation
-                )
-            else:
-                raise OutputGuardError(guard.name, error, attempt + 1)
-
-        return text  # Unreachable, satisfies type checker
-
-    def _build_guard_retry_prompt(
-        self,
-        original_prompt: str,
-        failed_result: Any,
-        guard: OutputGuard,
-        error: str,
-    ) -> str:
-        """Build retry prompt with guard feedback."""
-        # Truncate result for prompt
-        result_str = str(failed_result)
-        if len(result_str) > 300:
-            result_str = result_str[:300] + "..."
-
-        return (
-            f"{original_prompt}\n\n"
-            f"---\n\n"
-            f"Your previous response did not meet requirements.\n\n"
-            f"Issue: {error}\n\n"
-            f"Your response was:\n```\n{result_str}\n```\n\n"
-            f"{guard.retry_instruction}"
-        )
-
-    def _log_guard_retry(self, guard: OutputGuard, attempt: int, error: str) -> None:
-        """Log guard retry attempt."""
-        if self._lg:
-            self._lg.debug(
-                "guard retry",
-                extra={
-                    "guard": guard.name,
-                    "attempt": attempt,
-                    "max_retries": guard.max_retries,
-                    "error": error,
-                },
-            )
-
-    def _structured_output_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
-    ) -> StructuredOutputError:
-        """Create appropriate error for structured output parse failure."""
-        error_msg = str(error)
-        # Detect truncation patterns
-        truncation_indicators = (
-            "Unterminated string",
-            "Unexpected end of JSON",
-            "Expecting value",
-            "Expecting ',' delimiter",
-            "Expecting ':' delimiter",
-        )
-        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
-
-        if is_truncated:
-            return TruncatedResponseError(
-                raw_content=content,
-                schema_name=schema_name,
-                parse_error=error_msg,
-            )
-        return StructuredOutputError(
-            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
-            raw_content=content,
-            schema_name=schema_name,
-            parse_error=error_msg,
-        )
 
     @abstractmethod
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
