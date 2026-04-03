@@ -125,7 +125,7 @@ class VerbLoggingMixin:
         total_tokens: int,
     ) -> str:
         """Determine which limit triggered the stop."""
-        if iteration >= config.max_iterations:
+        if config.max_iterations > 0 and iteration >= config.max_iterations:
             return "max_iterations"
         if config.timeout_secs > 0 and elapsed_secs >= config.timeout_secs:
             return "timeout"

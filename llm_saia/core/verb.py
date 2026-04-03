@@ -19,7 +19,7 @@ from llm_saia.core.conversation import (
     Role,
     ToolCall,
 )
-from llm_saia.core.errors import StructuredOutputError
+from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
 from llm_saia.core.guards import OutputGuardMixin
 from llm_saia.core.logging import VerbLoggingMixin
 from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -64,6 +64,34 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     def _get_call_options(self, override: CallOptions | None = None) -> CallOptions:
         """Get effective call options: override > instance default > global default."""
         return override or self._call
+
+    def _structured_output_error(
+        self, error: json.JSONDecodeError, content: str, schema_name: str
+    ) -> StructuredOutputError:
+        """Create appropriate error for structured output parse failure."""
+        error_msg = str(error)
+        # Detect truncation patterns
+        truncation_indicators = (
+            "Unterminated string",
+            "Unexpected end of JSON",
+            "Expecting value",
+            "Expecting ',' delimiter",
+            "Expecting ':' delimiter",
+        )
+        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
+
+        if is_truncated:
+            return TruncatedResponseError(
+                raw_content=content,
+                schema_name=schema_name,
+                parse_error=error_msg,
+            )
+        return StructuredOutputError(
+            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
+            raw_content=content,
+            schema_name=schema_name,
+            parse_error=error_msg,
+        )
 
     @staticmethod
     def _generate_id() -> str:

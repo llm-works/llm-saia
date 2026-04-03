@@ -6,7 +6,6 @@ Separated from verb.py to keep the base class manageable.
 
 from __future__ import annotations
 
-import json
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -17,7 +16,6 @@ from typing import (
     get_type_hints,
 )
 
-from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
 from llm_saia.core.guard import Guarded, OutputGuard, OutputGuardError
 
 if TYPE_CHECKING:
@@ -363,31 +361,3 @@ class OutputGuardMixin:
                     "error": error,
                 },
             )
-
-    def _structured_output_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
-    ) -> StructuredOutputError:
-        """Create appropriate error for structured output parse failure."""
-        error_msg = str(error)
-        # Detect truncation patterns
-        truncation_indicators = (
-            "Unterminated string",
-            "Unexpected end of JSON",
-            "Expecting value",
-            "Expecting ',' delimiter",
-            "Expecting ':' delimiter",
-        )
-        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
-
-        if is_truncated:
-            return TruncatedResponseError(
-                raw_content=content,
-                schema_name=schema_name,
-                parse_error=error_msg,
-            )
-        return StructuredOutputError(
-            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
-            raw_content=content,
-            schema_name=schema_name,
-            parse_error=error_msg,
-        )
