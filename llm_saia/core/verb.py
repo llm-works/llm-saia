@@ -80,6 +80,11 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         )
         is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
 
+        # Verify truncation: error position should be at/near EOF (only whitespace after)
+        pos = getattr(error, "pos", None)
+        if is_truncated and pos is not None and content[pos:].strip():
+            is_truncated = False
+
         if is_truncated:
             return TruncatedResponseError(
                 raw_content=content,

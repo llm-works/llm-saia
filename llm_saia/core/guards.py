@@ -36,6 +36,10 @@ class OutputGuardMixin:
       - ``_lg`` property -> Logger | None
     """
 
+    # Maximum revalidation rounds before raising (prevents infinite loops when
+    # guard retries keep producing results that fail other guards).
+    _MAX_REVALIDATION_ROUNDS = 10
+
     # Stubs for attributes/methods provided by the host class (Verb).
 
     _lg: Logger | None
@@ -83,30 +87,41 @@ class OutputGuardMixin:
         instance_guards = config.output_guards
         field_guards = self._extract_field_guards(schema)
 
-        while True:
+        for _round in range(self._MAX_REVALIDATION_ROUNDS):
             original_result = result
 
-            # Apply instance-level guards (validate entire result)
-            for guard in instance_guards:
-                result = await self._apply_single_guard(
-                    prompt, result, schema, guard, run, conversation=conversation
-                )
-                if result != original_result:
-                    break
-            else:
+            result, changed = await self._apply_instance_guards_once(
+                prompt, result, original_result, schema, instance_guards, run, conversation
+            )
+            if not changed:
                 result, changed = await self._apply_field_guards_once(
-                    prompt,
-                    result,
-                    original_result,
-                    schema,
-                    field_guards,
-                    run,
-                    conversation,
+                    prompt, result, original_result, schema, field_guards, run, conversation
                 )
-                if not changed:
-                    return result
+            if not changed:
+                return result
 
-            # Result changed, loop continues to re-validate all guards
+        raise OutputGuardError(
+            "revalidation", "guards did not converge", self._MAX_REVALIDATION_ROUNDS
+        )
+
+    async def _apply_instance_guards_once(
+        self,
+        prompt: str,
+        result: T,
+        original_result: T,
+        schema: type[T],
+        guards: tuple[OutputGuard, ...],
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+    ) -> tuple[T, bool]:
+        """Apply instance-level guards once, returning (result, changed)."""
+        for guard in guards:
+            result = await self._apply_single_guard(
+                prompt, result, schema, guard, run, conversation=conversation
+            )
+            if result != original_result:
+                return result, True
+        return result, False
 
     async def _apply_field_guards_once(
         self,
@@ -146,7 +161,7 @@ class OutputGuardMixin:
 
         try:
             hints = get_type_hints(schema, include_extras=True)
-        except Exception:
+        except TypeError:
             # Schema doesn't support type hints (e.g., not a dataclass)
             return result
 
@@ -283,7 +298,7 @@ class OutputGuardMixin:
         if not guards:
             return text
 
-        while True:
+        for _round in range(self._MAX_REVALIDATION_ROUNDS):
             original_text = text
             for guard in guards:
                 text = await self._apply_single_text_guard(
@@ -296,6 +311,10 @@ class OutputGuardMixin:
                 # All guards passed without changes
                 return text
             # Text changed, loop continues to re-validate all guards
+
+        raise OutputGuardError(
+            "revalidation", "guards did not converge", self._MAX_REVALIDATION_ROUNDS
+        )
 
     async def _apply_single_text_guard(
         self,
