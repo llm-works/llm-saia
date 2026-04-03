@@ -24,7 +24,10 @@ class Ground(Verb):
                 f"Find evidence in this source for the artifact.\n\n"
                 f"Artifact: {artifact}\n\nSource: {source}"
             )
+            # Fork per source so each evaluation is independent
+            source_conv = self._fork_conversation(conversation)
             results.append(
-                await self._complete_structured(prompt, Evidence, conversation=conversation)
+                await self._complete_structured(prompt, Evidence, conversation=source_conv)
             )
+            self._merge_conversation(conversation, source_conv)
         return results
