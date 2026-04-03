@@ -1,9 +1,15 @@
 """FIND verb: Filter items matching criteria."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from llm_saia.core.types import FindResult
 from llm_saia.core.verb import Verb
+
+if TYPE_CHECKING:
+    from llm_saia.core.conversation import ConversationLike
 
 # Maximum items to process in a single call
 MAX_ITEMS = 100
@@ -16,6 +22,8 @@ class Find(Verb):
         self,
         items: list[str],
         criteria: str,
+        *,
+        conversation: ConversationLike | None = None,
     ) -> FindResult:
         """Find items matching criteria.
 
@@ -44,7 +52,7 @@ class Find(Verb):
             f"- matching_numbers: 1-indexed numbers of ALL matching items (empty list if none)\n"
             f"- reason: brief explanation of why those items match"
         )
-        result = await self._complete_structured(prompt, _FindResponse)
+        result = await self._complete_structured(prompt, _FindResponse, conversation=conversation)
         # Convert 1-indexed to 0-indexed, filter invalid indices, deduplicate
         indices = sorted({i - 1 for i in result.matching_numbers if 1 <= i <= len(items)})
         return FindResult(indices=indices, reason=result.reason)

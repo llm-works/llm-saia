@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ListConversation` default implementation of `ConversationLike`
 - `Role` enum for message roles (`USER`, `ASSISTANT`, `SYSTEM`, `TOOL`)
 - `core/conversation.py` module for conversation/message types
-- `_loop()` now accepts optional `conversation` parameter for external conversation management
+- All 13 verbs accept optional `conversation` keyword argument for external conversation management
+- Direct-call paths (no tools) also track messages through the conversation object
+- Guard retries thread conversation (retry exchanges visible in caller's conversation)
+- Parse retries isolate failed attempts from caller's conversation (only final exchange propagated)
 - `find` verb - filter items matching criteria, returns `FindResult(indices, reason)`
 
 ### Changed

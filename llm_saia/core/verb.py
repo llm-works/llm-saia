@@ -385,6 +385,38 @@ class Verb(Configurable):
             tool_calls=response.tool_calls if response.tool_calls else None,
         )
 
+    @staticmethod
+    def _fork_conversation(
+        conversation: ConversationLike | None,
+    ) -> ConversationLike | None:
+        """Create a working copy of a conversation for isolated operations.
+
+        Returns None when the caller did not provide a conversation (the
+        downstream helpers will create a throwaway ListConversation).
+        """
+        if conversation is None:
+            return None
+        fork = ListConversation()
+        for msg in conversation.as_messages():
+            fork.append(msg)
+        return fork
+
+    @staticmethod
+    def _merge_conversation(
+        target: ConversationLike | None,
+        source: ConversationLike | None,
+    ) -> None:
+        """Append new messages from *source* back into *target*.
+
+        Only messages added after the fork point (i.e. those beyond the
+        original length of *target*) are copied.
+        """
+        if target is None or source is None:
+            return
+        base_len = len(target.as_messages())
+        for msg in source.as_messages()[base_len:]:
+            target.append(msg)
+
     async def _execute_tools(self, tool_calls: list[ToolCall], messages: MessageAppendable) -> None:
         """Execute tool calls and append results.
 
@@ -477,53 +509,72 @@ class Verb(Configurable):
 
     # --- High-level helpers for verbs ---
 
-    async def _complete(self, prompt: str, run: CallOptions | None = None) -> str:
+    async def _complete(
+        self,
+        prompt: str,
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
+    ) -> str:
         """Complete with tools if available, otherwise direct.
 
         Applies output guards if configured.
         """
         if self._has_tools():
-            content, _ = await self._loop(prompt, run=run)
-            return await self._apply_text_guards(prompt, content, run)
+            content, _ = await self._loop(prompt, run=run, conversation=conversation)
+            return await self._apply_text_guards(prompt, content, run, conversation=conversation)
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role=Role.USER, content=prompt)],
+            conv.as_messages(),
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
+        conv.append(self._to_message(response))
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
-        return await self._apply_text_guards(prompt, response.content, run)
+        return await self._apply_text_guards(
+            prompt, response.content, run, conversation=conversation
+        )
 
     async def _complete_text_attempt(
-        self, prompt: str, run: CallOptions | None = None, phase: str = "direct"
+        self,
+        prompt: str,
+        run: CallOptions | None = None,
+        phase: str = "direct",
+        conversation: ConversationLike | None = None,
     ) -> str:
         """Single attempt at text completion without applying guards.
 
         Used by guard retry logic to avoid recursion.
         """
         if self._has_tools():
-            content, _ = await self._loop(prompt, run=run)
+            content, _ = await self._loop(prompt, run=run, conversation=conversation)
             return content
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role=Role.USER, content=prompt)],
+            conv.as_messages(),
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
+        conv.append(self._to_message(response))
         self._write_base_trace(response, trace_id=trace_id, phase=phase)
         return response.content
 
     async def _complete_structured(
-        self, prompt: str, schema: type[T], run: CallOptions | None = None
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
     ) -> T:
-        """Complete structured with tools if available, otherwise direct.
+        """Complete structured with retry on StructuredOutputError.
 
-        Supports automatic retry on StructuredOutputError with feedback to the LLM.
-        Retry count is controlled by CallOptions.parse_retries (default: 0).
-
-        After successful parsing, output guards are applied if configured.
+        Retry count controlled by CallOptions.parse_retries (default: 0).
+        Output guards are applied after successful parsing.
         """
         config = self._get_call_options(run)
         max_attempts = 1 + config.parse_retries
@@ -531,17 +582,20 @@ class Verb(Configurable):
 
         for attempt in range(max_attempts):
             try:
-                use_prompt = (
-                    prompt
-                    if attempt == 0
-                    else self._build_parse_retry_prompt(
-                        prompt,
-                        schema,
-                        last_error,  # type: ignore[arg-type]
-                    )
+                use_prompt = self._retry_prompt_or_original(
+                    prompt,
+                    schema,
+                    last_error,
+                    attempt,
                 )
-                result = await self._complete_structured_attempt(use_prompt, schema, run)
-                return await self._apply_guards(prompt, result, schema, run)
+                attempt_conv = self._fork_conversation(conversation)
+                result = await self._complete_structured_attempt(
+                    use_prompt, schema, run, conversation=attempt_conv
+                )
+                self._merge_conversation(conversation, attempt_conv)
+                return await self._apply_guards(
+                    prompt, result, schema, run, conversation=conversation
+                )
             except StructuredOutputError as e:
                 last_error = e
                 if attempt < max_attempts - 1:
@@ -553,32 +607,55 @@ class Verb(Configurable):
         raise last_error  # type: ignore[misc]
 
     async def _complete_structured_attempt(
-        self, prompt: str, schema: type[T], run: CallOptions | None = None
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
     ) -> T:
         """Single attempt at structured completion."""
         if self._has_tools():
-            _, result = await self._loop(prompt, run=run, schema=schema)
+            _, result = await self._loop(prompt, run=run, schema=schema, conversation=conversation)
             if result is not None:
                 return result
         # Direct structured completion
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         trace_id = self._generate_id()
         json_schema = dataclass_to_json_schema(schema)
         config = self._get_call_options(run)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         response = await self._backend.chat(
-            [Message(role=Role.USER, content=prompt)],
+            conv.as_messages(),
             system=self._call.system,
             response_schema=json_schema,
             max_tokens=max_tokens,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
+        conv.append(self._to_message(response))
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         try:
             data = json.loads(response.content)
         except json.JSONDecodeError as e:
             raise self._structured_output_error(e, response.content, schema.__name__) from e
         return parse_json_to_dataclass(data, schema)
+
+    def _retry_prompt_or_original(
+        self,
+        prompt: str,
+        schema: type[T],
+        last_error: StructuredOutputError | None,
+        attempt: int,
+    ) -> str:
+        """Return original prompt on first attempt, retry prompt on subsequent ones."""
+        if attempt == 0:
+            return prompt
+        return self._build_parse_retry_prompt(
+            prompt,
+            schema,
+            last_error,  # type: ignore[arg-type]
+        )
 
     def _build_parse_retry_prompt(
         self, original_prompt: str, schema: type[T], error: StructuredOutputError
@@ -624,6 +701,7 @@ class Verb(Configurable):
         result: T,
         schema: type[T],
         run: CallOptions | None,
+        conversation: ConversationLike | None = None,
     ) -> T:
         """Apply output guards sequentially, retrying on failure.
 
@@ -642,25 +720,53 @@ class Verb(Configurable):
 
             # Apply instance-level guards (validate entire result)
             for guard in instance_guards:
-                result = await self._apply_single_guard(prompt, result, schema, guard, run)
+                result = await self._apply_single_guard(
+                    prompt, result, schema, guard, run, conversation=conversation
+                )
                 if result != original_result:
                     break
             else:
-                # Apply field-level guards
-                for field_name, guards in field_guards.items():
-                    for guard in guards:
-                        result = await self._apply_field_guard(
-                            prompt, result, schema, field_name, guard, run
-                        )
-                        if result != original_result:
-                            break
-                    if result != original_result:
-                        break
-                else:
-                    # All guards passed without changes
+                result, changed = await self._apply_field_guards_once(
+                    prompt,
+                    result,
+                    original_result,
+                    schema,
+                    field_guards,
+                    run,
+                    conversation,
+                )
+                if not changed:
                     return result
 
             # Result changed, loop continues to re-validate all guards
+
+    async def _apply_field_guards_once(
+        self,
+        prompt: str,
+        result: T,
+        original_result: T,
+        schema: type[T],
+        field_guards: dict[str, tuple[OutputGuard, ...]],
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+    ) -> tuple[T, bool]:
+        """Apply field-level guards once, returning (result, changed)."""
+        for field_name, guards in field_guards.items():
+            for guard in guards:
+                result = await self._apply_field_guard(
+                    prompt,
+                    result,
+                    schema,
+                    field_name,
+                    guard,
+                    run,
+                    conversation=conversation,
+                )
+                if result != original_result:
+                    return result, True
+            if result != original_result:
+                return result, True
+        return result, False
 
     def _extract_field_guards(self, schema: type[T]) -> dict[str, tuple[OutputGuard, ...]]:
         """Extract field-level guards from Annotated type hints.
@@ -694,36 +800,33 @@ class Verb(Configurable):
         field_name: str,
         guard: OutputGuard,
         run: CallOptions | None,
+        conversation: ConversationLike | None = None,
     ) -> T:
         """Apply a guard to a specific field of the result."""
+        guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
         for attempt in range(1 + guard.max_retries):
             field_value = getattr(result, field_name, None)
-
             try:
                 error = guard.validator(field_value)
             except Exception as e:
                 error = f"Validator raised {type(e).__name__}: {e}"
 
             if error is None:
-                return result  # Passed
+                return result
 
-            if attempt < guard.max_retries:
-                guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
-                self._log_guard_retry(
-                    OutputGuard(
-                        guard.validator, guard.retry_instruction, guard.max_retries, guard_name
-                    ),
-                    attempt + 1,
-                    error,
-                )
-                # Build retry prompt mentioning the specific field
-                retry_prompt = self._build_field_guard_retry_prompt(
-                    prompt, result, field_name, field_value, guard, error
-                )
-                result = await self._complete_structured_attempt(retry_prompt, schema, run)
-            else:
-                guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
+            if attempt >= guard.max_retries:
                 raise OutputGuardError(guard_name, error, attempt + 1)
+
+            named = OutputGuard(
+                guard.validator, guard.retry_instruction, guard.max_retries, guard_name
+            )
+            self._log_guard_retry(named, attempt + 1, error)
+            retry_prompt = self._build_field_guard_retry_prompt(
+                prompt, result, field_name, field_value, guard, error
+            )
+            result = await self._complete_structured_attempt(
+                retry_prompt, schema, run, conversation=conversation
+            )
 
         return result  # Unreachable, satisfies type checker
 
@@ -761,6 +864,7 @@ class Verb(Configurable):
         schema: type[T],
         guard: OutputGuard,
         run: CallOptions | None,
+        conversation: ConversationLike | None = None,
     ) -> T:
         """Apply one guard with retries.
 
@@ -782,7 +886,9 @@ class Verb(Configurable):
             if attempt < guard.max_retries:
                 self._log_guard_retry(guard, attempt + 1, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error)
-                result = await self._complete_structured_attempt(retry_prompt, schema, run)
+                result = await self._complete_structured_attempt(
+                    retry_prompt, schema, run, conversation=conversation
+                )
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
 
@@ -793,6 +899,7 @@ class Verb(Configurable):
         prompt: str,
         text: str,
         run: CallOptions | None,
+        conversation: ConversationLike | None = None,
     ) -> str:
         """Apply output guards to text completion results.
 
@@ -807,7 +914,9 @@ class Verb(Configurable):
         while True:
             original_text = text
             for guard in guards:
-                text = await self._apply_single_text_guard(prompt, text, guard, run)
+                text = await self._apply_single_text_guard(
+                    prompt, text, guard, run, conversation=conversation
+                )
                 # If text changed (retry occurred), restart validation from first guard
                 if text != original_text:
                     break
@@ -822,6 +931,7 @@ class Verb(Configurable):
         text: str,
         guard: OutputGuard,
         run: CallOptions | None,
+        conversation: ConversationLike | None = None,
     ) -> str:
         """Apply one guard to text with retries."""
         for attempt in range(1 + guard.max_retries):
@@ -836,7 +946,9 @@ class Verb(Configurable):
             if attempt < guard.max_retries:
                 self._log_guard_retry(guard, attempt + 1, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error)
-                text = await self._complete_text_attempt(retry_prompt, run, phase="guard_retry")
+                text = await self._complete_text_attempt(
+                    retry_prompt, run, phase="guard_retry", conversation=conversation
+                )
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
 
