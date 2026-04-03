@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from llm_saia.core.backend import Backend, ToolDef
-    from llm_saia.core.guard import OutputGuard
-    from llm_saia.core.logger import Logger
-    from llm_saia.core.trace import Tracer
+    from .backend import Backend, ToolDef
+    from .guard import OutputGuard
+    from .logger import Logger
+    from .trace import Tracer
 
 __all__ = [
     "CallOptions",

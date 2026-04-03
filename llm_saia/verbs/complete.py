@@ -6,9 +6,9 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from llm_saia.core.backend import AgentResponse
-from llm_saia.core.config import CallOptions
-from llm_saia.core.controller import (
+from ..core.backend import AgentResponse
+from ..core.config import CallOptions
+from ..core.controller import (
     Action,
     ActionType,
     ControllerConfig,
@@ -16,10 +16,10 @@ from llm_saia.core.controller import (
     LoopController,
     Observation,
 )
-from llm_saia.core.conversation import Message, Role, ToolCall
-from llm_saia.core.trace import Tracer, build_trace
-from llm_saia.core.types import DecisionReason, LoopScore, TaskResult
-from llm_saia.core.verb import Verb
+from ..core.conversation import Message, Role, ToolCall
+from ..core.trace import Tracer, build_trace
+from ..core.types import DecisionReason, LoopScore, TaskResult
+from ..core.verb import Verb
 
 # Default call options for complete (unlimited iterations)
 DEFAULT_COMPLETE_CALL = CallOptions(max_iterations=0)
@@ -199,7 +199,7 @@ class Complete(Verb):
 
     def _default_controller(self) -> DefaultController:
         """Create default controller with config from this verb."""
-        from llm_saia.core.config import Config
+        from ..core.config import Config
 
         # Controller needs a config for classifier calls (no tools).
         # Copy call options with system and temperature from current config.

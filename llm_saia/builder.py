@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from llm_saia.core import trace
-from llm_saia.core.backend import Backend, ToolDef
-from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config, TerminalConfig
-from llm_saia.core.logger import Logger
+from .core import trace
+from .core.backend import Backend, ToolDef
+from .core.config import DEFAULT_CALL, CallOptions, Config, TerminalConfig
+from .core.logger import Logger
 
 if TYPE_CHECKING:
-    from llm_saia.saia import SAIA
+    from .saia import SAIA
 
 
 class SAIABuilder:
@@ -161,7 +161,7 @@ class SAIABuilder:
         if self._backend is None:
             raise ValueError("backend is required - call .backend() before .build()")
 
-        from llm_saia.saia import SAIA
+        from .saia import SAIA
 
         call = CallOptions(
             system=self._system,

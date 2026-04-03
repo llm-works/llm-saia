@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from llm_saia.core.verb import Verb
+from ..core.verb import Verb
 
 if TYPE_CHECKING:
-    from llm_saia.core.conversation import ConversationLike
+    from ..core.conversation import ConversationLike
 
 
 class Constrain(Verb):

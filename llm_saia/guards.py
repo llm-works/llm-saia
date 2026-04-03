@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from llm_saia.core.guard import OutputGuard
+from .core.guard import OutputGuard
 
 __all__ = [
     "ascii_only",

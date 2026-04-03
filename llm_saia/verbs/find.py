@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from llm_saia.core.types import FindResult
-from llm_saia.core.verb import Verb
+from ..core.types import FindResult
+from ..core.verb import Verb
 
 if TYPE_CHECKING:
-    from llm_saia.core.conversation import ConversationLike
+    from ..core.conversation import ConversationLike
 
 # Maximum items to process in a single call
 MAX_ITEMS = 100
