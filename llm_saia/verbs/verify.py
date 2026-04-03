@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from llm_saia.core.types import VerifyResult
-from llm_saia.core.verb import Verb
+from ..core.types import VerifyResult
+from ..core.verb import Verb
 
 if TYPE_CHECKING:
-    from llm_saia.core.conversation import ConversationLike
+    from ..core.conversation import ConversationLike
 
 
 class Verify(Verb):

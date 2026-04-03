@@ -8,10 +8,10 @@ import uuid
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
-from llm_saia.core.backend import AgentResponse
-from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
-from llm_saia.core.configurable import Configurable
-from llm_saia.core.conversation import (
+from .backend import AgentResponse
+from .config import DEFAULT_CALL, CallOptions, Config
+from .configurable import Configurable
+from .conversation import (
     ConversationLike,
     ListConversation,
     Message,
@@ -19,14 +19,14 @@ from llm_saia.core.conversation import (
     Role,
     ToolCall,
 )
-from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
-from llm_saia.core.guards import OutputGuardMixin
-from llm_saia.core.logging import VerbLoggingMixin
-from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
+from .errors import StructuredOutputError, TruncatedResponseError
+from .guards import OutputGuardMixin
+from .logging import VerbLoggingMixin
+from .schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
-    from llm_saia.core.backend import Backend
-    from llm_saia.core.trace import Tracer
+    from .backend import Backend
+    from .trace import Tracer
 
 T = TypeVar("T")
 
@@ -132,7 +132,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         tracer = self._config.tracer
         if not tracer:
             return
-        from llm_saia.core.trace import build_base_trace
+        from .trace import build_base_trace
 
         record = build_base_trace(
             response,

@@ -32,8 +32,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import IO, Any, Generic, TypeVar
 
-from llm_saia.core.backend import AgentResponse
-from llm_saia.core.controller import Action, Observation
+from .backend import AgentResponse
+from .controller import Action, Observation
 
 _P = TypeVar("_P")
 _CONTENT_PREVIEW_LIMIT = 200

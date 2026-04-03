@@ -11,9 +11,9 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from llm_saia.core.backend import AgentResponse
-    from llm_saia.core.config import CallOptions, Config
-    from llm_saia.core.logger import Logger
+    from .backend import AgentResponse
+    from .config import CallOptions, Config
+    from .logger import Logger
 
 
 class VerbLoggingMixin:

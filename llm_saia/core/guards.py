@@ -16,12 +16,12 @@ from typing import (
     get_type_hints,
 )
 
-from llm_saia.core.guard import Guarded, OutputGuard, OutputGuardError
+from .guard import Guarded, OutputGuard, OutputGuardError
 
 if TYPE_CHECKING:
-    from llm_saia.core.config import CallOptions
-    from llm_saia.core.conversation import ConversationLike
-    from llm_saia.core.logger import Logger
+    from .config import CallOptions
+    from .conversation import ConversationLike
+    from .logger import Logger
 
 T = TypeVar("T")
 

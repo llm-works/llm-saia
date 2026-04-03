@@ -7,7 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from llm_saia.core.config import Config
+    from .config import Config
 
 
 class TaskState(Enum):
@@ -74,7 +74,7 @@ class LLMTaskStateClassifier:
         tool_names: list[str],
     ) -> TaskStateResult:
         """Classify task state using LLM-based classification."""
-        from llm_saia.verbs.classify import Classify
+        from ..verbs.classify import Classify
 
         tools_desc = ", ".join(tool_names) if tool_names else "none"
         criteria = (

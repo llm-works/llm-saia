@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `find` verb - filter items matching criteria, returns `FindResult(indices, reason)`
 
 ### Changed
+- All internal imports converted from absolute (`from llm_saia.core.X`) to relative (`from .X`)
+  to avoid resolving against an installed package instead of the local development source
+- Extracted `OutputGuardMixin` (`core/guards.py`) and `VerbLoggingMixin` (`core/logging.py`) from
+  `core/verb.py` to keep the base class manageable
+- Guard revalidation loops now have a convergence cap (`_MAX_REVALIDATION_ROUNDS=10`) to prevent
+  infinite loops when guard retries keep producing results that fail other guards
+- Narrowed `except Exception` to `except TypeError` in field guard extraction (`get_type_hints`)
+- Truncation heuristic for structured output errors now also checks `JSONDecodeError.pos` to verify
+  the error is actually at/near EOF before classifying as truncated
 - **BREAKING**: Message role for tool results changed from `"tool_result"` to `"tool"` (aligns with OpenAI convention; tool calls remain in assistant messages via `tool_calls` field)
 - Moved `Message`, `ToolCall` from `backend.py` to new `conversation.py` module
 - `llm_saia.core` now re-exports `AgentResponse`, `Message`, `ToolCall`, `ToolDef` (stable public API for downstream consumers)

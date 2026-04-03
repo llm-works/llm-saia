@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from llm_saia.core.conversation import Message, ToolCall
+    from .conversation import Message, ToolCall
 
 __all__ = [
     "AgentResponse",

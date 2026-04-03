@@ -7,8 +7,8 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
-    from llm_saia.core.config import CallOptions, Config
-    from llm_saia.core.guard import OutputGuard
+    from .config import CallOptions, Config
+    from .guard import OutputGuard
 
 __all__ = ["Configurable"]
 
@@ -39,7 +39,7 @@ class Configurable(ABC):
 
     def _with_call(self, **kwargs: Any) -> Self:
         """Return new instance with modified CallOptions fields."""
-        from llm_saia.core.config import DEFAULT_CALL
+        from .config import DEFAULT_CALL
 
         base_call = self._config.call or DEFAULT_CALL
         new_call = replace(base_call, **kwargs)
@@ -124,7 +124,7 @@ class Configurable(ABC):
         Args:
             guard: OutputGuard with validator and retry instruction.
         """
-        from llm_saia.core.config import DEFAULT_CALL
+        from .config import DEFAULT_CALL
 
         base_call = self._config.call or DEFAULT_CALL
         new_guards = base_call.output_guards + (guard,)
@@ -153,7 +153,7 @@ class Configurable(ABC):
         if not guards:
             raise ValueError("with_guards requires at least one guard")
 
-        from llm_saia.core.config import DEFAULT_CALL
+        from .config import DEFAULT_CALL
 
         base_call = self._config.call or DEFAULT_CALL
         new_guards = base_call.output_guards + tuple(guards)

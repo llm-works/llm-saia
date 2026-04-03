@@ -7,13 +7,13 @@ from enum import Enum
 from typing import Any
 
 # Re-export backend types for convenience
-from llm_saia.core.backend import AgentResponse, ToolDef
+from .backend import AgentResponse, ToolDef
 
 # Re-export config types for convenience
-from llm_saia.core.config import CallOptions, Config
+from .config import CallOptions, Config
 
 # Re-export conversation types for convenience
-from llm_saia.core.conversation import (
+from .conversation import (
     ConversationLike,
     ListConversation,
     Message,

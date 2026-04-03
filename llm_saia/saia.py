@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
-from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
-from llm_saia.core.configurable import Configurable
+from .core.config import DEFAULT_CALL, CallOptions, Config
+from .core.configurable import Configurable
 
 if TYPE_CHECKING:
-    from llm_saia.builder import SAIABuilder
-from llm_saia.verbs import (
+    from .builder import SAIABuilder
+from .verbs import (
     Ask,
     Choose,
     Classify,
@@ -45,7 +45,7 @@ class SAIA(Configurable):
     @classmethod
     def builder(cls) -> SAIABuilder:
         """Create a fluent builder for SAIA."""
-        from llm_saia.builder import SAIABuilder
+        from .builder import SAIABuilder
 
         return SAIABuilder()
 
