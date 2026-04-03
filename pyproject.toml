@@ -88,10 +88,6 @@ markers = [
 
 [tool.coverage.run]
 omit = [
-    # Backends require integration tests (actual API calls)
-    "llm_saia/backends/anthropic.py",
-    "llm_saia/backends/openai.py",
-    "llm_saia/backends/openclaw.py",
     # SAIA class tool-loop paths require integration tests
     "llm_saia/saia.py",
 ]
