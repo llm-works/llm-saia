@@ -16,10 +16,22 @@ class Synthesize(Verb):
     """Combine multiple artifacts into structured or text output."""
 
     @overload
-    async def __call__(self, artifacts: list[Any], schema: type[T]) -> T: ...
+    async def __call__(
+        self,
+        artifacts: list[Any],
+        schema: type[T],
+        *,
+        conversation: ConversationLike | None = None,
+    ) -> T: ...
 
     @overload
-    async def __call__(self, artifacts: list[Any], *, goal: str) -> str: ...
+    async def __call__(
+        self,
+        artifacts: list[Any],
+        *,
+        goal: str,
+        conversation: ConversationLike | None = None,
+    ) -> str: ...
 
     async def __call__(
         self,
