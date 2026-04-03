@@ -477,46 +477,65 @@ class Verb(Configurable):
 
     # --- High-level helpers for verbs ---
 
-    async def _complete(self, prompt: str, run: CallOptions | None = None) -> str:
+    async def _complete(
+        self,
+        prompt: str,
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
+    ) -> str:
         """Complete with tools if available, otherwise direct.
 
         Applies output guards if configured.
         """
         if self._has_tools():
-            content, _ = await self._loop(prompt, run=run)
+            content, _ = await self._loop(prompt, run=run, conversation=conversation)
             return await self._apply_text_guards(prompt, content, run)
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role=Role.USER, content=prompt)],
+            conv.as_messages(),
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
+        conv.append(self._to_message(response))
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         return await self._apply_text_guards(prompt, response.content, run)
 
     async def _complete_text_attempt(
-        self, prompt: str, run: CallOptions | None = None, phase: str = "direct"
+        self,
+        prompt: str,
+        run: CallOptions | None = None,
+        phase: str = "direct",
+        conversation: ConversationLike | None = None,
     ) -> str:
         """Single attempt at text completion without applying guards.
 
         Used by guard retry logic to avoid recursion.
         """
         if self._has_tools():
-            content, _ = await self._loop(prompt, run=run)
+            content, _ = await self._loop(prompt, run=run, conversation=conversation)
             return content
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         trace_id = self._generate_id()
         response = await self._backend.chat(
-            [Message(role=Role.USER, content=prompt)],
+            conv.as_messages(),
             system=self._call.system,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
+        conv.append(self._to_message(response))
         self._write_base_trace(response, trace_id=trace_id, phase=phase)
         return response.content
 
     async def _complete_structured(
-        self, prompt: str, schema: type[T], run: CallOptions | None = None
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
     ) -> T:
         """Complete structured with tools if available, otherwise direct.
 
@@ -540,7 +559,9 @@ class Verb(Configurable):
                         last_error,  # type: ignore[arg-type]
                     )
                 )
-                result = await self._complete_structured_attempt(use_prompt, schema, run)
+                result = await self._complete_structured_attempt(
+                    use_prompt, schema, run, conversation=conversation
+                )
                 return await self._apply_guards(prompt, result, schema, run)
             except StructuredOutputError as e:
                 last_error = e
@@ -553,26 +574,33 @@ class Verb(Configurable):
         raise last_error  # type: ignore[misc]
 
     async def _complete_structured_attempt(
-        self, prompt: str, schema: type[T], run: CallOptions | None = None
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
     ) -> T:
         """Single attempt at structured completion."""
         if self._has_tools():
-            _, result = await self._loop(prompt, run=run, schema=schema)
+            _, result = await self._loop(prompt, run=run, schema=schema, conversation=conversation)
             if result is not None:
                 return result
         # Direct structured completion
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         trace_id = self._generate_id()
         json_schema = dataclass_to_json_schema(schema)
         config = self._get_call_options(run)
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         response = await self._backend.chat(
-            [Message(role=Role.USER, content=prompt)],
+            conv.as_messages(),
             system=self._call.system,
             response_schema=json_schema,
             max_tokens=max_tokens,
             temperature=self._resolve_temperature(run),
         )
         response.call_id = self._generate_id()
+        conv.append(self._to_message(response))
         self._write_base_trace(response, trace_id=trace_id, phase="direct")
         try:
             data = json.loads(response.content)

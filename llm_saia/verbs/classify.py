@@ -1,7 +1,14 @@
 """CLASSIFY verb: Classify text into categories."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from llm_saia.core.types import ClassifyResult
 from llm_saia.core.verb import Verb
+
+if TYPE_CHECKING:
+    from llm_saia.core.conversation import ConversationLike
 
 
 class Classify(Verb):
@@ -12,10 +19,12 @@ class Classify(Verb):
         text: str,
         categories: list[str],
         criteria: str | None = None,
+        *,
+        conversation: ConversationLike | None = None,
     ) -> ClassifyResult:
         """Classify text into one of the specified categories."""
         cats = ", ".join(categories)
         prompt = f"Classify this text into one of: {cats}\n\nText: {text}"
         if criteria:
             prompt += f"\n\nCriteria: {criteria}"
-        return await self._complete_structured(prompt, ClassifyResult)
+        return await self._complete_structured(prompt, ClassifyResult, conversation=conversation)
