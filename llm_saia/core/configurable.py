@@ -60,6 +60,11 @@ class Configurable(ABC):
         Useful for benchmarking scenarios where each test case defines its own
         function schemas (e.g., BFCL). The original instance is unmodified.
 
+        Note:
+            Like all ``with_*()`` methods, arguments are stored by reference
+            (shallow ``dataclasses.replace``). Callers must not mutate the
+            *tools* list after passing it.
+
         Args:
             tools: Tool definitions to use for this call.
             executor: Optional executor to replace the existing one. If None,

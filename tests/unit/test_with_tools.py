@@ -100,6 +100,11 @@ class TestWithTools:
         """Overridden executor is invoked when LLM makes a tool call."""
         backend = MockBackend()
         saia = make_saia(backend, tools=[_make_tool("calc")], executor=_original_executor)
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            calls.append((name, args))
+            return f"override:{name}"
 
         # Queue a tool call response, then a final text response
         backend.queue_response(
@@ -109,13 +114,13 @@ class TestWithTools:
                 finish_reason="tool_use",
             )
         )
-        backend.set_complete_response("result: override:calc")
+        backend.set_complete_response("done")
 
-        result = await saia.with_tools([_make_tool("calc")], executor=_override_executor).ask(
+        await saia.with_tools([_make_tool("calc")], executor=tracking_executor).ask(
             "artifact", "question"
         )
 
-        assert "override:calc" in result
+        assert calls == [("calc", {"x": 1})]
 
     def test_empty_tools_clears(self) -> None:
         """with_tools([]) effectively removes tools."""
