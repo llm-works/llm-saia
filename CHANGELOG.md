@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `with_tools(tools, executor=)` fluent API for per-call tool override (enables benchmarking
+  scenarios like BFCL where each test case defines its own function schemas)
 - `ConversationLike` protocol for pluggable conversation management (compaction, persistence)
 - `ListConversation` default implementation of `ConversationLike`
 - `Role` enum for message roles (`USER`, `ASSISTANT`, `SYSTEM`, `TOOL`)
