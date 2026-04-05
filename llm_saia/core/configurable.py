@@ -7,6 +7,9 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from .backend import ToolDef
     from .config import CallOptions, Config
     from .guard import OutputGuard
 
@@ -44,6 +47,33 @@ class Configurable(ABC):
         base_call = self._config.call or DEFAULT_CALL
         new_call = replace(base_call, **kwargs)
         return self._with_config(call=new_call)
+
+    # --- Config-Level Overrides ---
+
+    def with_tools(
+        self,
+        tools: list[ToolDef],
+        executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
+    ) -> Self:
+        """Return new instance with different tool definitions.
+
+        Useful for benchmarking scenarios where each test case defines its own
+        function schemas (e.g., BFCL). The original instance is unmodified.
+
+        Note:
+            Like all ``with_*()`` methods, arguments are stored by reference
+            (shallow ``dataclasses.replace``). Callers must not mutate the
+            *tools* list after passing it.
+
+        Args:
+            tools: Tool definitions to use for this call.
+            executor: Optional executor to replace the existing one. If None,
+                keeps the current executor.
+        """
+        kwargs: dict[str, Any] = {"tools": tools}
+        if executor is not None:
+            kwargs["executor"] = executor
+        return self._with_config(**kwargs)
 
     # --- Call Options Overrides ---
 
