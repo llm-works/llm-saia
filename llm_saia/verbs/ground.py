@@ -23,6 +23,7 @@ class Ground(Verb):
             # Snapshot conversation before the loop so each source starts from
             # the same baseline (no cross-source context leakage).
             baseline = self._fork_conversation(conversation)
+            baseline_len = len(baseline.as_messages()) if baseline is not None else 0
             results: list[Evidence] = []
             for source in sources:
                 prompt = (
@@ -35,7 +36,12 @@ class Ground(Verb):
                         prompt, Evidence, conversation=source_conv, _trace=trace
                     )
                 )
-                self._merge_conversation(conversation, source_conv)
+                # Merge new messages from this source into the caller's conversation.
+                # Use baseline_len (not target length) as offset since each source_conv
+                # is forked from the same baseline snapshot.
+                if conversation is not None and source_conv is not None:
+                    for msg in source_conv.as_messages()[baseline_len:]:
+                        conversation.append(msg)
             return VerbResult(value=results, trace=trace)
         finally:
             self._emit_verb_trace(trace)
