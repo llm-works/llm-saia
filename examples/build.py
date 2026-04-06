@@ -43,7 +43,7 @@ async def main() -> None:
         saia = SAIA.builder().backend(backend).build()
 
         # Break into subtasks
-        subtasks = await saia.decompose(TASK)
+        subtasks = (await saia.decompose(TASK)).value
         print(f"{C.CYAN}[decompose]{C.RESET} {len(subtasks)} subtasks")
         for t in subtasks:
             print(f"  - {t}")
@@ -52,15 +52,17 @@ async def main() -> None:
         print(f"\n{C.GREEN}[instruct]{C.RESET}")
         parts = []
         for t in subtasks:
-            code = await saia.instruct(f"Write Python for: {t}")
+            code = (await saia.instruct(f"Write Python for: {t}")).value
             parts.append(code)
             print(f"  ✓ {t[:50]}")
 
         # Combine into final result
-        final = await saia.ask(
-            "Combine into one script:\n\n" + "\n---\n".join(parts),
-            "Output only working Python code",
-        )
+        final = (
+            await saia.ask(
+                "Combine into one script:\n\n" + "\n---\n".join(parts),
+                "Output only working Python code",
+            )
+        ).value
         print(f"\n{C.MAGENTA}[ask]{C.RESET}\n{final}")
 
 

@@ -1,37 +1,48 @@
-"""Tests for iteration trace: ID generation, Tracer, and Complete integration."""
+"""Tests for tree-structured trace: data model, Tracer, and verb integration."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 
 import pytest
 
 from llm_saia.core.backend import AgentResponse, ToolDef
-from llm_saia.core.controller import Action, ActionType, Observation
 from llm_saia.core.conversation import ToolCall
-from llm_saia.core.trace import Tracer, TracerFactory, build_base_trace, build_trace
-from llm_saia.core.types import ClassifyResult, DecisionReason
-from llm_saia.core.verb import Verb
+from llm_saia.core.trace import (
+    GuardOutcome,
+    LLMCall,
+    Step,
+    ToolOutcome,
+    Tracer,
+    TracerFactory,
+    VerbTrace,
+    _generate_id,
+    build_step_from_response,
+)
 from tests.unit.conftest import MockBackend, make_saia
 
 pytestmark = pytest.mark.unit
 
 
-class TestCallId:
-    """Tests for call_id generation."""
+# ---------------------------------------------------------------------------
+# ID generation
+# ---------------------------------------------------------------------------
 
-    def test_generate_id_is_8_hex_chars(self) -> None:
+
+class TestGenerateId:
+    """Tests for trace ID generation."""
+
+    def test_is_8_hex_chars(self) -> None:
         """Generated IDs are 8-character hex strings."""
-        id1 = Verb._generate_id()
+        id1 = _generate_id()
         assert len(id1) == 8
         int(id1, 16)  # raises if not valid hex
 
-    def test_generate_id_is_unique(self) -> None:
+    def test_is_unique(self) -> None:
         """Consecutive IDs are unique."""
-        ids = {Verb._generate_id() for _ in range(100)}
+        ids = {_generate_id() for _ in range(100)}
         assert len(ids) == 100
 
     async def test_chat_attaches_call_id(self, mock_backend: MockBackend) -> None:
@@ -45,112 +56,175 @@ class TestCallId:
         assert len(response.call_id) == 8
 
 
-class TestBuildTrace:
-    """Tests for build_trace() helper."""
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
 
-    def test_builds_from_observation_and_action(self) -> None:
-        """build_trace produces an IterationTrace with correct fields."""
-        response = AgentResponse(
-            content="I'll use search",
-            tool_calls=[],
-            input_tokens=100,
-            output_tokens=20,
-            finish_reason="stop",
-            call_id="abc12345",
-        )
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=3,
-            task="do something",
-            tool_names=["search"],
-            terminal_tool=None,
-        )
-        action = Action(
-            ActionType.INSTRUCT,
-            DecisionReason.TEXT_TOOL_PATTERN,
-            message="Please use tools",
-        )
 
-        trace = build_trace(
-            obs,
-            action,
-            response,
-            trace_id="task001",
-            verb="Complete",
-            phase="loop",
-            request_id="user-req-1",
-            classifier_called=False,
-            iterations_since_nudge=2,
-            consecutive_degenerate=1,
+class TestLLMCall:
+    """Tests for LLMCall dataclass."""
+
+    def test_defaults(self) -> None:
+        """LLMCall has sensible defaults."""
+        call = LLMCall()
+        assert call.call_id == ""
+        assert call.input_tokens == 0
+        assert call.output_tokens == 0
+        assert call.finish_reason is None
+
+    def test_construction(self) -> None:
+        """LLMCall stores provided values."""
+        call = LLMCall(call_id="abc", input_tokens=100, output_tokens=50, finish_reason="stop")
+        assert call.call_id == "abc"
+        assert call.input_tokens == 100
+
+
+class TestGuardOutcome:
+    """Tests for GuardOutcome dataclass."""
+
+    def test_passed(self) -> None:
+        """GuardOutcome for a passing guard."""
+        g = GuardOutcome(name="max_length", passed=True, attempts=1)
+        assert g.passed
+        assert g.error is None
+
+    def test_failed(self) -> None:
+        """GuardOutcome for a failing guard."""
+        g = GuardOutcome(name="max_length", passed=False, attempts=3, error="too long")
+        assert not g.passed
+        assert g.attempts == 3
+
+
+class TestStep:
+    """Tests for Step dataclass."""
+
+    def test_defaults(self) -> None:
+        """Step has sensible defaults."""
+        s = Step()
+        assert s.type == "step"
+        assert s.phase == ""
+        assert s.parsed is True
+        assert s.guards == []
+        assert s.tools == []
+        assert s.action is None
+
+    def test_attempt_step(self) -> None:
+        """Step for an initial attempt."""
+        s = Step(
+            phase="attempt",
+            trace_id="t1",
+            verb="Extract",
+            llm_call=LLMCall(call_id="c1", input_tokens=100, output_tokens=50),
         )
+        assert s.phase == "attempt"
+        assert s.llm_call.call_id == "c1"
 
-        assert trace.trace_id == "task001"
-        assert trace.call_id == "abc12345"
-        assert trace.verb == "Complete"
-        assert trace.phase == "loop"
-        assert trace.request_id == "user-req-1"
-        assert trace.iteration == 3
-        assert trace.has_content is True
-        assert trace.has_tool_calls is False
-        assert trace.tool_call_count == 0
-        assert trace.input_tokens == 100
-        assert trace.output_tokens == 20
-        assert trace.action == "instruct"
-        assert trace.reason == "text_tool_pattern"
-        assert trace.nudge_preview == "Please use tools"
-        assert trace.iterations_since_nudge == 2
-        assert trace.consecutive_degenerate == 1
-        assert trace.classifier_called is False
+    def test_parse_retry_step(self) -> None:
+        """Step for a parse retry."""
+        s = Step(phase="parse_retry", parsed=False, parse_error="invalid JSON")
+        assert not s.parsed
+        assert s.parse_error == "invalid JSON"
 
-    def test_captures_tool_names(self) -> None:
-        """build_trace captures tool names from tool_calls."""
-        response = AgentResponse(
-            content="",
-            tool_calls=[
-                ToolCall(id="c1", name="search", arguments={}),
-                ToolCall(id="c2", name="read_file", arguments={"path": "/tmp"}),
+    def test_iteration_step_with_tools(self) -> None:
+        """Step for a loop iteration with tool calls."""
+        s = Step(
+            phase="iteration",
+            tools=[
+                ToolOutcome(name="search", call_id="c1", success=True),
+                ToolOutcome(name="read", call_id="c2", success=False, error="not found"),
             ],
-            call_id="def67890",
+            action="execute_tools",
+            reason="has_tool_calls",
         )
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=0,
-            task="t",
-            tool_names=["search", "read_file"],
-            terminal_tool=None,
+        assert len(s.tools) == 2
+        assert s.tools[1].success is False
+        assert s.action == "execute_tools"
+
+
+class TestVerbTrace:
+    """Tests for VerbTrace dataclass and derived properties."""
+
+    def _make_trace(self) -> VerbTrace:
+        """Build a sample trace with 3 steps for testing aggregates."""
+        return VerbTrace(
+            verb="Extract",
+            trace_id="t1",
+            steps=[
+                Step(
+                    phase="attempt",
+                    llm_call=LLMCall(input_tokens=100, output_tokens=30),
+                    parsed=False,
+                    parse_error="bad json",
+                ),
+                Step(
+                    phase="parse_retry",
+                    llm_call=LLMCall(input_tokens=150, output_tokens=40),
+                    parsed=True,
+                ),
+                Step(
+                    phase="guard_retry",
+                    llm_call=LLMCall(input_tokens=160, output_tokens=25),
+                    guards=[GuardOutcome(name="max_length", passed=True, attempts=2)],
+                ),
+            ],
         )
-        action = Action(ActionType.EXECUTE_TOOLS, DecisionReason.HAS_TOOL_CALLS)
 
-        trace = build_trace(obs, action, response, trace_id="t1")
-        assert trace.tool_names_used == ["search", "read_file"]
-        assert trace.tool_call_count == 2
-        assert trace.has_tool_calls is True
+    def test_total_llm_calls(self) -> None:
+        """total_llm_calls counts steps."""
+        trace = self._make_trace()
+        assert trace.total_llm_calls == 3
 
-    def test_truncates_long_content(self) -> None:
-        """Content preview is truncated to 200 chars."""
-        long_content = "x" * 500
-        response = AgentResponse(content=long_content, tool_calls=[], call_id="r1")
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=0,
-            task="t",
-            tool_names=[],
-            terminal_tool=None,
-        )
-        action = Action(ActionType.SKIP, DecisionReason.BACKOFF)
+    def test_parse_retries(self) -> None:
+        """parse_retries counts parse_retry steps."""
+        trace = self._make_trace()
+        assert trace.parse_retries == 1
 
-        trace = build_trace(obs, action, response, trace_id="t1")
-        assert len(trace.content_preview) == 200
+    def test_guard_retries(self) -> None:
+        """guard_retries counts guard_retry steps."""
+        trace = self._make_trace()
+        assert trace.guard_retries == 1
+
+    def test_total_input_tokens(self) -> None:
+        """total_input_tokens sums across steps."""
+        trace = self._make_trace()
+        assert trace.total_input_tokens == 410  # 100 + 150 + 160
+
+    def test_total_output_tokens(self) -> None:
+        """total_output_tokens sums across steps."""
+        trace = self._make_trace()
+        assert trace.total_output_tokens == 95  # 30 + 40 + 25
+
+    def test_total_tokens(self) -> None:
+        """total_tokens is input + output."""
+        trace = self._make_trace()
+        assert trace.total_tokens == 505
+
+    def test_empty_trace(self) -> None:
+        """Empty trace has zero aggregates."""
+        trace = VerbTrace()
+        assert trace.total_llm_calls == 0
+        assert trace.parse_retries == 0
+        assert trace.total_tokens == 0
+
+    def test_add_step(self) -> None:
+        """add_step appends to steps list."""
+        trace = VerbTrace()
+        step = Step(phase="attempt")
+        trace.add_step(step)
+        assert len(trace.steps) == 1
+        assert trace.steps[0] is step
 
 
-class TestBuildBaseTrace:
-    """Tests for build_base_trace() helper."""
+# ---------------------------------------------------------------------------
+# Step builders
+# ---------------------------------------------------------------------------
 
-    def test_builds_complete_action_for_text_response(self) -> None:
-        """build_base_trace sets action='complete' when no tool calls."""
+
+class TestBuildStepFromResponse:
+    """Tests for build_step_from_response helper."""
+
+    def test_builds_from_text_response(self) -> None:
+        """Builds a Step from a plain text response."""
         response = AgentResponse(
             content="hello",
             tool_calls=[],
@@ -159,146 +233,127 @@ class TestBuildBaseTrace:
             finish_reason="end_turn",
             call_id="c1",
         )
-        trace = build_base_trace(
-            response,
-            trace_id="t1",
-            verb="Ask",
-            phase="direct",
-            request_id="req-1",
-        )
-        assert trace.trace_id == "t1"
-        assert trace.call_id == "c1"
-        assert trace.verb == "Ask"
-        assert trace.phase == "direct"
-        assert trace.request_id == "req-1"
-        assert trace.action == "complete"
-        assert trace.reason == "base_trace"
-        assert trace.has_content is True
-        assert trace.has_tool_calls is False
+        step = build_step_from_response(response, phase="attempt", trace_id="t1", verb="Ask")
+        assert step.phase == "attempt"
+        assert step.trace_id == "t1"
+        assert step.verb == "Ask"
+        assert step.llm_call.call_id == "c1"
+        assert step.llm_call.input_tokens == 50
+        assert step.llm_call.output_tokens == 10
+        assert step.llm_call.finish_reason == "end_turn"
+        assert step.tools == []
 
-    def test_builds_execute_tools_action_for_tool_response(self) -> None:
-        """build_base_trace sets action='execute_tools' when tool calls present."""
+    def test_builds_from_tool_response(self) -> None:
+        """Builds a Step from a response with tool calls."""
         response = AgentResponse(
             content="",
-            tool_calls=[ToolCall(id="c1", name="search", arguments={})],
+            tool_calls=[
+                ToolCall(id="tc1", name="search", arguments={"q": "test"}),
+                ToolCall(id="tc2", name="read", arguments={}),
+            ],
             call_id="c2",
         )
-        trace = build_base_trace(response, trace_id="t2", verb="Ask", phase="loop")
-        assert trace.action == "execute_tools"
-        assert trace.tool_names_used == ["search"]
-        assert trace.tool_call_count == 1
+        step = build_step_from_response(response, phase="iteration", trace_id="t2", verb="Ask")
+        assert len(step.tools) == 2
+        assert step.tools[0].name == "search"
+        assert step.tools[0].call_id == "tc1"
+        assert step.tools[1].name == "read"
 
-    def test_iteration_tracking(self) -> None:
-        """build_base_trace tracks iteration number."""
-        response = AgentResponse(content="hi", tool_calls=[], call_id="c3")
-        trace = build_base_trace(response, trace_id="t3", iteration=5, verb="Verify")
-        assert trace.iteration == 5
 
-    def test_no_controller_fields(self) -> None:
-        """build_base_trace leaves controller internals as None."""
-        response = AgentResponse(content="hi", tool_calls=[], call_id="c4")
-        trace = build_base_trace(response, trace_id="t4", verb="Ask")
-        assert trace.iterations_since_nudge is None
-        assert trace.consecutive_degenerate is None
-        assert trace.pending_terminal is None
-        assert trace.classifier_called is False
+# ---------------------------------------------------------------------------
+# Tracer infrastructure
+# ---------------------------------------------------------------------------
 
 
 class TestTracer:
     """Tests for Tracer JSONL output."""
 
-    def test_writes_jsonl(self, tmp_path: Path) -> None:
-        """Tracer produces valid JSONL via file factory."""
+    def test_writes_step_as_jsonl(self, tmp_path: Path) -> None:
+        """Tracer serializes a Step to JSONL."""
         path = tmp_path / "trace.jsonl"
-        response = AgentResponse(content="hello", tool_calls=[], call_id="r1")
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=0,
-            task="t",
-            tool_names=[],
-            terminal_tool=None,
+        step = Step(
+            phase="attempt",
+            trace_id="t1",
+            verb="Ask",
+            llm_call=LLMCall(call_id="c1", input_tokens=100, output_tokens=20),
         )
-        action = Action(ActionType.SKIP, DecisionReason.BACKOFF)
-        record = build_trace(obs, action, response, trace_id="t1")
-
         with TracerFactory.file(path) as tracer:
-            tracer.write(record)
+            tracer.write(step)
 
         lines = path.read_text().strip().split("\n")
         assert len(lines) == 1
         data = json.loads(lines[0])
+        assert data["type"] == "step"
+        assert data["phase"] == "attempt"
         assert data["trace_id"] == "t1"
-        assert data["call_id"] == "r1"
-        assert data["action"] == "skip"
+        assert data["llm_call"]["call_id"] == "c1"
+
+    def test_writes_verb_trace_as_jsonl(self, tmp_path: Path) -> None:
+        """Tracer serializes a VerbTrace to JSONL."""
+        path = tmp_path / "trace.jsonl"
+        trace = VerbTrace(
+            verb="Extract",
+            trace_id="t1",
+            steps=[
+                Step(phase="attempt", llm_call=LLMCall(call_id="c1")),
+            ],
+        )
+        with TracerFactory.file(path) as tracer:
+            tracer.write(trace)
+
+        data = json.loads(path.read_text().strip())
+        assert data["type"] == "verb_trace"
+        assert data["verb"] == "Extract"
+        assert len(data["steps"]) == 1
 
     def test_writes_metadata_header(self, tmp_path: Path) -> None:
         """Metadata is written as the first line via start()."""
         path = tmp_path / "trace.jsonl"
-        response = AgentResponse(content="hi", tool_calls=[], call_id="r2")
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=0,
-            task="t",
-            tool_names=[],
-            terminal_tool=None,
-        )
-        action = Action(ActionType.COMPLETE, DecisionReason.CLASSIFIED_COMPLETE, output="result")
-        record = build_trace(obs, action, response, trace_id="t2")
-
+        step = Step(phase="attempt", trace_id="t1")
         with TracerFactory.file(path) as tracer:
-            tracer.start({"trace_id": "t2", "request_id": "u1"})
-            tracer.write(record)
+            tracer.start({"trace_id": "t1", "request_id": "u1"})
+            tracer.write(step)
 
         lines = path.read_text().strip().split("\n")
         assert len(lines) == 2
         meta = json.loads(lines[0])
-        assert meta["_meta"]["trace_id"] == "t2"
-        assert meta["_meta"]["request_id"] == "u1"
-        data = json.loads(lines[1])
-        assert data["trace_id"] == "t2"
+        assert meta["_meta"]["trace_id"] == "t1"
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         """TracerFactory.file creates parent directories if needed."""
         path = tmp_path / "sub" / "dir" / "trace.jsonl"
-        response = AgentResponse(content="", tool_calls=[], call_id="r3")
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=0,
-            task="t",
-            tool_names=[],
-            terminal_tool=None,
-        )
-        action = Action(ActionType.SKIP, DecisionReason.BACKOFF)
-        record = build_trace(obs, action, response, trace_id="t3")
-
+        step = Step(phase="attempt")
         with TracerFactory.file(path) as tracer:
-            tracer.write(record)
-
+            tracer.write(step)
         assert path.exists()
 
     def test_stream_tracer(self) -> None:
         """TracerFactory.stream writes to a caller-provided stream."""
         buf = StringIO()
-        response = AgentResponse(content="hi", tool_calls=[], call_id="r4")
-        obs = Observation(
-            response=response,
-            messages=[],
-            iteration=0,
-            task="t",
-            tool_names=[],
-            terminal_tool=None,
-        )
-        action = Action(ActionType.SKIP, DecisionReason.BACKOFF)
-        record = build_trace(obs, action, response, trace_id="t4")
-
+        step = Step(phase="attempt", trace_id="t1")
         tracer = TracerFactory.stream(buf)
-        tracer.write(record)
+        tracer.write(step)
 
         data = json.loads(buf.getvalue().strip())
-        assert data["trace_id"] == "t4"
+        assert data["trace_id"] == "t1"
+
+    def test_callback_tracer(self) -> None:
+        """TracerFactory.callback calls function with dict."""
+        records: list[dict] = []
+        tracer = TracerFactory.callback(records.append)
+        step = Step(phase="attempt", trace_id="t1")
+        tracer.write(step)
+
+        assert len(records) == 1
+        assert records[0]["type"] == "step"
+        assert records[0]["trace_id"] == "t1"
+
+    def test_callback_tracer_start(self) -> None:
+        """Callback tracer forwards metadata."""
+        records: list[dict] = []
+        tracer = TracerFactory.callback(records.append)
+        tracer.start({"trace_id": "t1"})
+        assert records[0]["_meta"]["trace_id"] == "t1"
 
     def test_close_does_not_close_borrowed_writer(self) -> None:
         """Tracer with owns_writer=False does not close the writer."""
@@ -315,6 +370,11 @@ class TestTracer:
         assert path.exists()
 
 
+# ---------------------------------------------------------------------------
+# Verb integration (basic — detailed integration tested after Step 2)
+# ---------------------------------------------------------------------------
+
+
 class TestCompleteTrace:
     """Tests for trace integration in the Complete verb."""
 
@@ -327,8 +387,8 @@ class TestCompleteTrace:
         )
         mock_backend.set_complete_response("done")
         result = await saia.complete("do something")
-        assert result.trace_id
-        assert len(result.trace_id) == 8
+        assert result.trace.trace_id
+        assert len(result.trace.trace_id) == 8
 
     async def test_complete_carries_request_id(self, mock_backend: MockBackend) -> None:
         """request_id from config is carried through to the result."""
@@ -340,171 +400,7 @@ class TestCompleteTrace:
         saia = saia.with_request_id("ext-984821")
         mock_backend.set_complete_response("done")
         result = await saia.complete("do something")
-        assert result.request_id == "ext-984821"
-
-    async def test_complete_writes_trace(self, mock_backend: MockBackend, tmp_path: Path) -> None:
-        """Complete writes JSONL trace when tracer is provided."""
-        saia = make_saia(
-            mock_backend,
-            tools=[ToolDef(name="search", description="s", parameters={})],
-            executor=lambda n, a: "result",
-        )
-        saia = saia.with_request_id("u1")
-        mock_backend.set_complete_response("done")
-        trace_path = tmp_path / "trace.jsonl"
-        tracer = TracerFactory.file(trace_path)
-        result = await saia.complete("do something", tracer=tracer)
-
-        assert trace_path.exists()
-        lines = trace_path.read_text().strip().split("\n")
-
-        # First line is metadata
-        meta = json.loads(lines[0])
-        assert meta["_meta"]["trace_id"] == result.trace_id
-        assert meta["_meta"]["request_id"] == "u1"
-
-        # At least one iteration trace
-        assert len(lines) >= 2
-        data = json.loads(lines[1])
-        assert data["trace_id"] == result.trace_id
-        assert data["call_id"]  # should be set
-        assert data["iteration"] == 0
-        assert data["verb"] == "Complete"
-        assert data["phase"] == "loop"
-        assert data["request_id"] == "u1"
-
-    async def test_complete_uses_config_tracer(
-        self,
-        mock_backend: MockBackend,
-    ) -> None:
-        """Complete uses config tracer when no per-call tracer given."""
-        buf = StringIO()
-        tracer = TracerFactory.stream(buf)
-        saia = make_saia(
-            mock_backend,
-            tools=[ToolDef(name="search", description="s", parameters={})],
-            executor=lambda n, a: "result",
-        )
-        saia._config = replace(saia._config, tracer=tracer)
-        saia._init_verbs()
-        mock_backend.set_complete_response("done")
-        result = await saia.complete("do something")
-
-        output = buf.getvalue().strip()
-        assert output  # something was written
-        lines = output.split("\n")
-        meta = json.loads(lines[0])
-        assert meta["_meta"]["trace_id"] == result.trace_id
-
-    async def test_no_trace_without_tracer(self, mock_backend: MockBackend) -> None:
-        """No trace written when no tracer configured."""
-        saia = make_saia(
-            mock_backend,
-            tools=[ToolDef(name="search", description="s", parameters={})],
-            executor=lambda n, a: "result",
-        )
-        mock_backend.set_structured_response(
-            ClassifyResult, ClassifyResult(category="completed", confidence=0.9, reason="done")
-        )
-        mock_backend.set_complete_response("done")
-        result = await saia.complete("do something")
-        assert result.completed
-
-
-class TestBaseVerbTrace:
-    """Tests for universal tracing in non-Complete verbs."""
-
-    async def test_ask_traces_with_config_tracer(self, mock_backend: MockBackend) -> None:
-        """Ask verb writes trace records when config tracer is set."""
-        buf = StringIO()
-        tracer = TracerFactory.stream(buf)
-        saia = make_saia(mock_backend)
-        saia._config = replace(saia._config, tracer=tracer)
-        saia._init_verbs()
-        mock_backend.set_complete_response("The answer is 42")
-
-        await saia.ask("question", "context")
-
-        output = buf.getvalue().strip()
-        assert output
-        data = json.loads(output)
-        assert data["verb"] == "Ask"
-        assert data["phase"] == "direct"
-        assert data["action"] == "complete"
-        assert data["trace_id"]
-        assert data["call_id"]
-
-    async def test_verify_traces_with_config_tracer(self, mock_backend: MockBackend) -> None:
-        """Verify verb writes trace records when config tracer is set."""
-        buf = StringIO()
-        tracer = TracerFactory.stream(buf)
-        saia = make_saia(mock_backend)
-        saia._config = replace(saia._config, tracer=tracer)
-        saia._init_verbs()
-
-        await saia.verify("claim", "criteria")
-
-        output = buf.getvalue().strip()
-        assert output
-        data = json.loads(output)
-        assert data["verb"] == "Verify"
-        assert data["phase"] == "direct"
-
-    async def test_no_trace_without_config_tracer(self, mock_backend: MockBackend) -> None:
-        """Non-Complete verbs don't trace when no tracer configured."""
-        saia = make_saia(mock_backend)
-        mock_backend.set_complete_response("The answer")
-
-        # Should not raise — no tracer to write to
-        await saia.ask("question", "context")
-
-    async def test_base_trace_includes_request_id(self, mock_backend: MockBackend) -> None:
-        """Base verb trace includes request_id from config."""
-        buf = StringIO()
-        tracer = TracerFactory.stream(buf)
-        saia = make_saia(mock_backend)
-        # Update call options with request_id and add tracer to config
-        new_call = replace(saia._config.call, request_id="req-42")
-        saia._config = replace(saia._config, tracer=tracer, call=new_call)
-        saia._init_verbs()
-        mock_backend.set_complete_response("The answer")
-
-        await saia.ask("question", "context")
-
-        data = json.loads(buf.getvalue().strip())
-        assert data["request_id"] == "req-42"
-
-    async def test_loop_path_traces_each_iteration(self, mock_backend: MockBackend) -> None:
-        """Verb _loop() traces each iteration when config tracer is set."""
-        buf = StringIO()
-        tracer = TracerFactory.stream(buf)
-        saia = make_saia(
-            mock_backend,
-            tools=[ToolDef(name="search", description="s", parameters={})],
-            executor=lambda n, a: "result",
-        )
-        saia._config = replace(saia._config, tracer=tracer)
-        saia._init_verbs()
-
-        # Queue: tool call response, then text response
-        mock_backend.queue_response(
-            AgentResponse(
-                content="searching...",
-                tool_calls=[ToolCall(id="c1", name="search", arguments={"q": "test"})],
-                finish_reason="tool_use",
-            )
-        )
-        mock_backend.set_complete_response("found it")
-
-        await saia.ask("find something", "context")
-
-        lines = buf.getvalue().strip().split("\n")
-        assert len(lines) >= 2  # At least 2 iterations
-        first = json.loads(lines[0])
-        assert first["phase"] == "loop"
-        assert first["verb"] == "Ask"
-        second = json.loads(lines[1])
-        assert second["phase"] == "loop"
+        assert result.trace.request_id == "ext-984821"
 
 
 class TestWithRequestId:
@@ -535,4 +431,4 @@ class TestWithRequestId:
         tagged = saia.with_request_id("ext-123")
         mock_backend.set_complete_response("done")
         result = await tagged.complete("do something")
-        assert result.request_id == "ext-123"
+        assert result.trace.request_id == "ext-123"

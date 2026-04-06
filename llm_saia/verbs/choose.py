@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..core.types import ChooseResult
+from ..core.types import ChooseResult, VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -21,12 +21,19 @@ class Choose(Verb):
         criteria: str | None = None,
         *,
         conversation: ConversationLike | None = None,
-    ) -> ChooseResult:
+    ) -> VerbResult[ChooseResult]:
         """Select one option from the given choices."""
-        opts = "\n".join(f"- {o}" for o in options)
-        prompt = f"Choose one of these options:\n{opts}"
-        if context:
-            prompt += f"\n\nContext: {context}"
-        if criteria:
-            prompt += f"\n\nCriteria: {criteria}"
-        return await self._complete_structured(prompt, ChooseResult, conversation=conversation)
+        trace = self._init_verb_trace()
+        try:
+            opts = "\n".join(f"- {o}" for o in options)
+            prompt = f"Choose one of these options:\n{opts}"
+            if context:
+                prompt += f"\n\nContext: {context}"
+            if criteria:
+                prompt += f"\n\nCriteria: {criteria}"
+            value = await self._complete_structured(
+                prompt, ChooseResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

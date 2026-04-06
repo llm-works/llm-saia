@@ -44,20 +44,20 @@ async def main(claim: str) -> None:
         print(f"Claim: {C.YELLOW}{claim}{C.RESET}\n")
 
         # Verify - is this claim accurate?
-        result = await saia.verify(claim, "factually accurate and not misleading")
+        result = (await saia.verify(claim, "factually accurate and not misleading")).value
         status = f"{C.GREEN}✓ PASS{C.RESET}" if result.passed else f"{C.RED}✗ FAIL{C.RESET}"
         print(f"{C.BLUE}[verify]{C.RESET} {status}")
         print(f"   {result.reason[:150]}\n")
 
         # Critique the verification
         print(f"{C.YELLOW}[critique]{C.RESET} questioning claim, weaknesses:")
-        critique = await saia.critique(claim)
+        critique = (await saia.critique(claim)).value
         for w in critique.weaknesses[:3]:
             print(f"   - {w}")
         print()
 
         # Refine - fix the claim
-        refined = await saia.refine(claim, "\n".join(critique.weaknesses))
+        refined = (await saia.refine(claim, "\n".join(critique.weaknesses))).value
         print(f"{C.MAGENTA}[refine]{C.RESET} improved claim:")
         print(f"   {C.GREEN}{refined}{C.RESET}")
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..core.types import VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -23,8 +24,14 @@ class Decompose(Verb):
 
     async def __call__(
         self, task: str, *, conversation: ConversationLike | None = None
-    ) -> list[str]:
+    ) -> VerbResult[list[str]]:
         """Break down a task into a list of subtasks."""
-        prompt = f"Break down this task into subtasks:\n\n{task}"
-        result = await self._complete_structured(prompt, DecomposeResult, conversation=conversation)
-        return result.subtasks
+        trace = self._init_verb_trace()
+        try:
+            prompt = f"Break down this task into subtasks:\n\n{task}"
+            result = await self._complete_structured(
+                prompt, DecomposeResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=result.subtasks, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

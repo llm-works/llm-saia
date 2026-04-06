@@ -40,7 +40,7 @@ class TestConversationThreadingText:
         ask = Ask(make_config(backend))
         result = await ask("artifact", "question?", conversation=conv)
 
-        assert result == "the answer"
+        assert result.value == "the answer"
         msgs = conv.as_messages()
         assert len(msgs) == 2
         assert msgs[0].role == Role.USER
@@ -71,7 +71,7 @@ class TestConversationThreadingText:
         instruct = Instruct(make_config(backend))
         result = await instruct("directive")
 
-        assert result == "result"
+        assert result.value == "result"
         # Backend gets a reference to the live internal list (user + assistant after append)
         assert len(backend.last_messages) == 2
         assert backend.last_messages[0].role == Role.USER
@@ -83,7 +83,7 @@ class TestConversationThreadingText:
         constrain = Constrain(make_config(backend))
         result = await constrain("text", [], conversation=conv)
 
-        assert result == "text"
+        assert result.value == "text"
         assert len(conv.as_messages()) == 0
 
 
@@ -111,7 +111,7 @@ class TestConversationThreadingStructured:
         extract = Extract(make_config(backend))
         result = await extract("content", SimpleResult, conversation=conv)
 
-        assert result.value == "extracted"
+        assert result.value.value == "extracted"
         msgs = conv.as_messages()
         assert len(msgs) == 2
         assert msgs[0].role == Role.USER
@@ -194,7 +194,7 @@ class TestParseRetryIsolation:
         extract = Extract(make_config(backend, call=call))
         result = await extract("content", SimpleResult, conversation=conv)
 
-        assert result.value == "success"
+        assert result.value.value == "success"
         # Only the successful exchange should be in the conversation
         # (not the failed attempt's user+assistant pair)
         msgs = conv.as_messages()
@@ -212,7 +212,7 @@ class TestParseRetryIsolation:
         extract = Extract(make_config(backend, call=call))
         result = await extract("content", SimpleResult)
 
-        assert result.value == "ok"
+        assert result.value.value == "ok"
 
     async def test_retry_preserves_prior_history(self) -> None:
         """Parse retry should still send prior conversation to backend."""
@@ -228,7 +228,7 @@ class TestParseRetryIsolation:
         extract = Extract(make_config(backend, call=call))
         result = await extract("content", SimpleResult, conversation=conv)
 
-        assert result.value == "ok"
+        assert result.value.value == "ok"
         # Conversation should have prior + final exchange only
         msgs = conv.as_messages()
         assert len(msgs) == 4  # 2 prior + 2 final
@@ -282,7 +282,7 @@ class TestGuardRetryConversation:
         instruct = Instruct(make_config(backend, call=call))
         result = await instruct("do something", conversation=conv)
 
-        assert result == "GOOD output"
+        assert result.value == "GOOD output"
         # Conversation should have: initial user+assistant, then guard retry user+assistant
         msgs = conv.as_messages()
         assert len(msgs) == 4

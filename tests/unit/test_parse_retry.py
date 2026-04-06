@@ -90,8 +90,11 @@ class TestParseRetry:
         extract = Extract(make_config(backend, call=call))
         result = await extract("test content", SimpleSchema)
 
-        assert result.value == "success"
-        assert result.score == 42
+        assert result.value.value == "success"
+        assert result.value.score == 42
+        # Trace should capture both attempts (1 failed parse + 1 success)
+        assert result.trace.total_llm_calls == 2
+        assert result.trace.parse_retries == 1
 
     async def test_retry_exhausted_raises_error(self) -> None:
         """Should raise StructuredOutputError when all retries are exhausted."""
@@ -156,8 +159,8 @@ class TestParseRetry:
         extract = Extract(make_config(backend, call=call))
         result = await extract("test content", SimpleSchema)
 
-        assert result.value == "third"
-        assert result.score == 3
+        assert result.value.value == "third"
+        assert result.value.score == 3
         assert backend.call_count == 3
 
     async def test_first_success_no_retry(self) -> None:
@@ -169,9 +172,12 @@ class TestParseRetry:
         extract = Extract(make_config(backend))
         result = await extract("test content", SimpleSchema)
 
-        assert result.value == "immediate"
-        assert result.score == 100
+        assert result.value.value == "immediate"
+        assert result.value.score == 100
         assert backend.call_count == 1  # Only one call made
+        # No retries — single attempt step
+        assert result.trace.total_llm_calls == 1
+        assert result.trace.parse_retries == 0
 
     async def test_with_parse_retries_fluent_api(self) -> None:
         """Test using with_parse_retries() fluent API."""
@@ -189,8 +195,8 @@ class TestParseRetry:
         # Use fluent API to set parse retries
         result = await saia.with_parse_retries(1).extract("content", SimpleSchema)
 
-        assert result.value == "fluent"
-        assert result.score == 5
+        assert result.value.value == "fluent"
+        assert result.value.score == 5
 
     def test_negative_parse_retries_rejected(self) -> None:
         """parse_retries must be non-negative."""

@@ -1,13 +1,12 @@
-"""Iteration trace for automated analysis of controller decision-making.
+"""Tree-structured tracing for verb execution observability.
 
-Writes one JSONL record per iteration, capturing the observation (what the
-controller saw) and the decision (what it did).  Designed for machine
-consumption — load with ``pd.read_json(path, lines=True)`` or feed to an
-LLM for self-analysis.
+Every verb call produces a :class:`VerbTrace` — a tree with :class:`Step`
+children.  Each Step captures one LLM call and what happened because of it
+(parse result, guard outcomes, tool executions, controller decisions).
 
-The ``Tracer`` class serializes traces to JSONL and writes them to a
-pluggable writer (any ``IO[str]``).  Use the factory functions or the
-builder to create a tracer with the desired destination.
+The ``Tracer`` class serializes trace records to JSONL and writes them to a
+pluggable writer (any ``IO[str]``).  Use the factory functions or the builder
+to create a tracer with the desired destination.
 
 Usage via builder::
 
@@ -25,143 +24,206 @@ Usage via factory::
 from __future__ import annotations
 
 import json
+import secrets
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any, Generic, TypeVar
-
-from .backend import AgentResponse
-from .controller import Action, Observation
 
 _P = TypeVar("_P")
 _CONTENT_PREVIEW_LIMIT = 200
 
 
+def _generate_id() -> str:
+    """Generate an 8-character hex ID for trace/call correlation."""
+    return secrets.token_hex(4)
+
+
+# ---------------------------------------------------------------------------
+# Trace data model
+# ---------------------------------------------------------------------------
+
+
 @dataclass
-class IterationTrace:
-    """Single iteration record for the decision trace."""
+class LLMCall:
+    """Token and identity data for a single backend.chat() invocation."""
 
-    # Identity
-    trace_id: str  # Constant across all LLM calls in one verb invocation
-    call_id: str  # Unique per _chat() invocation
-    iteration: int
-    ts: float  # epoch seconds
+    call_id: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    finish_reason: str | None = None
+    duration_ms: int = 0
 
-    # Context
-    verb: str  # Verb class name (e.g. "Complete", "Ask")
-    phase: str  # "loop", "direct", "finalize"
-    request_id: str | None  # User-provided correlation ID
 
-    # Observation — what the controller saw
-    has_content: bool
-    has_tool_calls: bool
-    tool_call_count: int
-    tool_names_used: list[str]
-    input_tokens: int
-    output_tokens: int
-    finish_reason: str | None
-    content_preview: str
+@dataclass
+class GuardOutcome:
+    """Result of applying one output guard."""
 
-    # Decision — what the controller did
-    action: str  # ActionType value
-    reason: str
-    nudge_preview: str | None
+    name: str | None = None
+    passed: bool = True
+    attempts: int = 1
+    error: str | None = None
 
-    # Controller internals (None when not using DefaultController)
+
+@dataclass
+class ToolOutcome:
+    """Result of executing one tool call."""
+
+    name: str = ""
+    call_id: str = ""
+    success: bool = True
+    error: str | None = None
+
+
+@dataclass
+class Step:
+    """One logical step in a verb's execution — one LLM call + its outcome.
+
+    The ``phase`` field discriminates the kind of step:
+
+    - ``"attempt"`` — initial LLM call (text or structured)
+    - ``"parse_retry"`` — retry after StructuredOutputError
+    - ``"guard_retry"`` — retry after guard validation failure
+    - ``"iteration"`` — one iteration of a tool-calling loop
+    - ``"finalize"`` — structured extraction after tool loop completes
+    """
+
+    type: str = "step"
+    phase: str = ""
+    ts: float = 0.0
+    duration_ms: int = 0
+    trace_id: str = ""
+    verb: str = ""
+
+    # LLM call data
+    llm_call: LLMCall = field(default_factory=LLMCall)
+
+    # Parse outcome (structured verbs)
+    parsed: bool = True
+    parse_error: str | None = None
+
+    # Guard outcomes
+    guards: list[GuardOutcome] = field(default_factory=list)
+
+    # Tool outcomes
+    tools: list[ToolOutcome] = field(default_factory=list)
+
+    # Controller decision (Complete verb)
+    action: str | None = None
+    reason: str | None = None
+    nudge_preview: str | None = None
+
+    # Controller internals (Complete verb, DefaultController)
     iterations_since_nudge: int | None = None
     consecutive_degenerate: int | None = None
     pending_terminal: bool | None = None
-
-    # Cost tracking
     classifier_called: bool = False
 
 
-def build_trace(
-    obs: Observation,
-    action: Action,
-    response: AgentResponse,
-    *,
-    trace_id: str = "",
-    verb: str = "",
-    phase: str = "loop",
-    request_id: str | None = None,
-    classifier_called: bool = False,
-    iterations_since_nudge: int | None = None,
-    consecutive_degenerate: int | None = None,
-    pending_terminal: bool | None = None,
-) -> IterationTrace:
-    """Build an ``IterationTrace`` from loop state (Complete verb)."""
-    content = response.content or ""
-    preview = content[:_CONTENT_PREVIEW_LIMIT] if content else ""
-    nudge = action.message[:_CONTENT_PREVIEW_LIMIT] if action.message else None
-    tool_names = [tc.name for tc in response.tool_calls] if response.tool_calls else []
+@dataclass
+class VerbTrace:
+    """Tree-structured trace for a single verb invocation.
 
-    return IterationTrace(
-        trace_id=trace_id,
-        call_id=response.call_id,
-        iteration=obs.iteration,
-        ts=time.time(),
-        verb=verb,
-        phase=phase,
-        request_id=request_id,
-        has_content=bool(content),
-        has_tool_calls=bool(response.tool_calls),
-        tool_call_count=len(response.tool_calls) if response.tool_calls else 0,
-        tool_names_used=tool_names,
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        finish_reason=response.finish_reason,
-        content_preview=preview,
-        action=action.kind.value,
-        reason=action.reason.value,
-        nudge_preview=nudge,
-        iterations_since_nudge=iterations_since_nudge,
-        consecutive_degenerate=consecutive_degenerate,
-        pending_terminal=pending_terminal,
-        classifier_called=classifier_called,
-    )
-
-
-def build_base_trace(
-    response: AgentResponse,
-    *,
-    trace_id: str = "",
-    iteration: int = 0,
-    verb: str = "",
-    phase: str = "loop",
-    request_id: str | None = None,
-) -> IterationTrace:
-    """Build a simple ``IterationTrace`` for non-Complete verbs.
-
-    Unlike :func:`build_trace`, this does not require an :class:`Observation`
-    or :class:`Action` — it infers the action from the response directly.
+    Contains an ordered list of :class:`Step` records — one per LLM call.
+    Summary properties are derived from the steps (no separate counters).
     """
-    content = response.content or ""
-    preview = content[:_CONTENT_PREVIEW_LIMIT] if content else ""
-    tool_names = [tc.name for tc in response.tool_calls] if response.tool_calls else []
-    action = "execute_tools" if response.tool_calls else "complete"
 
-    return IterationTrace(
-        trace_id=trace_id,
-        call_id=response.call_id,
-        iteration=iteration,
-        ts=time.time(),
-        verb=verb,
+    type: str = "verb_trace"
+    verb: str = ""
+    trace_id: str = ""
+    ts: float = 0.0
+    duration_ms: int = 0
+    request_id: str | None = None
+    steps: list[Step] = field(default_factory=list)
+    ok: bool = True
+    error: str | None = None
+
+    # --- Derived aggregates ---
+
+    @property
+    def total_llm_calls(self) -> int:
+        """Number of LLM calls made during this verb invocation."""
+        return len(self.steps)
+
+    @property
+    def parse_retries(self) -> int:
+        """Number of parse retry attempts."""
+        return sum(1 for s in self.steps if s.phase == "parse_retry")
+
+    @property
+    def guard_retries(self) -> int:
+        """Number of guard retry attempts."""
+        return sum(1 for s in self.steps if s.phase == "guard_retry")
+
+    @property
+    def total_input_tokens(self) -> int:
+        """Total input tokens across all LLM calls."""
+        return sum(s.llm_call.input_tokens for s in self.steps)
+
+    @property
+    def total_output_tokens(self) -> int:
+        """Total output tokens across all LLM calls."""
+        return sum(s.llm_call.output_tokens for s in self.steps)
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens (input + output) across all LLM calls."""
+        return self.total_input_tokens + self.total_output_tokens
+
+    # --- Serialization ---
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a plain dict (including all steps)."""
+        return asdict(self)
+
+    def to_json(self, **kwargs: Any) -> str:
+        """Serialize to a JSON string. Accepts ``json.dumps`` keyword args."""
+        return json.dumps(self.to_dict(), **kwargs)
+
+    # --- Mutation helpers (used internally during verb execution) ---
+
+    def add_step(self, step: Step) -> None:
+        """Append a step."""
+        self.steps.append(step)
+
+
+# ---------------------------------------------------------------------------
+# Step builders
+# ---------------------------------------------------------------------------
+
+
+def build_step_from_response(
+    response: Any,
+    *,
+    phase: str = "attempt",
+    trace_id: str = "",
+    verb: str = "",
+) -> Step:
+    """Build a Step from an AgentResponse (non-Complete verbs).
+
+    Args:
+        response: AgentResponse from backend.chat().
+        phase: Step phase (attempt, parse_retry, guard_retry, iteration, finalize).
+        trace_id: Trace ID for correlation.
+        verb: Verb class name.
+    """
+    call_duration = getattr(response, "_duration_ms", 0)
+    return Step(
         phase=phase,
-        request_id=request_id,
-        has_content=bool(content),
-        has_tool_calls=bool(response.tool_calls),
-        tool_call_count=len(response.tool_calls) if response.tool_calls else 0,
-        tool_names_used=tool_names,
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        finish_reason=response.finish_reason,
-        content_preview=preview,
-        action=action,
-        reason="base_trace",
-        nudge_preview=None,
+        ts=time.time(),
+        duration_ms=call_duration,
+        trace_id=trace_id,
+        verb=verb,
+        llm_call=LLMCall(
+            call_id=getattr(response, "call_id", ""),
+            input_tokens=getattr(response, "input_tokens", 0),
+            output_tokens=getattr(response, "output_tokens", 0),
+            finish_reason=getattr(response, "finish_reason", None),
+            duration_ms=call_duration,
+        ),
+        tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
     )
 
 
@@ -171,7 +233,7 @@ def build_base_trace(
 
 
 class Tracer:
-    """Writes JSONL iteration traces to a pluggable writer.
+    """Writes JSONL trace records to a pluggable writer.
 
     The ``Tracer`` handles JSONL serialization.  The *writer* is any writable
     text stream (``IO[str]``) — file, stdout, ``StringIO``, etc.
@@ -193,9 +255,9 @@ class Tracer:
         self._writer.write(json.dumps({"_meta": metadata}) + "\n")
         self._writer.flush()
 
-    def write(self, trace: IterationTrace) -> None:
-        """Write one JSONL record."""
-        self._writer.write(json.dumps(asdict(trace)) + "\n")
+    def write(self, record: Step | VerbTrace) -> None:
+        """Write one JSONL record (Step or VerbTrace)."""
+        self._writer.write(json.dumps(asdict(record)) + "\n")
         self._writer.flush()
 
     def close(self) -> None:
@@ -213,7 +275,7 @@ class Tracer:
 class CallbackTracer(Tracer):
     """Tracer that calls a user-provided function for each record.
 
-    The callback receives a plain dict (the serialized ``IterationTrace``).
+    The callback receives a plain dict (the serialized trace record).
     """
 
     def __init__(self, callback: Callable[[dict[str, Any]], None]) -> None:
@@ -221,13 +283,15 @@ class CallbackTracer(Tracer):
         self._callback = callback
 
     def start(self, metadata: dict[str, Any]) -> None:
+        """Forward metadata to callback."""
         self._callback({"_meta": metadata})
 
-    def write(self, trace: IterationTrace) -> None:
-        self._callback(asdict(trace))
+    def write(self, record: Step | VerbTrace) -> None:
+        """Forward serialized record to callback."""
+        self._callback(asdict(record))
 
     def close(self) -> None:
-        pass
+        """No-op — callback tracers have nothing to close."""
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +331,7 @@ class TracerFactory:
     def callback(fn: Callable[[dict[str, Any]], None]) -> CallbackTracer:
         """Create a tracer that calls a function for each record.
 
-        The callback receives a plain dict (the serialized ``IterationTrace``).
+        The callback receives a plain dict per trace record.
 
         Args:
             fn: Callable receiving a dict per trace record.

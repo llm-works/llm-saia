@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .config import CallOptions
     from .conversation import ConversationLike
     from .logger import Logger
+    from .trace import VerbTrace
 
 T = TypeVar("T")
 
@@ -53,6 +54,8 @@ class OutputGuardMixin:
         schema: type[T],
         run: CallOptions | None = None,
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
+        _phase: str = "attempt",
     ) -> T:
         raise NotImplementedError
 
@@ -62,6 +65,7 @@ class OutputGuardMixin:
         run: CallOptions | None = None,
         phase: str = "direct",
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> str:
         raise NotImplementedError
 
@@ -74,6 +78,7 @@ class OutputGuardMixin:
         schema: type[T],
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> T:
         """Apply output guards sequentially, retrying on failure.
 
@@ -91,11 +96,11 @@ class OutputGuardMixin:
             original_result = result
 
             result, changed = await self._apply_instance_guards_once(
-                prompt, result, original_result, schema, instance_guards, run, conversation
+                prompt, result, original_result, schema, instance_guards, run, conversation, _trace
             )
             if not changed:
                 result, changed = await self._apply_field_guards_once(
-                    prompt, result, original_result, schema, field_guards, run, conversation
+                    prompt, result, original_result, schema, field_guards, run, conversation, _trace
                 )
             if not changed:
                 return result
@@ -113,11 +118,12 @@ class OutputGuardMixin:
         guards: tuple[OutputGuard, ...],
         run: CallOptions | None,
         conversation: ConversationLike | None,
+        _trace: VerbTrace | None = None,
     ) -> tuple[T, bool]:
         """Apply instance-level guards once, returning (result, changed)."""
         for guard in guards:
             result = await self._apply_single_guard(
-                prompt, result, schema, guard, run, conversation=conversation
+                prompt, result, schema, guard, run, conversation=conversation, _trace=_trace
             )
             if result != original_result:
                 return result, True
@@ -132,6 +138,7 @@ class OutputGuardMixin:
         field_guards: dict[str, tuple[OutputGuard, ...]],
         run: CallOptions | None,
         conversation: ConversationLike | None,
+        _trace: VerbTrace | None = None,
     ) -> tuple[T, bool]:
         """Apply field-level guards once, returning (result, changed)."""
         for field_name, guards in field_guards.items():
@@ -144,6 +151,7 @@ class OutputGuardMixin:
                     guard,
                     run,
                     conversation=conversation,
+                    _trace=_trace,
                 )
                 if result != original_result:
                     return result, True
@@ -184,34 +192,38 @@ class OutputGuardMixin:
         guard: OutputGuard,
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> T:
         """Apply a guard to a specific field of the result."""
-        guard_name = f"{field_name}.{guard.name}" if guard.name else field_name
+        gname = f"{field_name}.{guard.name}" if guard.name else field_name
         for attempt in range(1 + guard.max_retries):
             field_value = getattr(result, field_name, None)
-            try:
-                error = guard.validator(field_value)
-            except Exception as e:
-                error = f"Validator raised {type(e).__name__}: {e}"
-
+            error = self._run_validator(guard, field_value)
             if error is None:
                 return result
-
             if attempt >= guard.max_retries:
-                raise OutputGuardError(guard_name, error, attempt + 1)
-
-            named = OutputGuard(
-                guard.validator, guard.retry_instruction, guard.max_retries, guard_name
-            )
-            self._log_guard_retry(named, attempt + 1, error)
+                raise OutputGuardError(gname, error, attempt + 1)
+            self._log_guard_retry(gname, attempt + 1, guard.max_retries, error)
             retry_prompt = self._build_field_guard_retry_prompt(
-                prompt, result, field_name, field_value, guard, error
+                prompt, result, field_name, field_value, guard, error, attempt
             )
             result = await self._complete_structured_attempt(
-                retry_prompt, schema, run, conversation=conversation
+                retry_prompt,
+                schema,
+                run,
+                conversation=conversation,
+                _trace=_trace,
+                _phase="guard_retry",
             )
-
         return result  # Unreachable, satisfies type checker
+
+    @staticmethod
+    def _run_validator(guard: OutputGuard, value: Any) -> str | None:
+        """Run guard validator, converting exceptions to error strings."""
+        try:
+            return guard.validator(value)
+        except Exception as e:
+            return f"Validator raised {type(e).__name__}: {e}"
 
     def _build_field_guard_retry_prompt(
         self,
@@ -221,6 +233,7 @@ class OutputGuardMixin:
         field_value: Any,
         guard: OutputGuard,
         error: str,
+        attempt: int = 0,
     ) -> str:
         """Build retry prompt for field-specific guard failure."""
         result_str = str(failed_result)
@@ -231,13 +244,14 @@ class OutputGuardMixin:
         if len(field_str) > 200:
             field_str = field_str[:200] + "..."
 
+        instruction = guard.resolve_instruction(attempt, field_value, error)
         return (
             f"{original_prompt}\n\n"
             f"---\n\n"
             f"Your previous response did not meet requirements.\n\n"
             f"Issue with field '{field_name}': {error}\n\n"
             f"Field value was:\n```\n{field_str}\n```\n\n"
-            f"{guard.retry_instruction}"
+            f"{instruction}"
         )
 
     # -- Instance-level structured guard --
@@ -250,6 +264,7 @@ class OutputGuardMixin:
         guard: OutputGuard,
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> T:
         """Apply one guard with retries.
 
@@ -258,21 +273,20 @@ class OutputGuardMixin:
         so JSON structure is expected to be stable on retry.
         """
         for attempt in range(1 + guard.max_retries):
-            # Pass original result to validator - validators handle type conversion
-            try:
-                error = guard.validator(result)
-            except Exception as e:
-                # Validator raised instead of returning str - treat as validation failure
-                error = f"Validator raised {type(e).__name__}: {e}"
-
+            error = self._run_validator(guard, result)
             if error is None:
                 return result  # Passed
 
             if attempt < guard.max_retries:
-                self._log_guard_retry(guard, attempt + 1, error)
-                retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error)
+                self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
+                retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error, attempt)
                 result = await self._complete_structured_attempt(
-                    retry_prompt, schema, run, conversation=conversation
+                    retry_prompt,
+                    schema,
+                    run,
+                    conversation=conversation,
+                    _trace=_trace,
+                    _phase="guard_retry",
                 )
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
@@ -287,6 +301,7 @@ class OutputGuardMixin:
         text: str,
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> str:
         """Apply output guards to text completion results.
 
@@ -302,15 +317,12 @@ class OutputGuardMixin:
             original_text = text
             for guard in guards:
                 text = await self._apply_single_text_guard(
-                    prompt, text, guard, run, conversation=conversation
+                    prompt, text, guard, run, conversation=conversation, _trace=_trace
                 )
-                # If text changed (retry occurred), restart validation from first guard
                 if text != original_text:
                     break
             else:
-                # All guards passed without changes
                 return text
-            # Text changed, loop continues to re-validate all guards
 
         raise OutputGuardError(
             "revalidation", "guards did not converge", self._MAX_REVALIDATION_ROUNDS
@@ -323,22 +335,23 @@ class OutputGuardMixin:
         guard: OutputGuard,
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> str:
         """Apply one guard to text with retries."""
         for attempt in range(1 + guard.max_retries):
-            try:
-                error = guard.validator(text)
-            except Exception as e:
-                error = f"Validator raised {type(e).__name__}: {e}"
-
+            error = self._run_validator(guard, text)
             if error is None:
                 return text  # Passed
 
             if attempt < guard.max_retries:
-                self._log_guard_retry(guard, attempt + 1, error)
-                retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error)
+                self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
+                retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error, attempt)
                 text = await self._complete_text_attempt(
-                    retry_prompt, run, phase="guard_retry", conversation=conversation
+                    retry_prompt,
+                    run,
+                    phase="guard_retry",
+                    conversation=conversation,
+                    _trace=_trace,
                 )
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
@@ -353,30 +366,34 @@ class OutputGuardMixin:
         failed_result: Any,
         guard: OutputGuard,
         error: str,
+        attempt: int = 0,
     ) -> str:
         """Build retry prompt with guard feedback."""
         result_str = str(failed_result)
         if len(result_str) > 300:
             result_str = result_str[:300] + "..."
 
+        instruction = guard.resolve_instruction(attempt, failed_result, error)
         return (
             f"{original_prompt}\n\n"
             f"---\n\n"
             f"Your previous response did not meet requirements.\n\n"
             f"Issue: {error}\n\n"
             f"Your response was:\n```\n{result_str}\n```\n\n"
-            f"{guard.retry_instruction}"
+            f"{instruction}"
         )
 
-    def _log_guard_retry(self, guard: OutputGuard, attempt: int, error: str) -> None:
+    def _log_guard_retry(
+        self, name: str | None, attempt: int, max_retries: int, error: str
+    ) -> None:
         """Log guard retry attempt."""
         if self._lg:
             self._lg.debug(
                 "guard retry",
                 extra={
-                    "guard": guard.name,
+                    "guard": name,
                     "attempt": attempt,
-                    "max_retries": guard.max_retries,
+                    "max_retries": max_retries,
                     "error": error,
                 },
             )

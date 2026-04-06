@@ -13,6 +13,7 @@ Example:
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from .core.guard import OutputGuard
@@ -27,139 +28,188 @@ __all__ = [
 ]
 
 
-def english_only(max_retries: int = 1) -> OutputGuard:
+def english_only(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
     """Require English-only output (no CJK, Arabic, Cyrillic, etc.).
 
     Args:
         max_retries: Max retry attempts. Default 1.
-
-    Returns:
-        OutputGuard configured for English-only validation.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
+    static = (
+        "Your response contained non-English characters. "
+        "Respond ONLY in English using Latin script. "
+        "Do not use any other language or script."
+    )
     return OutputGuard(
         validator=_is_english,
-        retry_instruction=(
-            "Your response contained non-English characters. "
-            "Respond ONLY in English using Latin script. "
-            "Do not use any other language or script."
-        ),
+        retry_instruction=_escalating(
+            "respond in English",
+            static,
+            "ENGLISH ONLY. Latin script. ZERO non-English characters. Do it NOW.",
+        )
+        if escalate
+        else static,
         max_retries=max_retries,
         name="english_only",
     )
 
 
-def max_length(n: int, max_retries: int = 2) -> OutputGuard:
+def max_length(n: int, max_retries: int = 2, *, escalate: bool = True) -> OutputGuard:
     """Limit response to n characters.
 
     Args:
         n: Maximum character count.
         max_retries: Max retry attempts. Default 2 (length often needs multiple tries).
-
-    Returns:
-        OutputGuard configured for length validation.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
 
     def check(result: Any) -> str | None:
-        text = str(result)
-        length = len(text)
-        if length <= n:
-            return None
-        return f"Response is {length} chars (max {n})"
+        length = len(str(result))
+        return f"Response is {length} chars (max {n})" if length > n else None
 
+    def instruction(attempt: int, result: Any, error: str) -> str:
+        current = len(str(result))
+        if attempt == 0:
+            return f"Response is {current} chars (limit: {n}). Shorten to under {n} characters."
+        return (
+            f"YOU HAVE FAILED TO STAY UNDER {n} CHARS {attempt + 1} TIMES. "
+            f"Current: {current}. Limit: {n}. "
+            f"Strip EVERYTHING non-essential. No adjectives, no qualifiers, no preamble. "
+            f"Just the raw answer. DO IT NOW."
+        )
+
+    static = (
+        f"Your response exceeded the maximum length. "
+        f"Shorten it to under {n} characters while preserving the key information."
+    )
     return OutputGuard(
         validator=check,
-        retry_instruction=(
-            f"Your response exceeded the maximum length. "
-            f"Shorten it to under {n} characters while preserving the key information."
-        ),
+        retry_instruction=instruction if escalate else static,
         max_retries=max_retries,
         name="max_length",
     )
 
 
-def no_markdown(max_retries: int = 1) -> OutputGuard:
+def no_markdown(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
     """Plain text only - no markdown formatting.
 
     Args:
         max_retries: Max retry attempts. Default 1.
-
-    Returns:
-        OutputGuard configured to reject markdown.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
+    static = (
+        "Your response contained markdown formatting. "
+        "Respond in plain text only. Do not use: "
+        "headers (#), bullet points (- or *), bold (**), or code blocks (```)."
+    )
     return OutputGuard(
         validator=_has_no_markdown,
-        retry_instruction=(
-            "Your response contained markdown formatting. "
-            "Respond in plain text only. Do not use: "
-            "headers (#), bullet points (- or *), bold (**), or code blocks (```)."
-        ),
+        retry_instruction=_escalating(
+            "remove markdown",
+            static,
+            "NO MARKDOWN. No #, no **, no ```, no bullets. PLAIN TEXT ONLY. Do it NOW.",
+        )
+        if escalate
+        else static,
         max_retries=max_retries,
         name="no_markdown",
     )
 
 
-def no_preamble(max_retries: int = 1) -> OutputGuard:
+def no_preamble(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
     """No conversational preamble - start directly with content.
 
     Args:
         max_retries: Max retry attempts. Default 1.
-
-    Returns:
-        OutputGuard configured to reject preambles.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
+    static = (
+        "Your response started with a conversational preamble. "
+        "Start directly with the answer. Do not begin with phrases like "
+        "'Sure!', 'Here is...', 'I'd be happy to...', 'Certainly!', etc."
+    )
     return OutputGuard(
         validator=_has_no_preamble,
-        retry_instruction=(
-            "Your response started with a conversational preamble. "
-            "Start directly with the answer. Do not begin with phrases like "
-            "'Sure!', 'Here is...', 'I'd be happy to...', 'Certainly!', etc."
-        ),
+        retry_instruction=_escalating(
+            "skip the preamble",
+            static,
+            "START WITH THE ANSWER. No 'Sure', no 'Here is', no greetings. "
+            "First word must be content. Do it NOW.",
+        )
+        if escalate
+        else static,
         max_retries=max_retries,
         name="no_preamble",
     )
 
 
-def no_emoji(max_retries: int = 1) -> OutputGuard:
+def no_emoji(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
     """No emoji characters allowed.
-
-    Detects emoji in Unicode ranges: emoticons, symbols, dingbats, etc.
-    Allows all other text including non-ASCII letters (é, 日本語, etc.).
 
     Args:
         max_retries: Max retry attempts. Default 1.
-
-    Returns:
-        OutputGuard configured to reject emoji.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
+    static = "Your response contained emoji. Do not use emoji or emoticons. Use plain text only."
     return OutputGuard(
         validator=_has_no_emoji,
-        retry_instruction=(
-            "Your response contained emoji. Do not use emoji or emoticons. Use plain text only."
-        ),
+        retry_instruction=_escalating(
+            "remove emoji",
+            static,
+            "ZERO EMOJI. Not a single one. Remove every emoji character. Text only. Do it NOW.",
+        )
+        if escalate
+        else static,
         max_retries=max_retries,
         name="no_emoji",
     )
 
 
-def ascii_only(max_retries: int = 1) -> OutputGuard:
+def ascii_only(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
     """ASCII characters only (printable + whitespace).
 
     Args:
         max_retries: Max retry attempts. Default 1.
-
-    Returns:
-        OutputGuard configured for ASCII-only validation.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
+    static = (
+        "Your response contained non-ASCII characters. "
+        "Use only basic ASCII characters (a-z, A-Z, 0-9, standard punctuation). "
+        "No accented letters, special symbols, or Unicode."
+    )
     return OutputGuard(
         validator=_is_ascii,
-        retry_instruction=(
-            "Your response contained non-ASCII characters. "
-            "Use only basic ASCII characters (a-z, A-Z, 0-9, standard punctuation). "
-            "No accented letters, special symbols, or Unicode."
-        ),
+        retry_instruction=_escalating(
+            "use ASCII only",
+            static,
+            "ASCII ONLY. a-z A-Z 0-9 and basic punctuation. "
+            "ZERO special characters, ZERO accented letters. Do it NOW.",
+        )
+        if escalate
+        else static,
         max_retries=max_retries,
         name="ascii_only",
     )
+
+
+# --- Escalation helper ---
+
+
+def _escalating(requirement: str, polite: str, forceful: str) -> Callable[[int, Any, str], str]:
+    """Create an escalating instruction with failure count feedback.
+
+    Args:
+        requirement: Short name for the requirement (e.g., "use English only").
+        polite: Instruction for first attempt.
+        forceful: Aggressive instruction for subsequent attempts.
+    """
+
+    def instruction(attempt: int, result: Any, error: str) -> str:
+        if attempt == 0:
+            return polite
+        return f"YOU HAVE FAILED TO {requirement.upper()} {attempt + 1} TIMES. {forceful}"
+
+    return instruction
 
 
 # --- Validator implementations ---

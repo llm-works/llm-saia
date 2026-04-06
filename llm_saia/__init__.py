@@ -14,7 +14,16 @@ from .core.errors import (
 )
 from .core.guard import Guarded, OutputGuard, OutputGuardError
 from .core.logger import Logger, NullLogger
-from .core.trace import CallbackTracer, Tracer, TracerFactory
+from .core.trace import (
+    CallbackTracer,
+    GuardOutcome,
+    LLMCall,
+    Step,
+    ToolOutcome,
+    Tracer,
+    TracerFactory,
+    VerbTrace,
+)
 from .core.types import (
     ChooseResult,
     ClassifyResult,
@@ -79,6 +88,11 @@ __all__ = [
     "TerminalConfig",
     # Tracing
     "CallbackTracer",
+    "GuardOutcome",
+    "LLMCall",
+    "Step",
+    "ToolOutcome",
     "Tracer",
     "TracerFactory",
+    "VerbTrace",
 ]

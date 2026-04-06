@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypeVar
 
+from ..core.types import VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -22,9 +23,16 @@ class Extract(Verb):
         instructions: str | None = None,
         *,
         conversation: ConversationLike | None = None,
-    ) -> T:
+    ) -> VerbResult[T]:
         """Extract structured data from content according to the schema."""
-        prompt = f"Extract the following information from this content:\n\n{content}"
-        if instructions:
-            prompt += f"\n\nExtraction guidance: {instructions}"
-        return await self._complete_structured(prompt, schema, conversation=conversation)
+        trace = self._init_verb_trace()
+        try:
+            prompt = f"Extract the following information from this content:\n\n{content}"
+            if instructions:
+                prompt += f"\n\nExtraction guidance: {instructions}"
+            value = await self._complete_structured(
+                prompt, schema, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

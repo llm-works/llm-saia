@@ -17,7 +17,7 @@ from ..core.controller import (
     Observation,
 )
 from ..core.conversation import Message, Role, ToolCall
-from ..core.trace import Tracer, build_trace
+from ..core.trace import LLMCall, Step, ToolOutcome, Tracer, VerbTrace
 from ..core.types import DecisionReason, LoopScore, TaskResult
 from ..core.verb import Verb
 
@@ -40,6 +40,7 @@ class _LoopCtx:
     call_options: CallOptions
     messages: list[Message]
     tool_names: list[str]
+    verb_trace: VerbTrace | None = None
     acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
 
@@ -65,19 +66,22 @@ class Complete(Verb):
         if not self._has_tools():
             raise ValueError("Complete requires tools and executor to be configured.")
 
-        trace_id = self._generate_id()
-        request_id = self._call.request_id
+        verb_trace = self._init_verb_trace()
+        trace_id = verb_trace.trace_id
         ctrl = controller or self._default_controller()
         ctrl.reset()
 
         owns_tracer, active_tracer = self._resolve_tracer(
             tracer,
-            {"trace_id": trace_id, "request_id": request_id, "task": task[:200]},
+            {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
         )
 
         try:
-            result = await self._run_loop(task, trace_id, ctrl, active_tracer, on_iteration)
-            return self._tag_result(result, trace_id, request_id)
+            result = await self._run_loop(
+                task, trace_id, ctrl, active_tracer, on_iteration, verb_trace
+            )
+            self._emit_verb_trace(verb_trace)
+            return self._tag_result(result, verb_trace)
         finally:
             if active_tracer and owns_tracer:
                 active_tracer.close()
@@ -109,6 +113,7 @@ class Complete(Verb):
         ctrl: LoopController,
         tracer: Tracer | None,
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
+        verb_trace: VerbTrace | None = None,
     ) -> TaskResult:
         """Execute the main tool-calling loop."""
         call_options = self._config.call or DEFAULT_COMPLETE_CALL
@@ -121,6 +126,7 @@ class Complete(Verb):
             call_options=call_options,
             messages=[Message(role=Role.USER, content=task)],
             tool_names=[t.name for t in (self._config.tools or [])],
+            verb_trace=verb_trace,
         )
         self._log_loop_start(call_options)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
@@ -157,6 +163,7 @@ class Complete(Verb):
             ctx.on_iteration,
             ctx.tracer,
             ctx.trace_id,
+            ctx.verb_trace,
         )
         self._score_action(ctx.acc, action, tokens)
         return result, tokens, response.content
@@ -172,6 +179,7 @@ class Complete(Verb):
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
         tracer: Tracer | None = None,
         trace_id: str = "",
+        verb_trace: VerbTrace | None = None,
     ) -> tuple[Action, TaskResult | None]:
         """Process a single iteration: callback, decide, execute, trace."""
         self._check_tool_support(response)
@@ -191,8 +199,11 @@ class Complete(Verb):
         action = await ctrl.decide(obs)
         self._log_action(action)
 
+        step = self._build_iteration_step(obs, action, response, ctrl, trace_id)
+        if verb_trace is not None:
+            verb_trace.add_step(step)
         if tracer:
-            self._write_trace(tracer, obs, action, response, ctrl, trace_id)
+            tracer.write(step)
 
         result = await self._execute_action(action, response, messages, iteration)
         return action, result
@@ -353,10 +364,9 @@ class Complete(Verb):
         )
 
     @staticmethod
-    def _tag_result(result: TaskResult, trace_id: str, request_id: str | None) -> TaskResult:
-        """Attach tracing IDs to a TaskResult."""
-        result.trace_id = trace_id
-        result.request_id = request_id
+    def _tag_result(result: TaskResult, trace: VerbTrace) -> TaskResult:
+        """Attach VerbTrace to a TaskResult."""
+        result.trace = trace
         return result
 
     def _log_action(self, action: Action) -> None:
@@ -369,42 +379,40 @@ class Complete(Verb):
 
     # --- Trace helpers ---
 
-    def _write_trace(
+    def _build_iteration_step(
         self,
-        tracer: Tracer,
         obs: Observation,
         action: Action,
         response: AgentResponse,
         ctrl: LoopController,
         trace_id: str,
-    ) -> None:
-        """Write one iteration trace record."""
-        # Extract controller internals if available (DefaultController exposes these)
-        iterations_since_nudge = None
-        consecutive_degenerate = None
-        pending_terminal = None
-        if isinstance(ctrl, DefaultController):
-            iterations_since_nudge = obs.iteration - ctrl.iterations_since_last_nudge
-            consecutive_degenerate = ctrl.consecutive_degenerate
-            pending_terminal = ctrl.has_pending_terminal
-
-        # Detect if classifier was called
-        classifier_called = action.reason in (
-            DecisionReason.CLASSIFIED_COMPLETE,
-            DecisionReason.NUDGE_CLASSIFIED,
-        )
-
-        record = build_trace(
-            obs,
-            action,
-            response,
+    ) -> Step:
+        """Build a Step from Complete verb iteration state."""
+        step = Step(
+            phase="iteration",
+            ts=time.time(),
             trace_id=trace_id,
             verb="Complete",
-            phase="loop",
-            request_id=self._call.request_id,
-            classifier_called=classifier_called,
-            iterations_since_nudge=iterations_since_nudge,
-            consecutive_degenerate=consecutive_degenerate,
-            pending_terminal=pending_terminal,
+            llm_call=LLMCall(
+                call_id=response.call_id,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                finish_reason=response.finish_reason,
+            ),
+            tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
+            action=action.kind.value,
+            reason=action.reason.value,
+            nudge_preview=action.message[:200] if action.message else None,
+            classifier_called=action.reason
+            in (DecisionReason.CLASSIFIED_COMPLETE, DecisionReason.NUDGE_CLASSIFIED),
         )
-        tracer.write(record)
+        self._attach_controller_internals(step, obs, ctrl)
+        return step
+
+    @staticmethod
+    def _attach_controller_internals(step: Step, obs: Observation, ctrl: LoopController) -> None:
+        """Attach DefaultController internals to a Step, if available."""
+        if isinstance(ctrl, DefaultController):
+            step.iterations_since_nudge = obs.iteration - ctrl.iterations_since_last_nudge
+            step.consecutive_degenerate = ctrl.consecutive_degenerate
+            step.pending_terminal = ctrl.has_pending_terminal
