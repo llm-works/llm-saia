@@ -20,14 +20,16 @@ class Ground(Verb):
         """Find evidence in sources that supports or refutes the artifact."""
         trace = self._init_verb_trace()
         try:
+            # Snapshot conversation before the loop so each source starts from
+            # the same baseline (no cross-source context leakage).
+            baseline = self._fork_conversation(conversation)
             results: list[Evidence] = []
             for source in sources:
                 prompt = (
                     f"Find evidence in this source for the artifact.\n\n"
                     f"Artifact: {artifact}\n\nSource: {source}"
                 )
-                # Fork per source so each evaluation is independent
-                source_conv = self._fork_conversation(conversation)
+                source_conv = self._fork_conversation(baseline)
                 results.append(
                     await self._complete_structured(
                         prompt, Evidence, conversation=source_conv, _trace=trace

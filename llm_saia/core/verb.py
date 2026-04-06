@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+_SENTINEL: Any = object()  # default marker for _chat(tools=...)
+
 
 class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     """Base class for all verbs. Subclass this to create custom verbs."""
@@ -180,8 +182,20 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         messages: list[Message],
         max_tokens: int | None,
         temperature: float | None = None,
+        *,
+        response_schema: dict[str, Any] | None = None,
+        tools: list[Any] | None = _SENTINEL,
     ) -> AgentResponse:
-        """Execute a single chat call."""
+        """Execute a single chat call.
+
+        Args:
+            messages: Conversation messages.
+            max_tokens: Token limit (None = unlimited).
+            temperature: Sampling temperature.
+            response_schema: JSON schema for structured output.
+            tools: Tool definitions. Default (sentinel) uses config tools;
+                pass ``None`` or ``[]`` to suppress tools.
+        """
         call_id = self._generate_id()
         if self._lg:
             last_msg = messages[-1] if messages else None
@@ -194,13 +208,19 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                     "content": last_msg.content if last_msg else None,
                 },
             )
+        resolved_tools = (
+            (self._config.tools if self._config.tools else None)
+            if tools is _SENTINEL
+            else (tools or None)
+        )
         t0 = time.monotonic()
         response = await self._backend.chat(
             messages,
             system=self._call.system,
-            tools=self._config.tools if self._config.tools else None,
+            tools=resolved_tools,
             max_tokens=max_tokens,
             temperature=temperature,
+            response_schema=response_schema,
         )
         response.call_id = call_id
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
@@ -363,13 +383,13 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         if schema:
             structured_prompt = f"{prompt}\n\nBased on the following information:\n{content}"
             json_schema = dataclass_to_json_schema(schema)
-            response = await self._backend.chat(
+            response = await self._chat(
                 [Message(role=Role.USER, content=structured_prompt)],
-                system=self._call.system,
-                response_schema=json_schema,
+                max_tokens=None,
                 temperature=temperature,
+                response_schema=json_schema,
+                tools=[],
             )
-            response.call_id = self._generate_id()
             self._record_step(response, phase="finalize", _trace=_trace)
             try:
                 data = json.loads(response.content)
@@ -427,14 +447,15 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         trace: VerbTrace,
     ) -> str:
         """Direct (no-tool) text completion. Records step to trace."""
+        config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
         conv.append(Message(role=Role.USER, content=prompt))
-        response = await self._backend.chat(
+        response = await self._chat(
             conv.as_messages(),
-            system=self._call.system,
+            max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
+            tools=[],
         )
-        response.call_id = self._generate_id()
         conv.append(self._to_message(response))
         self._record_step(response, phase="attempt", _trace=trace)
         return response.content
@@ -454,14 +475,15 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         if self._has_tools():
             content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=_trace)
             return content
+        config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
         conv.append(Message(role=Role.USER, content=prompt))
-        response = await self._backend.chat(
+        response = await self._chat(
             conv.as_messages(),
-            system=self._call.system,
+            max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
+            tools=[],
         )
-        response.call_id = self._generate_id()
         conv.append(self._to_message(response))
         self._record_step(response, phase=phase, _trace=_trace)
         return response.content
@@ -556,14 +578,13 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         conv.append(Message(role=Role.USER, content=prompt))
         json_schema = dataclass_to_json_schema(schema)
         max_tokens = self._max_tokens(self._get_call_options(run))
-        response = await self._backend.chat(
+        response = await self._chat(
             conv.as_messages(),
-            system=self._call.system,
-            response_schema=json_schema,
             max_tokens=max_tokens,
             temperature=self._resolve_temperature(run),
+            response_schema=json_schema,
+            tools=[],
         )
-        response.call_id = self._generate_id()
         conv.append(self._to_message(response))
         self._record_step(response, phase=_phase, _trace=_trace)
         try:
