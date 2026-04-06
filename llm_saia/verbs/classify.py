@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..core.types import ClassifyResult
+from ..core.types import ClassifyResult, VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -21,10 +21,15 @@ class Classify(Verb):
         criteria: str | None = None,
         *,
         conversation: ConversationLike | None = None,
-    ) -> ClassifyResult:
+    ) -> VerbResult[ClassifyResult]:
         """Classify text into one of the specified categories."""
+        trace = self._init_verb_trace()
         cats = ", ".join(categories)
         prompt = f"Classify this text into one of: {cats}\n\nText: {text}"
         if criteria:
             prompt += f"\n\nCriteria: {criteria}"
-        return await self._complete_structured(prompt, ClassifyResult, conversation=conversation)
+        value = await self._complete_structured(
+            prompt, ClassifyResult, conversation=conversation, _trace=trace
+        )
+        self._emit_verb_trace(trace)
+        return VerbResult(value=value, trace=trace)

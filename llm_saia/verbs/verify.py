@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..core.types import VerifyResult
+from ..core.types import VerbResult, VerifyResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -20,10 +20,15 @@ class Verify(Verb):
         predicate: str = "factually accurate",
         *,
         conversation: ConversationLike | None = None,
-    ) -> VerifyResult:
+    ) -> VerbResult[VerifyResult]:
         """Check whether an artifact satisfies a given predicate."""
+        trace = self._init_verb_trace()
         prompt = (
             f"Verify that this artifact satisfies the predicate.\n\n"
             f"Artifact: {artifact}\n\nPredicate: {predicate}"
         )
-        return await self._complete_structured(prompt, VerifyResult, conversation=conversation)
+        value = await self._complete_structured(
+            prompt, VerifyResult, conversation=conversation, _trace=trace
+        )
+        self._emit_verb_trace(trace)
+        return VerbResult(value=value, trace=trace)

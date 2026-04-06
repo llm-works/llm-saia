@@ -44,7 +44,7 @@ async def main() -> None:
 
         # Break into subtasks
         print(f"{C.CYAN}[decompose]{C.RESET} breaking down: {TASK}")
-        subtasks = await saia.decompose(TASK)
+        subtasks = (await saia.decompose(TASK)).value
         for t in subtasks:
             print(f"   - {t}")
 
@@ -52,15 +52,17 @@ async def main() -> None:
         print(f"\n{C.GREEN}[instruct]{C.RESET} generating code...")
         results = []
         for t in subtasks:
-            code = await saia.instruct(t)
+            code = (await saia.instruct(t)).value
             results.append(code)
             print(f"   ✓ {t[:50]}")
 
         # Combine into final result
         print(f"\n{C.MAGENTA}[synthesize]{C.RESET} combining into working scraper...")
-        output = await saia.with_max_call_tokens(4096).synthesize(
-            results, goal="single working Python script, raw code without markdown fences"
-        )
+        output = (
+            await saia.with_max_call_tokens(4096).synthesize(
+                results, goal="single working Python script, raw code without markdown fences"
+            )
+        ).value
 
         # Print the output (writing to file would create untracked repo files)
         print(f"\n{C.GREEN}[output]{C.RESET}\n{output}")

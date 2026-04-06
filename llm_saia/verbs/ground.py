@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..core.types import Evidence
+from ..core.types import Evidence, VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -16,8 +16,9 @@ class Ground(Verb):
 
     async def __call__(
         self, artifact: Any, sources: list[Any], *, conversation: ConversationLike | None = None
-    ) -> list[Evidence]:
+    ) -> VerbResult[list[Evidence]]:
         """Find evidence in sources that supports or refutes the artifact."""
+        trace = self._init_verb_trace()
         results: list[Evidence] = []
         for source in sources:
             prompt = (
@@ -27,7 +28,10 @@ class Ground(Verb):
             # Fork per source so each evaluation is independent
             source_conv = self._fork_conversation(conversation)
             results.append(
-                await self._complete_structured(prompt, Evidence, conversation=source_conv)
+                await self._complete_structured(
+                    prompt, Evidence, conversation=source_conv, _trace=trace
+                )
             )
             self._merge_conversation(conversation, source_conv)
-        return results
+        self._emit_verb_trace(trace)
+        return VerbResult(value=results, trace=trace)

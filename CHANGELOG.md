@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Tree-structured tracing: every verb call produces a `VerbTrace` with `Step` children capturing
+  each LLM call, parse retries, guard retries, and tool executions. Derived aggregates
+  (`total_llm_calls`, `parse_retries`, `guard_retries`, `total_tokens`) computed from the step
+  tree. Replaces the flat `IterationTrace` model.
+- Escalating guard retries: `OutputGuard.retry_instruction` now accepts
+  `str | Callable[[int, Any, str], str]` for dynamic, attempt-aware retry instructions.
+  `resolve_instruction(attempt, result, error)` dispatches between static and callable forms.
+- `escalate=True` parameter on all built-in guards (`max_length`, `english_only`, `no_markdown`,
+  `no_preamble`, `no_emoji`, `ascii_only`) for increasingly forceful retry instructions.
+  `max_length(escalate=True)` includes current char count in each retry.
 - `with_tools(tools, executor=)` fluent API for per-call tool override (enables benchmarking
   scenarios like BFCL where each test case defines its own function schemas)
 - `ConversationLike` protocol for pluggable conversation management (compaction, persistence)
@@ -21,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `find` verb - filter items matching criteria, returns `FindResult(indices, reason)`
 
 ### Changed
+- **BREAKING**: All 12 simple verbs now return `VerbResult[T]` instead of bare `T`. Access the
+  value via `.value` and the execution trace via `.trace`. `Complete` still returns `TaskResult`
+  but now also carries `.trace`. `VerbTrace` is always populated (never None).
+- **BREAKING**: `TaskResult.trace_id` and `TaskResult.request_id` removed — now accessed via
+  `result.trace.trace_id` and `result.trace.request_id`.
+- `VerbTrace.to_dict()` and `VerbTrace.to_json()` for serialization.
+- `Tracer.write()` generalized from `IterationTrace`-only to accept `Step | VerbTrace` records.
+  `TracerFactory` and `CallbackTracer` unchanged -- consumers dispatch on `record["type"]`.
+- `IterationTrace` replaced by `Step` dataclass. Complete verb controller fields (`action`,
+  `reason`, `iterations_since_nudge`, etc.) now live on Step.
 - All internal imports converted from absolute (`from llm_saia.core.X`) to relative (`from .X`)
   to avoid resolving against an installed package instead of the local development source
 - Extracted `OutputGuardMixin` (`core/guards.py`) and `VerbLoggingMixin` (`core/logging.py`) from

@@ -88,10 +88,11 @@ class LLMTaskStateClassifier:
             criteria=criteria,
         )
 
+        classify_result = result.value
         return TaskStateResult(
-            state=self._parse_state(result.category),
-            confidence=result.confidence,
-            reason=result.reason,
+            state=self._parse_state(classify_result.category),
+            confidence=classify_result.confidence,
+            reason=classify_result.reason,
         )
 
     def _parse_state(self, category: str) -> TaskState:

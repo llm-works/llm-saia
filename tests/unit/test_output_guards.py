@@ -150,8 +150,8 @@ class TestGuardExecution:
         extract = Extract(config).with_guard(guard)
         result = await extract("test", SimpleResult)
 
-        assert result.text == "Hello"
-        assert result.score == 10
+        assert result.value.text == "Hello"
+        assert result.value.score == 10
         assert backend.call_count == 1  # No retry needed
 
     async def test_guard_retries_on_invalid_output(self) -> None:
@@ -179,7 +179,7 @@ class TestGuardExecution:
         extract = Extract(config).with_guard(guard)
         result = await extract("test", SimpleResult)
 
-        assert result.text == "Good English"
+        assert result.value.text == "Good English"
         assert backend.call_count == 2
 
     async def test_guard_exhausts_retries(self) -> None:
@@ -517,7 +517,7 @@ class TestGuardWithParseRetries:
         extract = Extract(config).with_guard(guard)
         result = await extract("test", SimpleResult)
 
-        assert result.text == "Good"
+        assert result.value.text == "Good"
         assert backend.call_count == 3  # 1 parse fail + 1 guard fail + 1 success
 
 
@@ -538,7 +538,7 @@ class TestTextGuards:
         ask = Ask(config).with_guard(guard)
         result = await ask("artifact", "question")
 
-        assert result == "Hello world"
+        assert result.value == "Hello world"
         assert backend.call_count == 1
 
     async def test_guard_retries_on_invalid_text(self) -> None:
@@ -559,7 +559,7 @@ class TestTextGuards:
         ask = Ask(config).with_guard(guard)
         result = await ask("artifact", "question")
 
-        assert result == "Good English text"
+        assert result.value == "Good English text"
         assert backend.call_count == 2
 
     async def test_text_guard_exhausts_retries(self) -> None:
@@ -603,8 +603,8 @@ class TestFieldLevelGuards:
         extract = Extract(config)
         result = await extract("test", Article)
 
-        assert result.title == "Hello"
-        assert result.body == "World"
+        assert result.value.title == "Hello"
+        assert result.value.body == "World"
         assert backend.call_count == 1
 
     async def test_field_guard_retries_invalid_field(self) -> None:
@@ -625,7 +625,7 @@ class TestFieldLevelGuards:
         extract = Extract(config)
         result = await extract("test", Article)
 
-        assert result.title == "Hello English"
+        assert result.value.title == "Hello English"
         assert backend.call_count == 2
 
     async def test_field_guard_only_validates_annotated_field(self) -> None:
@@ -644,8 +644,8 @@ class TestFieldLevelGuards:
         extract = Extract(config)
         result = await extract("test", Article)
 
-        assert result.title == "Hello"
-        assert result.body == "日本語テキスト"
+        assert result.value.title == "Hello"
+        assert result.value.body == "日本語テキスト"
         assert backend.call_count == 1
 
     async def test_multiple_guards_on_field(self) -> None:
@@ -667,7 +667,7 @@ class TestFieldLevelGuards:
         extract = Extract(config)
         result = await extract("test", Article)
 
-        assert result.title == "Short title"
+        assert result.value.title == "Short title"
         assert backend.call_count == 2
 
     async def test_combined_instance_and_field_guards(self) -> None:
@@ -694,6 +694,141 @@ class TestFieldLevelGuards:
         extract = Extract(config).with_guard(instance_guard)
         result = await extract("test", Article)
 
-        assert result.title == "Hello"
-        assert result.body == "World"
+        assert result.value.title == "Hello"
+        assert result.value.body == "World"
         assert backend.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Escalating retry instruction tests
+# ---------------------------------------------------------------------------
+
+
+class TestEscalatingRetryInstruction:
+    """Tests for dynamic retry_instruction (callable) on OutputGuard."""
+
+    def test_static_string_still_works(self) -> None:
+        """OutputGuard with static retry_instruction returns it for any attempt."""
+        guard = OutputGuard(
+            validator=lambda r: None,
+            retry_instruction="Please fix it.",
+        )
+        assert guard.resolve_instruction(0, "result", "error") == "Please fix it."
+        assert guard.resolve_instruction(5, "result", "error") == "Please fix it."
+
+    def test_callable_receives_args(self) -> None:
+        """Callable retry_instruction receives (attempt, result, error)."""
+        calls: list[tuple[int, Any, str]] = []
+
+        def instruction(attempt: int, result: Any, error: str) -> str:
+            calls.append((attempt, result, error))
+            return f"attempt {attempt}"
+
+        guard = OutputGuard(
+            validator=lambda r: None,
+            retry_instruction=instruction,
+        )
+        result = guard.resolve_instruction(2, "my_result", "too long")
+        assert result == "attempt 2"
+        assert calls == [(2, "my_result", "too long")]
+
+    def test_callable_escalation(self) -> None:
+        """Callable returns different strings per attempt."""
+
+        def instruction(attempt: int, result: Any, error: str) -> str:
+            if attempt == 0:
+                return "Please shorten."
+            return "CUT IT DOWN NOW."
+
+        guard = OutputGuard(
+            validator=lambda r: None,
+            retry_instruction=instruction,
+        )
+        assert guard.resolve_instruction(0, "", "") == "Please shorten."
+        assert guard.resolve_instruction(1, "", "") == "CUT IT DOWN NOW."
+
+    async def test_escalating_guard_used_in_retry(self) -> None:
+        """Callable retry_instruction is used in actual guard retry prompt."""
+        instructions_used: list[str] = []
+
+        def instruction(attempt: int, result: Any, error: str) -> str:
+            msg = f"attempt-{attempt}-{error}"
+            instructions_used.append(msg)
+            return msg
+
+        def validator(result: Any) -> str | None:
+            text = str(result)
+            if text == "bad":
+                return "still bad"
+            return None
+
+        guard = OutputGuard(
+            validator=validator,
+            retry_instruction=instruction,
+            max_retries=1,
+            name="test_guard",
+        )
+
+        backend = SequencedMockBackend()
+        config = Config(backend=backend, tools=[], executor=None)
+        backend.queue_json_response("bad")
+        backend.queue_json_response("good")
+
+        ask = Ask(config).with_guard(guard)
+        result = await ask("question", "context")
+
+        assert result.value == "good"
+        assert len(instructions_used) == 1
+        assert "attempt-0-still bad" in instructions_used[0]
+
+
+class TestEscalatingBuiltInGuards:
+    """Tests for escalate=True on built-in guard factories."""
+
+    def test_max_length_escalate_includes_current_length(self) -> None:
+        """max_length(escalate=True) includes current char count."""
+        guard = max_length(100, escalate=True)
+        assert callable(guard.retry_instruction)
+        msg = guard.resolve_instruction(0, "x" * 150, "too long")
+        assert "150" in msg  # current length
+        assert "100" in msg  # limit
+
+    def test_max_length_escalate_forceful_on_retry(self) -> None:
+        """max_length escalation gets aggressive on second attempt."""
+        guard = max_length(100, escalate=True)
+        msg0 = guard.resolve_instruction(0, "x" * 150, "too long")
+        msg1 = guard.resolve_instruction(1, "x" * 120, "too long")
+        assert msg0 != msg1
+        assert "YOU HAVE FAILED" in msg1
+
+    def test_max_length_no_escalate_is_static(self) -> None:
+        """max_length(escalate=False) returns static string."""
+        guard = max_length(100, escalate=False)
+        assert isinstance(guard.retry_instruction, str)
+
+    def test_english_only_escalate(self) -> None:
+        """english_only(escalate=True) returns callable."""
+        guard = english_only(escalate=True)
+        msg0 = guard.resolve_instruction(0, "text", "non-english")
+        msg1 = guard.resolve_instruction(1, "text", "non-english")
+        assert msg0 != msg1
+
+    def test_no_markdown_escalate(self) -> None:
+        """no_markdown(escalate=True) returns callable."""
+        guard = no_markdown(escalate=True)
+        assert callable(guard.retry_instruction)
+
+    def test_no_preamble_escalate(self) -> None:
+        """no_preamble(escalate=True) returns callable."""
+        guard = no_preamble(escalate=True)
+        assert callable(guard.retry_instruction)
+
+    def test_no_emoji_escalate(self) -> None:
+        """no_emoji(escalate=True) returns callable."""
+        guard = no_emoji(escalate=True)
+        assert callable(guard.retry_instruction)
+
+    def test_ascii_only_escalate(self) -> None:
+        """ascii_only(escalate=True) returns callable."""
+        guard = ascii_only(escalate=True)
+        assert callable(guard.retry_instruction)

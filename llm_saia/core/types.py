@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 # Re-export backend types for convenience
 from .backend import AgentResponse, ToolDef
@@ -21,6 +21,9 @@ from .conversation import (
     Role,
     ToolCall,
 )
+from .trace import VerbTrace
+
+_T = TypeVar("_T")
 
 __all__ = [
     # Backend types (re-exported)
@@ -87,13 +90,18 @@ class DecisionReason(Enum):
 
 
 @dataclass
-class VerbResult:
-    """Result from any verb execution."""
+class VerbResult(Generic[_T]):
+    """Result from any verb execution.
 
-    value: Any
-    verb: str
-    success: bool
-    error: str | None = None
+    Wraps the verb's return value alongside the execution trace.
+
+    Attributes:
+        value: The verb's return value (str for text verbs, T for structured).
+        trace: VerbTrace tree with steps, token counts, and retry metadata.
+    """
+
+    value: _T
+    trace: VerbTrace = field(default_factory=VerbTrace)
 
 
 @dataclass
@@ -192,6 +200,5 @@ class TaskResult:
     history: list[Message]
     terminal_data: dict[str, Any] | None = None
     terminal_tool: str | None = None
-    trace_id: str = ""  # Constant across all LLM calls in one verb invocation
-    request_id: str | None = None  # User-provided correlation ID
-    score: LoopScore | None = None  # Loop quality metrics
+    score: LoopScore | None = None
+    trace: VerbTrace = field(default_factory=VerbTrace)

@@ -90,8 +90,8 @@ class TestParseRetry:
         extract = Extract(make_config(backend, call=call))
         result = await extract("test content", SimpleSchema)
 
-        assert result.value == "success"
-        assert result.score == 42
+        assert result.value.value == "success"
+        assert result.value.score == 42
 
     async def test_retry_exhausted_raises_error(self) -> None:
         """Should raise StructuredOutputError when all retries are exhausted."""
@@ -156,8 +156,8 @@ class TestParseRetry:
         extract = Extract(make_config(backend, call=call))
         result = await extract("test content", SimpleSchema)
 
-        assert result.value == "third"
-        assert result.score == 3
+        assert result.value.value == "third"
+        assert result.value.score == 3
         assert backend.call_count == 3
 
     async def test_first_success_no_retry(self) -> None:
@@ -169,8 +169,8 @@ class TestParseRetry:
         extract = Extract(make_config(backend))
         result = await extract("test content", SimpleSchema)
 
-        assert result.value == "immediate"
-        assert result.score == 100
+        assert result.value.value == "immediate"
+        assert result.value.score == 100
         assert backend.call_count == 1  # Only one call made
 
     async def test_with_parse_retries_fluent_api(self) -> None:
@@ -189,8 +189,8 @@ class TestParseRetry:
         # Use fluent API to set parse retries
         result = await saia.with_parse_retries(1).extract("content", SimpleSchema)
 
-        assert result.value == "fluent"
-        assert result.score == 5
+        assert result.value.value == "fluent"
+        assert result.value.score == 5
 
     def test_negative_parse_retries_rejected(self) -> None:
         """parse_retries must be non-negative."""

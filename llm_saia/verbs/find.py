@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..core.types import FindResult
+from ..core.types import FindResult, VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ class Find(Verb):
         criteria: str,
         *,
         conversation: ConversationLike | None = None,
-    ) -> FindResult:
+    ) -> VerbResult[FindResult]:
         """Find items matching criteria.
 
         Args:
@@ -32,13 +32,16 @@ class Find(Verb):
             criteria: Criteria for matching (e.g., "relevant to AI research").
 
         Returns:
-            FindResult with 0-indexed indices of matching items and reason.
+            VerbResult wrapping FindResult with 0-indexed indices and reason.
 
         Raises:
             ValueError: If items exceeds MAX_ITEMS.
         """
+        trace = self._init_verb_trace()
+
         if not items:
-            return FindResult(indices=[], reason="No items provided")
+            self._emit_verb_trace(trace)
+            return VerbResult(value=FindResult(indices=[], reason="No items provided"), trace=trace)
 
         if len(items) > MAX_ITEMS:
             raise ValueError(f"Too many items: {len(items)} exceeds max of {MAX_ITEMS}")
@@ -52,10 +55,14 @@ class Find(Verb):
             f"- matching_numbers: 1-indexed numbers of ALL matching items (empty list if none)\n"
             f"- reason: brief explanation of why those items match"
         )
-        result = await self._complete_structured(prompt, _FindResponse, conversation=conversation)
+        result = await self._complete_structured(
+            prompt, _FindResponse, conversation=conversation, _trace=trace
+        )
         # Convert 1-indexed to 0-indexed, filter invalid indices, deduplicate
         indices = sorted({i - 1 for i in result.matching_numbers if 1 <= i <= len(items)})
-        return FindResult(indices=indices, reason=result.reason)
+        value = FindResult(indices=indices, reason=result.reason)
+        self._emit_verb_trace(trace)
+        return VerbResult(value=value, trace=trace)
 
 
 @dataclass

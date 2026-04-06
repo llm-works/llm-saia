@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeVar, overload
 
+from ..core.types import VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ class Synthesize(Verb):
         schema: type[T],
         *,
         conversation: ConversationLike | None = None,
-    ) -> T: ...
+    ) -> VerbResult[T]: ...
 
     @overload
     async def __call__(
@@ -31,7 +32,7 @@ class Synthesize(Verb):
         *,
         goal: str,
         conversation: ConversationLike | None = None,
-    ) -> str: ...
+    ) -> VerbResult[str]: ...
 
     async def __call__(
         self,
@@ -40,7 +41,7 @@ class Synthesize(Verb):
         *,
         goal: str | None = None,
         conversation: ConversationLike | None = None,
-    ) -> T | str:
+    ) -> VerbResult[T] | VerbResult[str]:
         """Combine multiple artifacts into a single output.
 
         Args:
@@ -50,11 +51,12 @@ class Synthesize(Verb):
             conversation: Optional conversation object for message tracking.
 
         Returns:
-            Structured output if schema provided, otherwise string.
+            VerbResult wrapping structured output if schema provided, otherwise string.
         """
         if schema is not None and goal is not None:
             raise ValueError("Provide exactly one of schema or goal, not both")
 
+        trace = self._init_verb_trace()
         arts = "\n---\n".join(str(a) for a in artifacts)
 
         if goal is not None:
@@ -62,10 +64,19 @@ class Synthesize(Verb):
                 f"Synthesize these artifacts. Output ONLY the final result, no explanations.\n\n"
                 f"Goal: {goal}\n\nArtifacts:\n{arts}"
             )
-            return await self._complete(prompt, conversation=conversation)
+            value = await self._complete(prompt, conversation=conversation, _trace=trace)
+            self._emit_verb_trace(trace)
+            return VerbResult(value=value, trace=trace)
 
         if schema is not None:
             prompt = f"Synthesize these artifacts into a combined output:\n\n{arts}"
-            return await self._complete_structured(prompt, schema, conversation=conversation)
+            value = await self._complete_structured(
+                prompt,
+                schema,  # type: ignore[arg-type]
+                conversation=conversation,
+                _trace=trace,
+            )
+            self._emit_verb_trace(trace)
+            return VerbResult(value=value, trace=trace)
 
         raise ValueError("Either schema or goal must be provided")

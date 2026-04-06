@@ -12,6 +12,10 @@ if TYPE_CHECKING:
 
 __all__ = ["Guarded", "OutputGuard", "OutputGuardError"]
 
+# Type alias for dynamic retry instruction callables.
+# Signature: (attempt: int, result: Any, error: str) -> str
+RetryInstructionFn = "Callable[[int, Any, str], str]"
+
 
 @dataclass(frozen=True)
 class OutputGuard:
@@ -20,18 +24,14 @@ class OutputGuard:
     Args:
         validator: Function receiving the parsed result (Any type). Returns None
             if valid, error string if invalid. For text validation, use str(result).
-        retry_instruction: Instruction appended to prompt on retry.
+        retry_instruction: Static string or callable ``(attempt, result, error) -> str``
+            appended to prompt on retry. Callables enable escalating retry tone.
         max_retries: Max retry attempts (must be >= 0). Default 1.
         name: Optional name for logging/debugging.
 
     Example:
-        >>> def is_short(result: Any) -> str | None:
-        ...     text = str(result)
-        ...     if len(text) > 100:
-        ...         return f"Too long: {len(text)} chars"
-        ...     return None
         >>> guard = OutputGuard(
-        ...     validator=is_short,
+        ...     validator=lambda r: f"Too long: {len(str(r))}" if len(str(r)) > 100 else None,
         ...     retry_instruction="Keep response under 100 characters.",
         ...     name="length_check",
         ... )
@@ -41,7 +41,7 @@ class OutputGuard:
     """
 
     validator: Callable[[Any], str | None]
-    retry_instruction: str
+    retry_instruction: str | Callable[[int, Any, str], str]
     max_retries: int = 1
     name: str | None = None
 
@@ -49,6 +49,16 @@ class OutputGuard:
         """Validate max_retries is non-negative."""
         if self.max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
+
+    def resolve_instruction(self, attempt: int, result: Any, error: str) -> str:
+        """Resolve retry instruction for the given attempt.
+
+        If ``retry_instruction`` is a string, returns it directly.
+        If callable, calls it with ``(attempt, result, error)``.
+        """
+        if callable(self.retry_instruction):
+            return self.retry_instruction(attempt, result, error)
+        return self.retry_instruction
 
 
 class Guarded:

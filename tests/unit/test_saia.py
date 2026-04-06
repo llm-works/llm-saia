@@ -23,7 +23,7 @@ class TestSAIA:
 
         result = await saia.ask("artifact", "question")
 
-        assert result == "the answer"
+        assert result.value == "the answer"
 
     async def test_extract(self, mock_backend: MockBackend) -> None:
         @dataclass
@@ -35,7 +35,7 @@ class TestSAIA:
 
         result = await saia.extract("raw content", Output)
 
-        assert result.data == "extracted"
+        assert result.value.data == "extracted"
 
     async def test_constrain(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
@@ -43,23 +43,23 @@ class TestSAIA:
 
         result = await saia.constrain("text", ["rule1", "rule2"])
 
-        assert result == "constrained output"
+        assert result.value == "constrained output"
 
     async def test_classify(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
 
         result = await saia.classify("text", ["cat_a", "cat_b"])
 
-        assert isinstance(result, ClassifyResult)
-        assert result.category == "test_category"
+        assert isinstance(result.value, ClassifyResult)
+        assert result.value.category == "test_category"
 
     async def test_choose(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
 
         result = await saia.choose(["option_a", "option_b"])
 
-        assert isinstance(result, ChooseResult)
-        assert result.choice == "option_a"
+        assert isinstance(result.value, ChooseResult)
+        assert result.value.choice == "option_a"
 
     async def test_instruct(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
@@ -67,23 +67,23 @@ class TestSAIA:
 
         result = await saia.instruct("Complete the task")
 
-        assert result == "Done."
+        assert result.value == "Done."
 
     async def test_verify(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
 
         result = await saia.verify("claim", "predicate")
 
-        assert isinstance(result, VerifyResult)
-        assert result.passed is True
+        assert isinstance(result.value, VerifyResult)
+        assert result.value.passed is True
 
     async def test_critique(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
 
         result = await saia.critique("argument")
 
-        assert isinstance(result, Critique)
-        assert result.counter_argument == "test counter"
+        assert isinstance(result.value, Critique)
+        assert result.value.counter_argument == "test counter"
 
     async def test_refine(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
@@ -91,7 +91,7 @@ class TestSAIA:
 
         result = await saia.refine("original", "feedback")
 
-        assert result == "improved"
+        assert result.value == "improved"
 
     async def test_synthesize(self, mock_backend: MockBackend) -> None:
         @dataclass
@@ -103,15 +103,15 @@ class TestSAIA:
 
         result = await saia.synthesize(["a", "b"], Combined)
 
-        assert result.result == "merged"
+        assert result.value.result == "merged"
 
     async def test_ground(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
 
         result = await saia.ground("hypothesis", ["source1"])
 
-        assert len(result) == 1
-        assert result[0].content == "test content"
+        assert len(result.value) == 1
+        assert result.value[0].content == "test content"
 
     async def test_decompose(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
@@ -121,7 +121,7 @@ class TestSAIA:
 
         result = await saia.decompose("big task")
 
-        assert result == ["task1", "task2"]
+        assert result.value == ["task1", "task2"]
 
     def test_store_and_recall(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
