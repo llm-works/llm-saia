@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
@@ -101,7 +100,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     @staticmethod
     def _generate_id() -> str:
         """Generate a short unique ID for tracing (8-char hex)."""
-        return uuid.uuid4().hex[:8]
+        from .trace import _generate_id
+
+        return _generate_id()
 
     def _resolve_tracer(
         self,

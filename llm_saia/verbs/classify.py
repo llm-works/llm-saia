@@ -24,12 +24,14 @@ class Classify(Verb):
     ) -> VerbResult[ClassifyResult]:
         """Classify text into one of the specified categories."""
         trace = self._init_verb_trace()
-        cats = ", ".join(categories)
-        prompt = f"Classify this text into one of: {cats}\n\nText: {text}"
-        if criteria:
-            prompt += f"\n\nCriteria: {criteria}"
-        value = await self._complete_structured(
-            prompt, ClassifyResult, conversation=conversation, _trace=trace
-        )
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)
+        try:
+            cats = ", ".join(categories)
+            prompt = f"Classify this text into one of: {cats}\n\nText: {text}"
+            if criteria:
+                prompt += f"\n\nCriteria: {criteria}"
+            value = await self._complete_structured(
+                prompt, ClassifyResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

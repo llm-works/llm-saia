@@ -27,9 +27,11 @@ class Decompose(Verb):
     ) -> VerbResult[list[str]]:
         """Break down a task into a list of subtasks."""
         trace = self._init_verb_trace()
-        prompt = f"Break down this task into subtasks:\n\n{task}"
-        result = await self._complete_structured(
-            prompt, DecomposeResult, conversation=conversation, _trace=trace
-        )
-        self._emit_verb_trace(trace)
-        return VerbResult(value=result.subtasks, trace=trace)
+        try:
+            prompt = f"Break down this task into subtasks:\n\n{task}"
+            result = await self._complete_structured(
+                prompt, DecomposeResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=result.subtasks, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

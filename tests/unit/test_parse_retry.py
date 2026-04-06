@@ -92,6 +92,9 @@ class TestParseRetry:
 
         assert result.value.value == "success"
         assert result.value.score == 42
+        # Trace should capture both attempts (1 failed parse + 1 success)
+        assert result.trace.total_llm_calls == 2
+        assert result.trace.parse_retries == 1
 
     async def test_retry_exhausted_raises_error(self) -> None:
         """Should raise StructuredOutputError when all retries are exhausted."""
@@ -172,6 +175,9 @@ class TestParseRetry:
         assert result.value.value == "immediate"
         assert result.value.score == 100
         assert backend.call_count == 1  # Only one call made
+        # No retries — single attempt step
+        assert result.trace.total_llm_calls == 1
+        assert result.trace.parse_retries == 0
 
     async def test_with_parse_retries_fluent_api(self) -> None:
         """Test using with_parse_retries() fluent API."""

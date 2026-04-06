@@ -19,11 +19,12 @@ class Constrain(Verb):
     ) -> VerbResult[str]:
         """Rewrite text to comply with the specified rules."""
         trace = self._init_verb_trace()
-        if not rules:
+        try:
+            if not rules:
+                return VerbResult(value=text, trace=trace)
+            rules_str = "\n".join(f"- {r}" for r in rules)
+            prompt = f"Rewrite this text to comply with these rules:\n{rules_str}\n\nText:\n{text}"
+            value = await self._complete(prompt, conversation=conversation, _trace=trace)
+            return VerbResult(value=value, trace=trace)
+        finally:
             self._emit_verb_trace(trace)
-            return VerbResult(value=text, trace=trace)
-        rules_str = "\n".join(f"- {r}" for r in rules)
-        prompt = f"Rewrite this text to comply with these rules:\n{rules_str}\n\nText:\n{text}"
-        value = await self._complete(prompt, conversation=conversation, _trace=trace)
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)

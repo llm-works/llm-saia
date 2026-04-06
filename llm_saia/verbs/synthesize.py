@@ -57,26 +57,27 @@ class Synthesize(Verb):
             raise ValueError("Provide exactly one of schema or goal, not both")
 
         trace = self._init_verb_trace()
-        arts = "\n---\n".join(str(a) for a in artifacts)
+        try:
+            arts = "\n---\n".join(str(a) for a in artifacts)
 
-        if goal is not None:
-            prompt = (
-                f"Synthesize these artifacts. Output ONLY the final result, no explanations.\n\n"
-                f"Goal: {goal}\n\nArtifacts:\n{arts}"
-            )
-            value = await self._complete(prompt, conversation=conversation, _trace=trace)
+            if goal is not None:
+                prompt = (
+                    f"Synthesize these artifacts. Output ONLY the final result, "
+                    f"no explanations.\n\nGoal: {goal}\n\nArtifacts:\n{arts}"
+                )
+                value = await self._complete(prompt, conversation=conversation, _trace=trace)
+                return VerbResult(value=value, trace=trace)
+
+            if schema is not None:
+                prompt = f"Synthesize these artifacts into a combined output:\n\n{arts}"
+                value = await self._complete_structured(
+                    prompt,
+                    schema,  # type: ignore[arg-type]
+                    conversation=conversation,
+                    _trace=trace,
+                )
+                return VerbResult(value=value, trace=trace)
+
+            raise ValueError("Either schema or goal must be provided")
+        finally:
             self._emit_verb_trace(trace)
-            return VerbResult(value=value, trace=trace)
-
-        if schema is not None:
-            prompt = f"Synthesize these artifacts into a combined output:\n\n{arts}"
-            value = await self._complete_structured(
-                prompt,
-                schema,  # type: ignore[arg-type]
-                conversation=conversation,
-                _trace=trace,
-            )
-            self._emit_verb_trace(trace)
-            return VerbResult(value=value, trace=trace)
-
-        raise ValueError("Either schema or goal must be provided")

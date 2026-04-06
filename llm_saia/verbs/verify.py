@@ -23,12 +23,14 @@ class Verify(Verb):
     ) -> VerbResult[VerifyResult]:
         """Check whether an artifact satisfies a given predicate."""
         trace = self._init_verb_trace()
-        prompt = (
-            f"Verify that this artifact satisfies the predicate.\n\n"
-            f"Artifact: {artifact}\n\nPredicate: {predicate}"
-        )
-        value = await self._complete_structured(
-            prompt, VerifyResult, conversation=conversation, _trace=trace
-        )
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)
+        try:
+            prompt = (
+                f"Verify that this artifact satisfies the predicate.\n\n"
+                f"Artifact: {artifact}\n\nPredicate: {predicate}"
+            )
+            value = await self._complete_structured(
+                prompt, VerifyResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

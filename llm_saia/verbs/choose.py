@@ -24,14 +24,16 @@ class Choose(Verb):
     ) -> VerbResult[ChooseResult]:
         """Select one option from the given choices."""
         trace = self._init_verb_trace()
-        opts = "\n".join(f"- {o}" for o in options)
-        prompt = f"Choose one of these options:\n{opts}"
-        if context:
-            prompt += f"\n\nContext: {context}"
-        if criteria:
-            prompt += f"\n\nCriteria: {criteria}"
-        value = await self._complete_structured(
-            prompt, ChooseResult, conversation=conversation, _trace=trace
-        )
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)
+        try:
+            opts = "\n".join(f"- {o}" for o in options)
+            prompt = f"Choose one of these options:\n{opts}"
+            if context:
+                prompt += f"\n\nContext: {context}"
+            if criteria:
+                prompt += f"\n\nCriteria: {criteria}"
+            value = await self._complete_structured(
+                prompt, ChooseResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

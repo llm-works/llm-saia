@@ -23,9 +23,11 @@ class Instruct(Verb):
     ) -> VerbResult[str]:
         """Execute a directive and return the response."""
         trace = self._init_verb_trace()
-        prompt = directive
-        if context:
-            prompt += f"\n\nContext: {context}"
-        value = await self._complete(prompt, conversation=conversation, _trace=trace)
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)
+        try:
+            prompt = directive
+            if context:
+                prompt += f"\n\nContext: {context}"
+            value = await self._complete(prompt, conversation=conversation, _trace=trace)
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

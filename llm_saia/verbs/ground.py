@@ -19,19 +19,21 @@ class Ground(Verb):
     ) -> VerbResult[list[Evidence]]:
         """Find evidence in sources that supports or refutes the artifact."""
         trace = self._init_verb_trace()
-        results: list[Evidence] = []
-        for source in sources:
-            prompt = (
-                f"Find evidence in this source for the artifact.\n\n"
-                f"Artifact: {artifact}\n\nSource: {source}"
-            )
-            # Fork per source so each evaluation is independent
-            source_conv = self._fork_conversation(conversation)
-            results.append(
-                await self._complete_structured(
-                    prompt, Evidence, conversation=source_conv, _trace=trace
+        try:
+            results: list[Evidence] = []
+            for source in sources:
+                prompt = (
+                    f"Find evidence in this source for the artifact.\n\n"
+                    f"Artifact: {artifact}\n\nSource: {source}"
                 )
-            )
-            self._merge_conversation(conversation, source_conv)
-        self._emit_verb_trace(trace)
-        return VerbResult(value=results, trace=trace)
+                # Fork per source so each evaluation is independent
+                source_conv = self._fork_conversation(conversation)
+                results.append(
+                    await self._complete_structured(
+                        prompt, Evidence, conversation=source_conv, _trace=trace
+                    )
+                )
+                self._merge_conversation(conversation, source_conv)
+            return VerbResult(value=results, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

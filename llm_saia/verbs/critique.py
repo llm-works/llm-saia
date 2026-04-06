@@ -19,9 +19,11 @@ class Critique_(Verb):
     ) -> VerbResult[Critique]:
         """Generate the strongest counter-argument to the artifact."""
         trace = self._init_verb_trace()
-        prompt = f"Generate the strongest counter-argument to this:\n\n{artifact}"
-        value = await self._complete_structured(
-            prompt, Critique, conversation=conversation, _trace=trace
-        )
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)
+        try:
+            prompt = f"Generate the strongest counter-argument to this:\n\n{artifact}"
+            value = await self._complete_structured(
+                prompt, Critique, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

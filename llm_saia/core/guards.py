@@ -203,8 +203,7 @@ class OutputGuardMixin:
                 return result
             if attempt >= guard.max_retries:
                 raise OutputGuardError(gname, error, attempt + 1)
-            named = OutputGuard(guard.validator, guard.retry_instruction, guard.max_retries, gname)
-            self._log_guard_retry(named, attempt + 1, error)
+            self._log_guard_retry(gname, attempt + 1, guard.max_retries, error)
             retry_prompt = self._build_field_guard_retry_prompt(
                 prompt, result, field_name, field_value, guard, error, attempt
             )
@@ -279,7 +278,7 @@ class OutputGuardMixin:
                 return result  # Passed
 
             if attempt < guard.max_retries:
-                self._log_guard_retry(guard, attempt + 1, error)
+                self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error, attempt)
                 result = await self._complete_structured_attempt(
                     retry_prompt,
@@ -345,7 +344,7 @@ class OutputGuardMixin:
                 return text  # Passed
 
             if attempt < guard.max_retries:
-                self._log_guard_retry(guard, attempt + 1, error)
+                self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error, attempt)
                 text = await self._complete_text_attempt(
                     retry_prompt,
@@ -384,15 +383,17 @@ class OutputGuardMixin:
             f"{instruction}"
         )
 
-    def _log_guard_retry(self, guard: OutputGuard, attempt: int, error: str) -> None:
+    def _log_guard_retry(
+        self, name: str | None, attempt: int, max_retries: int, error: str
+    ) -> None:
         """Log guard retry attempt."""
         if self._lg:
             self._lg.debug(
                 "guard retry",
                 extra={
-                    "guard": guard.name,
+                    "guard": name,
                     "attempt": attempt,
-                    "max_retries": guard.max_retries,
+                    "max_retries": max_retries,
                     "error": error,
                 },
             )

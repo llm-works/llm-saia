@@ -26,11 +26,13 @@ class Extract(Verb):
     ) -> VerbResult[T]:
         """Extract structured data from content according to the schema."""
         trace = self._init_verb_trace()
-        prompt = f"Extract the following information from this content:\n\n{content}"
-        if instructions:
-            prompt += f"\n\nExtraction guidance: {instructions}"
-        value = await self._complete_structured(
-            prompt, schema, conversation=conversation, _trace=trace
-        )
-        self._emit_verb_trace(trace)
-        return VerbResult(value=value, trace=trace)
+        try:
+            prompt = f"Extract the following information from this content:\n\n{content}"
+            if instructions:
+                prompt += f"\n\nExtraction guidance: {instructions}"
+            value = await self._complete_structured(
+                prompt, schema, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

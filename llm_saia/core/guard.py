@@ -12,10 +12,6 @@ if TYPE_CHECKING:
 
 __all__ = ["Guarded", "OutputGuard", "OutputGuardError"]
 
-# Type alias for dynamic retry instruction callables.
-# Signature: (attempt: int, result: Any, error: str) -> str
-RetryInstructionFn = "Callable[[int, Any, str], str]"
-
 
 @dataclass(frozen=True)
 class OutputGuard:

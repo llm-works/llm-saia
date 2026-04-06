@@ -49,6 +49,9 @@ class TestAsk:
         assert "test artifact" in mock_backend.last_prompt
         assert "what is this?" in mock_backend.last_prompt
         assert result.value == "mock response"
+        assert result.trace.trace_id
+        assert result.trace.verb == "Ask"
+        assert len(result.trace.steps) >= 1
 
     async def test_ask_returns_completion(self, mock_backend: MockBackend) -> None:
         mock_backend.set_complete_response("custom answer")
@@ -70,6 +73,9 @@ class TestFind:
         # Default mock returns matching_numbers=[1, 3], which becomes indices=[0, 2]
         assert result.value.indices == [0, 2]
         assert result.value.reason == "test find reason"
+        assert result.trace.trace_id
+        assert result.trace.verb == "Find"
+        assert len(result.trace.steps) >= 1
 
     async def test_find_includes_items_and_criteria_in_prompt(
         self, mock_backend: MockBackend
@@ -331,6 +337,9 @@ class TestDecompose:
 
         assert result.value == ["step1", "step2"]
         assert "complex task" in mock_backend.last_prompt
+        assert result.trace.trace_id
+        assert result.trace.verb == "Decompose"
+        assert len(result.trace.steps) >= 1
 
 
 class TestMemory:
