@@ -33,7 +33,7 @@ def english_only(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
 
     Args:
         max_retries: Max retry attempts. Default 1.
-        escalate: Use increasingly forceful retry instructions. Default False.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
     static = (
         "Your response contained non-English characters. "
@@ -60,7 +60,7 @@ def max_length(n: int, max_retries: int = 2, *, escalate: bool = True) -> Output
     Args:
         n: Maximum character count.
         max_retries: Max retry attempts. Default 2 (length often needs multiple tries).
-        escalate: Use increasingly forceful retry instructions. Default False.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
 
     def check(result: Any) -> str | None:
@@ -95,7 +95,7 @@ def no_markdown(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
 
     Args:
         max_retries: Max retry attempts. Default 1.
-        escalate: Use increasingly forceful retry instructions. Default False.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
     static = (
         "Your response contained markdown formatting. "
@@ -121,7 +121,7 @@ def no_preamble(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
 
     Args:
         max_retries: Max retry attempts. Default 1.
-        escalate: Use increasingly forceful retry instructions. Default False.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
     static = (
         "Your response started with a conversational preamble. "
@@ -148,7 +148,7 @@ def no_emoji(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
 
     Args:
         max_retries: Max retry attempts. Default 1.
-        escalate: Use increasingly forceful retry instructions. Default False.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
     static = "Your response contained emoji. Do not use emoji or emoticons. Use plain text only."
     return OutputGuard(
@@ -170,7 +170,7 @@ def ascii_only(max_retries: int = 1, *, escalate: bool = True) -> OutputGuard:
 
     Args:
         max_retries: Max retry attempts. Default 1.
-        escalate: Use increasingly forceful retry instructions. Default False.
+        escalate: Use increasingly forceful retry instructions. Default True.
     """
     static = (
         "Your response contained non-ASCII characters. "

@@ -40,6 +40,7 @@ class _LoopCtx:
     call_options: CallOptions
     messages: list[Message]
     tool_names: list[str]
+    verb_trace: VerbTrace | None = None
     acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
 
@@ -76,7 +77,10 @@ class Complete(Verb):
         )
 
         try:
-            result = await self._run_loop(task, trace_id, ctrl, active_tracer, on_iteration)
+            result = await self._run_loop(
+                task, trace_id, ctrl, active_tracer, on_iteration, verb_trace
+            )
+            self._emit_verb_trace(verb_trace)
             return self._tag_result(result, verb_trace)
         finally:
             if active_tracer and owns_tracer:
@@ -109,6 +113,7 @@ class Complete(Verb):
         ctrl: LoopController,
         tracer: Tracer | None,
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
+        verb_trace: VerbTrace | None = None,
     ) -> TaskResult:
         """Execute the main tool-calling loop."""
         call_options = self._config.call or DEFAULT_COMPLETE_CALL
@@ -121,6 +126,7 @@ class Complete(Verb):
             call_options=call_options,
             messages=[Message(role=Role.USER, content=task)],
             tool_names=[t.name for t in (self._config.tools or [])],
+            verb_trace=verb_trace,
         )
         self._log_loop_start(call_options)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
@@ -157,6 +163,7 @@ class Complete(Verb):
             ctx.on_iteration,
             ctx.tracer,
             ctx.trace_id,
+            ctx.verb_trace,
         )
         self._score_action(ctx.acc, action, tokens)
         return result, tokens, response.content
@@ -172,6 +179,7 @@ class Complete(Verb):
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
         tracer: Tracer | None = None,
         trace_id: str = "",
+        verb_trace: VerbTrace | None = None,
     ) -> tuple[Action, TaskResult | None]:
         """Process a single iteration: callback, decide, execute, trace."""
         self._check_tool_support(response)
@@ -191,8 +199,11 @@ class Complete(Verb):
         action = await ctrl.decide(obs)
         self._log_action(action)
 
+        step = self._build_iteration_step(obs, action, response, ctrl, trace_id)
+        if verb_trace is not None:
+            verb_trace.add_step(step)
         if tracer:
-            self._write_trace(tracer, obs, action, response, ctrl, trace_id)
+            tracer.write(step)
 
         result = await self._execute_action(action, response, messages, iteration)
         return action, result
@@ -367,19 +378,6 @@ class Complete(Verb):
             )
 
     # --- Trace helpers ---
-
-    def _write_trace(
-        self,
-        tracer: Tracer,
-        obs: Observation,
-        action: Action,
-        response: AgentResponse,
-        ctrl: LoopController,
-        trace_id: str,
-    ) -> None:
-        """Write one iteration trace record as a Step."""
-        record = self._build_iteration_step(obs, action, response, ctrl, trace_id)
-        tracer.write(record)
 
     def _build_iteration_step(
         self,
