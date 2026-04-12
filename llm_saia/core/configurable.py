@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
     from .backend import ToolDef
     from .config import CallOptions, Config
-    from .guard import OutputGuard
+    from .guard import IterationGuard, OutputGuard
 
 __all__ = ["Configurable"]
 
@@ -129,53 +129,53 @@ class Configurable(ABC):
         """
         return self._with_call(parse_retries=n)
 
-    def with_guard(self, guard: OutputGuard) -> Self:
-        """Add an output guard that validates output and retries if invalid.
+    def with_guard(self, guard: OutputGuard | IterationGuard) -> Self:
+        """Add a guard to this instance.
 
-        Guards are applied after completion. If validation fails, the request
-        is retried with the guard's retry_instruction appended to the prompt.
+        Accepts both guard types and routes them to the correct bucket:
 
-        Guards work with both:
-        - Text verbs (Ask, etc.) - validator receives the text string
-        - Structured output verbs (Extract, etc.) - validator receives the parsed object
+        - :class:`OutputGuard` — validates the final result and retries if
+          invalid (applied after completion).
+        - :class:`IterationGuard` — enforces behavioral constraints after each
+          LLM response in a tool-calling loop. On failure the feedback string is
+          injected into the conversation and the loop continues.
 
-        Multiple guards can be chained and are applied in order. If a guard retry
-        produces a different result, all guards are re-validated from the beginning.
+        Multiple guards can be chained and are applied in order.
 
         Example:
-            >>> from llm_saia.guards import english_only, max_length
+            >>> from llm_saia import IterationGuard
+            >>> from llm_saia.guards import english_only
             >>> result = await (
             ...     saia
             ...     .with_guard(english_only())
-            ...     .with_guard(max_length(500))
-            ...     .ask(artifact, question)
+            ...     .with_guard(IterationGuard(require_narrative, name="narrative"))
+            ...     .complete(task)
             ... )
 
         Args:
-            guard: OutputGuard with validator and retry instruction.
+            guard: OutputGuard or IterationGuard instance.
         """
         from .config import DEFAULT_CALL
+        from .guard import IterationGuard as _IG
 
         base_call = self._config.call or DEFAULT_CALL
+        if isinstance(guard, _IG):
+            new_iter_guards = base_call.iteration_guards + (guard,)
+            return self._with_call(iteration_guards=new_iter_guards)
         new_guards = base_call.output_guards + (guard,)
         return self._with_call(output_guards=new_guards)
 
-    def with_guards(self, *guards: OutputGuard) -> Self:
-        """Add multiple output guards at once.
+    def with_guards(self, *guards: OutputGuard | IterationGuard) -> Self:
+        """Add multiple guards at once.
 
         Convenience method equivalent to chaining multiple with_guard() calls.
-        See with_guard() for details on guard behavior.
+        Accepts a mix of :class:`OutputGuard` and :class:`IterationGuard`
+        instances — each is routed to the correct bucket.
 
-        Example:
-            >>> from llm_saia.guards import english_only, max_length, no_preamble
-            >>> result = await (
-            ...     saia
-            ...     .with_guards(english_only(), max_length(500), no_preamble())
-            ...     .ask(artifact, question)
-            ... )
+        See :meth:`with_guard` for details on guard behavior.
 
         Args:
-            *guards: OutputGuard instances to add.
+            *guards: OutputGuard and/or IterationGuard instances to add.
 
         Raises:
             ValueError: If no guards are provided.
@@ -184,7 +184,14 @@ class Configurable(ABC):
             raise ValueError("with_guards requires at least one guard")
 
         from .config import DEFAULT_CALL
+        from .guard import IterationGuard as _IG
 
         base_call = self._config.call or DEFAULT_CALL
-        new_guards = base_call.output_guards + tuple(guards)
-        return self._with_call(output_guards=new_guards)
+        new_output: tuple[OutputGuard, ...] = base_call.output_guards
+        new_iter: tuple[IterationGuard, ...] = base_call.iteration_guards
+        for g in guards:
+            if isinstance(g, _IG):
+                new_iter = new_iter + (g,)
+            else:
+                new_output = new_output + (g,)
+        return self._with_call(output_guards=new_output, iteration_guards=new_iter)

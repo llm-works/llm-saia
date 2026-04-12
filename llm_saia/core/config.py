@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .backend import Backend, ToolDef
-    from .guard import OutputGuard
+    from .guard import IterationGuard, OutputGuard
     from .logger import Logger
     from .trace import Tracer
 
@@ -50,6 +50,9 @@ class CallOptions:
 
     # Output guards (validators with retry)
     output_guards: tuple[OutputGuard, ...] = field(default_factory=tuple)
+
+    # Iteration guards (behavioral constraints enforced each loop iteration)
+    iteration_guards: tuple[IterationGuard, ...] = field(default_factory=tuple)
 
     # Tracing
     request_id: str | None = None  # User-provided correlation ID

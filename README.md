@@ -166,6 +166,31 @@ result = await saia.extract(article, Summary)
 Pre-built guards: `english_only()`, `ascii_only()`, `max_length(n)`, `no_emoji()`,
 `no_markdown()`, `no_preamble()`.
 
+### Iteration Guards
+
+Iteration guards enforce behavioral constraints *during* a tool-calling loop, rather than
+validating the final result. When a guard fires, its feedback is injected into the conversation
+and the loop continues.
+
+```python
+from llm_saia import IterationGuard
+
+# Require the LLM to explain what it's doing before calling tools
+def require_narrative(response):
+    if response.tool_calls and not (response.content or "").strip():
+        return "Explain what you're doing and why before calling tools."
+    return None
+
+result = await (
+    saia
+    .with_guard(IterationGuard(require_narrative, name="narrative"))
+    .complete(task)
+)
+```
+
+`with_guard()` and `with_guards()` accept both `OutputGuard` and `IterationGuard` — each is
+routed to the correct bucket automatically.
+
 ## Examples
 
 See the [examples/](examples/) directory:

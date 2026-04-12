@@ -82,6 +82,9 @@ class DecisionReason(Enum):
     TERMINAL_CONFIRMED = "terminal_confirmed"  # Terminal tool confirmed
     CLASSIFIED_COMPLETE = "classified_complete"  # Classifier detected completion
 
+    # Iteration guard reasons
+    ITERATION_GUARD = "iteration_guard"  # Iteration guard injected feedback
+
     # FAIL reasons
     TERMINAL_CONFIRMED_FAIL = "terminal_confirmed_fail"  # Terminal tool confirmed failure
     CONFIRMATION_RETRIES_EXCEEDED = (

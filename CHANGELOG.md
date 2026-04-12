@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `IterationGuard` for per-iteration behavioral constraints in tool-calling loops. Unlike
+  `OutputGuard` (which validates the final result), an `IterationGuard` runs after each LLM
+  response during the loop. When its validator returns a feedback string, the message is injected
+  into the conversation and the loop continues. Works with both the base verb `_loop` and the
+  `Complete` verb. Guard outcomes are recorded in trace `Step.guards`. Added via the existing
+  `with_guard()` / `with_guards()` API which now routes `OutputGuard` and `IterationGuard`
+  instances to their respective buckets.
 - Tree-structured tracing: every verb call produces a `VerbTrace` with `Step` children capturing
   each LLM call, parse retries, guard retries, and tool executions. Derived aggregates
   (`total_llm_calls`, `parse_retries`, `guard_retries`, `total_tokens`) computed from the step
