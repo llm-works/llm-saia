@@ -319,9 +319,9 @@ class TestIterationGuardInComplete:
         backend.queue_response(_tool_response("Confirming", [done_confirm]))
 
         guard = IterationGuard(
-            validator=lambda r: "Explain."
-            if r.tool_calls and not (r.content or "").strip()
-            else None,
+            validator=lambda r: (
+                "Explain." if r.tool_calls and not (r.content or "").strip() else None
+            ),
             name="narrative",
         )
         call = CallOptions(iteration_guards=(guard,), max_iterations=10)

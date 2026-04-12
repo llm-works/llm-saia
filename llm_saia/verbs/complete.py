@@ -157,10 +157,10 @@ class Complete(Verb):
         response, tokens = await self._run_iteration(ctx.messages, ctx.call_options)
         self._log_response(response, iteration, tokens)
 
-        # Run iteration guards before controller decides
-        feedback, outcomes = self._run_iteration_guards(
-            ctx.iteration_guards, response, ctx.verb_trace
-        )
+        # Run iteration guards before controller decides.
+        # Don't pass verb_trace here — Complete builds its own Step later and
+        # attaches outcomes explicitly (avoids overwriting the previous step).
+        feedback, outcomes = self._run_iteration_guards(ctx.iteration_guards, response)
         if feedback is not None:
             await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
             return None, tokens, response.content
@@ -176,6 +176,7 @@ class Complete(Verb):
             ctx.tracer,
             ctx.trace_id,
             ctx.verb_trace,
+            outcomes,
         )
         self._score_action(ctx.acc, action, tokens)
         return result, tokens, response.content
@@ -219,6 +220,7 @@ class Complete(Verb):
         tracer: Tracer | None = None,
         trace_id: str = "",
         verb_trace: VerbTrace | None = None,
+        guard_outcomes: list[GuardOutcome] | None = None,
     ) -> tuple[Action, TaskResult | None]:
         """Process a single iteration: callback, decide, execute, trace."""
         self._check_tool_support(response)
@@ -239,6 +241,8 @@ class Complete(Verb):
         self._log_action(action)
 
         step = self._build_iteration_step(obs, action, response, ctrl, trace_id)
+        if guard_outcomes:
+            step.guards = guard_outcomes
         if verb_trace is not None:
             verb_trace.add_step(step)
         if tracer:
