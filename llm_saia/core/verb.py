@@ -26,7 +26,7 @@ from .schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
     from .backend import Backend
-    from .trace import Tracer, VerbTrace
+    from .trace import GuardOutcome, Tracer, VerbTrace
 
 T = TypeVar("T")
 
@@ -276,8 +276,8 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         _trace: VerbTrace | None,
     ) -> bool:
         """Check iteration guards and execute tools. Returns True if loop should continue."""
-        feedback = self._run_iteration_guards(iter_guards, response, _trace)
-        if feedback:
+        feedback, _outcomes = self._run_iteration_guards(iter_guards, response, _trace)
+        if feedback is not None:
             # Acknowledge any pending tool calls so the conversation stays valid
             for tc in response.tool_calls or []:
                 conv.append(Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id))
@@ -305,16 +305,21 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         guards: tuple[IterationGuard, ...],
         response: AgentResponse,
         _trace: VerbTrace | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, list[GuardOutcome]]:
         """Run iteration guards against the current response.
 
-        Returns a combined feedback string if any guard fires, or None if all
-        pass.  Guard outcomes are recorded on the last Step in the trace.
-        """
-        if not guards:
-            return None
+        Returns ``(feedback, outcomes)`` — *feedback* is the combined feedback
+        string if any guard fires (or ``None`` when all pass), and *outcomes*
+        is the list of per-guard results for trace recording.
 
+        When a trace is active **and** a step already exists (base-verb loop),
+        outcomes are attached to the most recent step automatically.  The
+        Complete verb creates its step later, so it attaches outcomes itself.
+        """
         from .trace import GuardOutcome
+
+        if not guards:
+            return None, []
 
         feedback_parts: list[str] = []
         outcomes: list[GuardOutcome] = []
@@ -331,13 +336,13 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 self._log_iteration_guard_fired(guard.name, result)
                 feedback_parts.append(result)  # type: ignore[arg-type]
 
-        # Attach outcomes to the most recent step in the trace
+        # Attach outcomes to the most recent step when one already exists
         if _trace and _trace.steps:
             _trace.steps[-1].guards = outcomes
 
         if feedback_parts:
-            return "\n\n".join(feedback_parts)
-        return None
+            return "\n\n".join(feedback_parts), outcomes
+        return None, outcomes
 
     def _log_iteration_guard_fired(self, name: str | None, feedback: str | None) -> None:
         """Log that an iteration guard fired."""

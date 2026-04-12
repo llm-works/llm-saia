@@ -18,7 +18,7 @@ from ..core.controller import (
 )
 from ..core.conversation import Message, Role, ToolCall
 from ..core.guard import IterationGuard
-from ..core.trace import LLMCall, Step, ToolOutcome, Tracer, VerbTrace
+from ..core.trace import GuardOutcome, LLMCall, Step, ToolOutcome, Tracer, VerbTrace
 from ..core.types import DecisionReason, LoopScore, TaskResult
 from ..core.verb import Verb
 
@@ -158,9 +158,11 @@ class Complete(Verb):
         self._log_response(response, iteration, tokens)
 
         # Run iteration guards before controller decides
-        feedback = self._run_iteration_guards(ctx.iteration_guards, response, ctx.verb_trace)
-        if feedback:
-            self._apply_guard_nudge(ctx, response, feedback, tokens)
+        feedback, outcomes = self._run_iteration_guards(
+            ctx.iteration_guards, response, ctx.verb_trace
+        )
+        if feedback is not None:
+            await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
             return None, tokens, response.content
 
         action, result = await self._process_iteration(
@@ -178,14 +180,23 @@ class Complete(Verb):
         self._score_action(ctx.acc, action, tokens)
         return result, tokens, response.content
 
-    def _apply_guard_nudge(
-        self, ctx: _LoopCtx, response: AgentResponse, feedback: str, tokens: int
+    async def _apply_guard_nudge(
+        self,
+        ctx: _LoopCtx,
+        response: AgentResponse,
+        feedback: str,
+        outcomes: list[GuardOutcome],
+        iteration: int,
+        tokens: int,
     ) -> None:
         """Inject iteration-guard feedback into conversation and record the step."""
+        if ctx.on_iteration:
+            await ctx.on_iteration(iteration, response)
         ctx.messages.append(self._to_message(response))
         self._ack_response_tools(response, ctx.messages)
         ctx.messages.append(Message(role=Role.USER, content=feedback))
         step = self._build_guard_nudge_step(response, ctx.trace_id, feedback)
+        step.guards = outcomes
         if ctx.verb_trace is not None:
             ctx.verb_trace.add_step(step)
         if ctx.tracer:
