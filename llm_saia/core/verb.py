@@ -19,6 +19,7 @@ from .conversation import (
     ToolCall,
 )
 from .errors import StructuredOutputError, TruncatedResponseError
+from .guard import IterationGuard
 from .guards import OutputGuardMixin
 from .logging import VerbLoggingMixin
 from .schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -240,8 +241,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         conv = conversation if conversation is not None else ListConversation()
         conv.append(Message(role=Role.USER, content=prompt))
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
-        trace_id, max_tokens = trace_id or self._generate_id(), self._max_tokens(config)
-        temperature = self._resolve_temperature(run)
+        trace_id = trace_id or self._generate_id()
+        max_tokens, temperature = self._max_tokens(config), self._resolve_temperature(run)
+        iter_guards = config.iteration_guards
         self._log_loop_start(config)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
@@ -253,19 +255,38 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             self._check_tool_support(response)
             self._record_step(response, phase="iteration", _trace=_trace)
 
-            if response.tool_calls:
-                await self._execute_tools(response.tool_calls, conv)
+            if await self._apply_iteration_guards_or_tools(iter_guards, response, conv, _trace):
                 iteration += 1
-            else:
-                self._log_loop_complete(iteration, start_time, total_tokens, response.content)
-                return await self._finalize(
-                    prompt, response.content, schema, trace_id, temperature, _trace=_trace
-                )
+                continue
+            self._log_loop_complete(iteration, start_time, total_tokens, response.content)
+            return await self._finalize(
+                prompt, response.content, schema, trace_id, temperature, _trace=_trace
+            )
 
         self._log_limit_reached(config, iteration, start_time, total_tokens)
         return await self._finalize(
             prompt, last_content, schema, trace_id, temperature, _trace=_trace
         )
+
+    async def _apply_iteration_guards_or_tools(
+        self,
+        iter_guards: tuple[IterationGuard, ...],
+        response: AgentResponse,
+        conv: ConversationLike,
+        _trace: VerbTrace | None,
+    ) -> bool:
+        """Check iteration guards and execute tools. Returns True if loop should continue."""
+        feedback = self._run_iteration_guards(iter_guards, response, _trace)
+        if feedback:
+            # Acknowledge any pending tool calls so the conversation stays valid
+            for tc in response.tool_calls or []:
+                conv.append(Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id))
+            conv.append(Message(role=Role.USER, content=feedback))
+            return True
+        if response.tool_calls:
+            await self._execute_tools(response.tool_calls, conv)
+            return True
+        return False
 
     def _should_stop(
         self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
@@ -278,6 +299,53 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         if config.max_total_tokens > 0 and total_tokens >= config.max_total_tokens:
             return True
         return False
+
+    def _run_iteration_guards(
+        self,
+        guards: tuple[IterationGuard, ...],
+        response: AgentResponse,
+        _trace: VerbTrace | None = None,
+    ) -> str | None:
+        """Run iteration guards against the current response.
+
+        Returns a combined feedback string if any guard fires, or None if all
+        pass.  Guard outcomes are recorded on the last Step in the trace.
+        """
+        if not guards:
+            return None
+
+        from .trace import GuardOutcome
+
+        feedback_parts: list[str] = []
+        outcomes: list[GuardOutcome] = []
+        for guard in guards:
+            try:
+                result = guard.validator(response)
+            except Exception as e:
+                result = f"Validator raised {type(e).__name__}: {e}"
+            passed = result is None
+            outcomes.append(
+                GuardOutcome(name=guard.name, passed=passed, error=result if not passed else None)
+            )
+            if not passed:
+                self._log_iteration_guard_fired(guard.name, result)
+                feedback_parts.append(result)  # type: ignore[arg-type]
+
+        # Attach outcomes to the most recent step in the trace
+        if _trace and _trace.steps:
+            _trace.steps[-1].guards = outcomes
+
+        if feedback_parts:
+            return "\n\n".join(feedback_parts)
+        return None
+
+    def _log_iteration_guard_fired(self, name: str | None, feedback: str | None) -> None:
+        """Log that an iteration guard fired."""
+        if self._lg:
+            self._lg.debug(
+                "iteration guard fired",
+                extra={"guard": name, "feedback": feedback},
+            )
 
     def _to_message(self, response: AgentResponse) -> Message:
         """Convert AgentResponse to Message."""

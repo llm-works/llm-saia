@@ -10,7 +10,7 @@ from .errors import Error
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["Guarded", "OutputGuard", "OutputGuardError"]
+__all__ = ["Guarded", "IterationGuard", "OutputGuard", "OutputGuardError"]
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,38 @@ class OutputGuard:
         if callable(self.retry_instruction):
             return self.retry_instruction(attempt, result, error)
         return self.retry_instruction
+
+
+@dataclass(frozen=True)
+class IterationGuard:
+    """Behavioral constraint enforced after each LLM response in a tool-calling loop.
+
+    Unlike :class:`OutputGuard` (which validates the final result and retries the
+    whole completion), an ``IterationGuard`` runs *during* the loop.  When its
+    validator returns a feedback string the message is injected into the
+    conversation and the loop continues — no retry, just a nudge.
+
+    The validator receives an :class:`~llm_saia.core.backend.AgentResponse` so it
+    can inspect both ``content`` and ``tool_calls``.
+
+    Args:
+        validator: Receives the current ``AgentResponse``. Return ``None`` when
+            the response is acceptable, or a feedback string to inject.
+        name: Optional name for logging and trace records.
+
+    Example:
+        >>> guard = IterationGuard(
+        ...     validator=lambda r: (
+        ...         "Explain what you're doing and why."
+        ...         if r.tool_calls and not (r.content or "").strip()
+        ...         else None
+        ...     ),
+        ...     name="narrative",
+        ... )
+    """
+
+    validator: Callable[[Any], str | None]
+    name: str | None = None
 
 
 class Guarded:

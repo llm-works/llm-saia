@@ -17,6 +17,7 @@ from ..core.controller import (
     Observation,
 )
 from ..core.conversation import Message, Role, ToolCall
+from ..core.guard import IterationGuard
 from ..core.trace import LLMCall, Step, ToolOutcome, Tracer, VerbTrace
 from ..core.types import DecisionReason, LoopScore, TaskResult
 from ..core.verb import Verb
@@ -40,6 +41,7 @@ class _LoopCtx:
     call_options: CallOptions
     messages: list[Message]
     tool_names: list[str]
+    iteration_guards: tuple[IterationGuard, ...] = ()
     verb_trace: VerbTrace | None = None
     acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
@@ -126,6 +128,7 @@ class Complete(Verb):
             call_options=call_options,
             messages=[Message(role=Role.USER, content=task)],
             tool_names=[t.name for t in (self._config.tools or [])],
+            iteration_guards=call_options.iteration_guards,
             verb_trace=verb_trace,
         )
         self._log_loop_start(call_options)
@@ -153,6 +156,13 @@ class Complete(Verb):
         """Run one loop iteration. Returns (result, tokens, last_content)."""
         response, tokens = await self._run_iteration(ctx.messages, ctx.call_options)
         self._log_response(response, iteration, tokens)
+
+        # Run iteration guards before controller decides
+        feedback = self._run_iteration_guards(ctx.iteration_guards, response, ctx.verb_trace)
+        if feedback:
+            self._apply_guard_nudge(ctx, response, feedback, tokens)
+            return None, tokens, response.content
+
         action, result = await self._process_iteration(
             response,
             ctx.messages,
@@ -167,6 +177,24 @@ class Complete(Verb):
         )
         self._score_action(ctx.acc, action, tokens)
         return result, tokens, response.content
+
+    def _apply_guard_nudge(
+        self, ctx: _LoopCtx, response: AgentResponse, feedback: str, tokens: int
+    ) -> None:
+        """Inject iteration-guard feedback into conversation and record the step."""
+        ctx.messages.append(self._to_message(response))
+        self._ack_response_tools(response, ctx.messages)
+        ctx.messages.append(Message(role=Role.USER, content=feedback))
+        step = self._build_guard_nudge_step(response, ctx.trace_id, feedback)
+        if ctx.verb_trace is not None:
+            ctx.verb_trace.add_step(step)
+        if ctx.tracer:
+            ctx.tracer.write(step)
+        nudge_action = Action(
+            kind=ActionType.INSTRUCT,
+            reason=DecisionReason.ITERATION_GUARD,
+        )
+        self._score_action(ctx.acc, nudge_action, tokens)
 
     async def _process_iteration(
         self,
@@ -408,6 +436,28 @@ class Complete(Verb):
         )
         self._attach_controller_internals(step, obs, ctrl)
         return step
+
+    @staticmethod
+    def _build_guard_nudge_step(response: AgentResponse, trace_id: str, feedback: str) -> Step:
+        """Build a Step for an iteration guard nudge."""
+        import time as _time
+
+        return Step(
+            phase="iteration",
+            ts=_time.time(),
+            trace_id=trace_id,
+            verb="Complete",
+            llm_call=LLMCall(
+                call_id=response.call_id,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                finish_reason=response.finish_reason,
+            ),
+            tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
+            action=ActionType.INSTRUCT.value,
+            reason=DecisionReason.ITERATION_GUARD.value,
+            nudge_preview=feedback[:200] if feedback else None,
+        )
 
     @staticmethod
     def _attach_controller_internals(step: Step, obs: Observation, ctrl: LoopController) -> None:
