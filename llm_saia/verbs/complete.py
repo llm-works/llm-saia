@@ -455,11 +455,9 @@ class Complete(Verb):
     @staticmethod
     def _build_guard_nudge_step(response: AgentResponse, trace_id: str, feedback: str) -> Step:
         """Build a Step for an iteration guard nudge."""
-        import time as _time
-
         return Step(
             phase="iteration",
-            ts=_time.time(),
+            ts=time.time(),
             trace_id=trace_id,
             verb="Complete",
             llm_call=LLMCall(
