@@ -181,10 +181,15 @@ def make_saia(
     executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
     system: str | None = None,
     terminal_tool: str | None = None,
+    require_confirmation: bool = True,
     lg: Logger | None = None,
 ) -> SAIA:
     """Helper to create SAIA instances for tests."""
-    terminal = TerminalConfig(tool=terminal_tool) if terminal_tool else None
+    terminal = (
+        TerminalConfig(tool=terminal_tool, require_confirmation=require_confirmation)
+        if terminal_tool
+        else None
+    )
     call = CallOptions(system=system) if system is not None else None
     config = Config(
         backend=backend,

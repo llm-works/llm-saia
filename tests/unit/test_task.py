@@ -338,6 +338,154 @@ class TestTask:
         # Output is from the confirmation response
         assert result.output == "Confirmed complete"
 
+    async def test_task_terminal_tool_no_confirmation_completes_immediately(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Task completes on first terminal tool call when require_confirmation=False."""
+        terminal_tool_def = ToolDef(
+            name="report_findings",
+            description="Report final findings",
+            parameters={
+                "type": "object",
+                "properties": {"findings": {"type": "string"}},
+                "required": ["findings"],
+            },
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="report_findings",
+            require_confirmation=False,  # No confirmation needed
+        )
+
+        # Single call to terminal tool should complete immediately
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Here are my findings",
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="report_findings",
+                        arguments={"findings": "Found 5 relevant items"},
+                    )
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Research something")
+
+        assert result.completed is True
+        assert result.iterations == 1  # Only one call, no confirmation needed
+        assert result.terminal_tool == "report_findings"
+        assert result.terminal_data == {"findings": "Found 5 relevant items"}
+        assert result.output == "Here are my findings"
+
+    async def test_task_terminal_tool_no_confirmation_with_batched_tools(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """With require_confirmation=False, batched tools are executed before completion."""
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Executed {name}"
+
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=tracking_executor,
+            terminal_tool="finish",
+            require_confirmation=False,
+        )
+
+        # LLM calls both a work tool and terminal tool in same batch
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Searching and finishing",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+        # LLM responds after seeing tool results (doesn't need to call finish again)
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Got the results",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        assert result.completed is True
+        # Other tools ARE executed even with require_confirmation=False
+        assert executed_tools == ["search"]
+        assert result.terminal_tool == "finish"
+        assert result.terminal_data == {}
+
+    async def test_task_terminal_tool_no_confirmation_skips_confirmation_logic(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """With require_confirmation=False, skip contradiction/retry checks."""
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="finish",
+            require_confirmation=False,
+        )
+
+        # LLM calls work tool + terminal in batch
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Searching and finishing",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+        # LLM calls terminal again with continuation-like text (would trigger contradiction
+        # check in confirmation mode, but should complete immediately with no confirmation)
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Actually let me continue working on this...",
+                tool_calls=[ToolCall(id="call_3", name="finish", arguments={})],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        # Should complete immediately on second terminal call, skipping contradiction check
+        assert result.completed is True
+        assert result.terminal_tool == "finish"
+        # Completes in 2 iterations (batch + terminal again), not 3+ (would be more if
+        # contradiction handling kicked in)
+        assert result.iterations == 2
+
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
