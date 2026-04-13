@@ -437,6 +437,55 @@ class TestTask:
         assert result.terminal_tool == "finish"
         assert result.terminal_data == {}
 
+    async def test_task_terminal_tool_no_confirmation_skips_confirmation_logic(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """With require_confirmation=False, skip contradiction/retry checks."""
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="finish",
+            require_confirmation=False,
+        )
+
+        # LLM calls work tool + terminal in batch
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Searching and finishing",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+        # LLM calls terminal again with continuation-like text (would trigger contradiction
+        # check in confirmation mode, but should complete immediately with no confirmation)
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Actually let me continue working on this...",
+                tool_calls=[ToolCall(id="call_3", name="finish", arguments={})],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        # Should complete immediately on second terminal call, skipping contradiction check
+        assert result.completed is True
+        assert result.terminal_tool == "finish"
+        # Completes in 2 iterations (batch + terminal again), not 3+ (would be more if
+        # contradiction handling kicked in)
+        assert result.iterations == 2
+
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:

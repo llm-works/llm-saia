@@ -191,6 +191,10 @@ class DefaultController:
 
         # Check if this is a confirmation of pending terminal
         if self._pending_terminal and terminal_call:
+            # With require_confirmation=False, skip confirmation logic entirely
+            if self.config.terminal and not self.config.terminal.require_confirmation:
+                self._pending_terminal = None
+                return self._make_terminal_action(terminal_call, obs.response.content)
             return self._handle_confirmation(terminal_call, obs)
 
         # First terminal call - request confirmation
