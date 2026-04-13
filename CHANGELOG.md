@@ -7,18 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-13
+
 ### Added
-- `IterationGuard` for per-iteration behavioral constraints in tool-calling loops. Unlike
-  `OutputGuard` (which validates the final result), an `IterationGuard` runs after each LLM
-  response during the loop. When its validator returns a feedback string, the message is injected
-  into the conversation and the loop continues. Works with both the base verb `_loop` and the
-  `Complete` verb. Guard outcomes are recorded in trace `Step.guards`. Added via the existing
-  `with_guard()` / `with_guards()` API which now routes `OutputGuard` and `IterationGuard`
-  instances to their respective buckets.
-- Tree-structured tracing: every verb call produces a `VerbTrace` with `Step` children capturing
-  each LLM call, parse retries, guard retries, and tool executions. Derived aggregates
-  (`total_llm_calls`, `parse_retries`, `guard_retries`, `total_tokens`) computed from the step
-  tree. Replaces the flat `IterationTrace` model.
+- `IterationGuard` for per-iteration constraints in tool loops (runs after each LLM response,
+  unlike `OutputGuard` which validates the final result). Added via `with_guard()`/`with_guards()`.
+- Tree-structured tracing with `VerbTrace`/`Step` hierarchy and derived aggregates
+  (`total_llm_calls`, `parse_retries`, `guard_retries`, `total_tokens`)
 - Escalating guard retries: `OutputGuard.retry_instruction` now accepts
   `str | Callable[[int, Any, str], str]` for dynamic, attempt-aware retry instructions.
   `resolve_instruction(attempt, result, error)` dispatches between static and callable forms.
@@ -44,19 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `TaskResult.trace_id` and `TaskResult.request_id` removed — now accessed via
   `result.trace.trace_id` and `result.trace.request_id`.
 - `VerbTrace.to_dict()` and `VerbTrace.to_json()` for serialization.
-- `Tracer.write()` generalized from `IterationTrace`-only to accept `Step | VerbTrace` records.
-  `TracerFactory` and `CallbackTracer` unchanged -- consumers dispatch on `record["type"]`.
-- `IterationTrace` replaced by `Step` dataclass. Complete verb controller fields (`action`,
-  `reason`, `iterations_since_nudge`, etc.) now live on Step.
+- `Tracer.write()` now accepts `Step | VerbTrace` records (consumers dispatch on `record["type"]`)
 - All internal imports converted from absolute (`from llm_saia.core.X`) to relative (`from .X`)
   to avoid resolving against an installed package instead of the local development source
-- Extracted `OutputGuardMixin` (`core/guards.py`) and `VerbLoggingMixin` (`core/logging.py`) from
-  `core/verb.py` to keep the base class manageable
-- Guard revalidation loops now have a convergence cap (`_MAX_REVALIDATION_ROUNDS=10`) to prevent
-  infinite loops when guard retries keep producing results that fail other guards
-- Narrowed `except Exception` to `except TypeError` in field guard extraction (`get_type_hints`)
-- Truncation heuristic for structured output errors now also checks `JSONDecodeError.pos` to verify
-  the error is actually at/near EOF before classifying as truncated
+- Guard revalidation capped at 10 rounds to prevent infinite loops
 - **BREAKING**: Message role for tool results changed from `"tool_result"` to `"tool"` (aligns with OpenAI convention; tool calls remain in assistant messages via `tool_calls` field)
 - Moved `Message`, `ToolCall` from `backend.py` to new `conversation.py` module
 - `llm_saia.core` now re-exports `AgentResponse`, `Message`, `ToolCall`, `ToolDef` (stable public API for downstream consumers)
@@ -136,6 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/llm-works/llm-saia/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/llm-works/llm-saia/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/llm-works/llm-saia/releases/tag/v0.1.0
