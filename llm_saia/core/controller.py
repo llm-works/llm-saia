@@ -197,8 +197,14 @@ class DefaultController:
         if terminal_call:
             return self._request_confirmation(terminal_call, obs)
 
-        # LLM reconsidered - clear pending state so next terminal call is fresh
+        # LLM didn't call terminal tool again
         if self._pending_terminal:
+            # With require_confirmation=False, complete with stored terminal data
+            if self.config.terminal and not self.config.terminal.require_confirmation:
+                call = self._pending_terminal
+                self._pending_terminal = None
+                return self._make_terminal_action(call, obs.response.content)
+            # Otherwise, LLM reconsidered - clear pending state
             self._pending_terminal = None
 
         return None
@@ -230,24 +236,27 @@ class DefaultController:
 
     def _request_confirmation(self, call: ToolCall, obs: Observation) -> Action:
         """Request confirmation for terminal tool."""
-        # Skip confirmation if disabled - complete immediately on first call
-        if self.config.terminal and not self.config.terminal.require_confirmation:
-            return self._make_terminal_action(call, obs.response.content)
-
-        self._pending_terminal = call
-        self._confirmation_retries = 0
-        self._failure_retries = 0
-
-        # Execute other tools if any (but not the terminal tool)
+        # Execute other tools first if any (but not the terminal tool)
         other_calls = [c for c in (obs.response.tool_calls or []) if c.name != obs.terminal_tool]
         if other_calls:
+            # Store terminal call for after tools execute
+            self._pending_terminal = call
+            self._confirmation_retries = 0
+            self._failure_retries = 0
             return Action(
                 ActionType.EXECUTE_TOOLS,
                 DecisionReason.TERMINAL_WITH_OTHER_TOOLS,
                 tool_ids_to_execute=[c.id for c in other_calls],
             )
 
-        # Only terminal call - send confirmation request
+        # No other tools - check if confirmation is required
+        if self.config.terminal and not self.config.terminal.require_confirmation:
+            return self._make_terminal_action(call, obs.response.content)
+
+        # Confirmation required - set up state and request confirmation
+        self._pending_terminal = call
+        self._confirmation_retries = 0
+        self._failure_retries = 0
         msg = (
             f"You called `{obs.terminal_tool}` to indicate task completion. "
             f"Please call `{obs.terminal_tool}` again to confirm this is your final answer, "

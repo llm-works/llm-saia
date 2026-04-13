@@ -384,6 +384,59 @@ class TestTask:
         assert result.terminal_data == {"findings": "Found 5 relevant items"}
         assert result.output == "Here are my findings"
 
+    async def test_task_terminal_tool_no_confirmation_with_batched_tools(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """With require_confirmation=False, batched tools are executed before completion."""
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Executed {name}"
+
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=tracking_executor,
+            terminal_tool="finish",
+            require_confirmation=False,
+        )
+
+        # LLM calls both a work tool and terminal tool in same batch
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Searching and finishing",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+        # LLM responds after seeing tool results (doesn't need to call finish again)
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Got the results",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        assert result.completed is True
+        # Other tools ARE executed even with require_confirmation=False
+        assert executed_tools == ["search"]
+        assert result.terminal_tool == "finish"
+        assert result.terminal_data == {}
+
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
