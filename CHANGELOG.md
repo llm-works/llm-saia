@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-13
+
+### Added
+- `IterationGuard` for per-iteration constraints in tool loops (runs after each LLM response,
+  unlike `OutputGuard` which validates the final result). Added via `with_guard()`/`with_guards()`.
+- Tree-structured tracing with `VerbTrace`/`Step` hierarchy and derived aggregates
+  (`total_llm_calls`, `parse_retries`, `guard_retries`, `total_tokens`)
+- Escalating guard retries: `OutputGuard.retry_instruction` now accepts
+  `str | Callable[[int, Any, str], str]` for dynamic, attempt-aware retry instructions.
+  `resolve_instruction(attempt, result, error)` dispatches between static and callable forms.
+- `escalate=True` parameter on all built-in guards (`max_length`, `english_only`, `no_markdown`,
+  `no_preamble`, `no_emoji`, `ascii_only`) for increasingly forceful retry instructions.
+  `max_length(escalate=True)` includes current char count in each retry.
+- `with_tools(tools, executor=)` fluent API for per-call tool override (enables benchmarking
+  scenarios like BFCL where each test case defines its own function schemas)
+- `ConversationLike` protocol for pluggable conversation management (compaction, persistence)
+- `ListConversation` default implementation of `ConversationLike`
+- `Role` enum for message roles (`USER`, `ASSISTANT`, `SYSTEM`, `TOOL`)
+- `core/conversation.py` module for conversation/message types
+- All 13 verbs accept optional `conversation` keyword argument for external conversation management
+- Direct-call paths (no tools) also track messages through the conversation object
+- Guard retries thread conversation (retry exchanges visible in caller's conversation)
+- Parse retries isolate failed attempts from caller's conversation (only final exchange propagated)
+- `find` verb - filter items matching criteria, returns `FindResult(indices, reason)`
+
+### Changed
+- **BREAKING**: All 12 simple verbs now return `VerbResult[T]` instead of bare `T`. Access the
+  value via `.value` and the execution trace via `.trace`. `Complete` still returns `TaskResult`
+  but now also carries `.trace`. `VerbTrace` is always populated (never None).
+- **BREAKING**: `TaskResult.trace_id` and `TaskResult.request_id` removed — now accessed via
+  `result.trace.trace_id` and `result.trace.request_id`.
+- `VerbTrace.to_dict()` and `VerbTrace.to_json()` for serialization.
+- `Tracer.write()` now accepts `Step | VerbTrace` records (consumers dispatch on `record["type"]`)
+- All internal imports converted from absolute (`from llm_saia.core.X`) to relative (`from .X`)
+  to avoid resolving against an installed package instead of the local development source
+- Guard revalidation capped at 10 rounds to prevent infinite loops
+- **BREAKING**: Message role for tool results changed from `"tool_result"` to `"tool"` (aligns with OpenAI convention; tool calls remain in assistant messages via `tool_calls` field)
+- Moved `Message`, `ToolCall` from `backend.py` to new `conversation.py` module
+- `llm_saia.core` now re-exports `AgentResponse`, `Message`, `ToolCall`, `ToolDef` (stable public API for downstream consumers)
+- Schema support for `Literal[...]` types (maps to JSON enum)
+- Schema support for `Enum` types (maps to JSON enum)
+- Schema support for nested dataclasses (recursive conversion)
+- Schema support for `list[MyDataclass]` (recursive parsing)
+- Parse retry with feedback - retry on `StructuredOutputError` with LLM feedback (opt-in)
+- `with_parse_retries(n)` fluent API for enabling retry attempts (default: 0 = disabled)
+- Output guards - validators with automatic retry for both text and structured output
+- `with_guard()` fluent API for adding output guards (chainable)
+- `with_guards(*guards)` for adding multiple guards at once
+- `Guarded` class for field-level guards via `Annotated[str, Guarded(guard1, guard2)]`
+- Pre-built guards: `english_only()`, `max_length()`, `no_emoji()`, `no_markdown()`, `no_preamble()`, `ascii_only()`
+- `OutputGuard` dataclass for custom validators with retry instructions
+- `OutputGuardError` raised when all guard retries exhausted
+
+### Fixed
+- Schema generation now raises clear `TypeError` for recursive dataclasses
+- Schema generation validates Literal values are same type (prevents invalid JSON schema)
+- Parsing raises `TypeError` for type mismatches instead of silent coercion
+- `max_call_tokens` now respected in direct structured output completion
+
 ## [0.2.0] - 2026-03-16
 
 ### Added
@@ -63,6 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/llm-works/llm-saia/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/llm-works/llm-saia/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/llm-works/llm-saia/releases/tag/v0.1.0

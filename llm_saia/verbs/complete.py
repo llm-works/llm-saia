@@ -6,9 +6,9 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from llm_saia.core.backend import AgentResponse, Message, ToolCall
-from llm_saia.core.config import CallOptions
-from llm_saia.core.controller import (
+from ..core.backend import AgentResponse
+from ..core.config import CallOptions
+from ..core.controller import (
     Action,
     ActionType,
     ControllerConfig,
@@ -16,9 +16,11 @@ from llm_saia.core.controller import (
     LoopController,
     Observation,
 )
-from llm_saia.core.trace import Tracer, build_trace
-from llm_saia.core.types import DecisionReason, LoopScore, TaskResult
-from llm_saia.core.verb import Verb
+from ..core.conversation import Message, Role, ToolCall
+from ..core.guard import IterationGuard
+from ..core.trace import GuardOutcome, LLMCall, Step, ToolOutcome, Tracer, VerbTrace
+from ..core.types import DecisionReason, LoopScore, TaskResult
+from ..core.verb import Verb
 
 # Default call options for complete (unlimited iterations)
 DEFAULT_COMPLETE_CALL = CallOptions(max_iterations=0)
@@ -39,6 +41,8 @@ class _LoopCtx:
     call_options: CallOptions
     messages: list[Message]
     tool_names: list[str]
+    iteration_guards: tuple[IterationGuard, ...] = ()
+    verb_trace: VerbTrace | None = None
     acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
 
 
@@ -64,19 +68,22 @@ class Complete(Verb):
         if not self._has_tools():
             raise ValueError("Complete requires tools and executor to be configured.")
 
-        trace_id = self._generate_id()
-        request_id = self._call.request_id
+        verb_trace = self._init_verb_trace()
+        trace_id = verb_trace.trace_id
         ctrl = controller or self._default_controller()
         ctrl.reset()
 
         owns_tracer, active_tracer = self._resolve_tracer(
             tracer,
-            {"trace_id": trace_id, "request_id": request_id, "task": task[:200]},
+            {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
         )
 
         try:
-            result = await self._run_loop(task, trace_id, ctrl, active_tracer, on_iteration)
-            return self._tag_result(result, trace_id, request_id)
+            result = await self._run_loop(
+                task, trace_id, ctrl, active_tracer, on_iteration, verb_trace
+            )
+            self._emit_verb_trace(verb_trace)
+            return self._tag_result(result, verb_trace)
         finally:
             if active_tracer and owns_tracer:
                 active_tracer.close()
@@ -108,6 +115,7 @@ class Complete(Verb):
         ctrl: LoopController,
         tracer: Tracer | None,
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
+        verb_trace: VerbTrace | None = None,
     ) -> TaskResult:
         """Execute the main tool-calling loop."""
         call_options = self._config.call or DEFAULT_COMPLETE_CALL
@@ -118,8 +126,10 @@ class Complete(Verb):
             tracer=tracer,
             on_iteration=on_iteration,
             call_options=call_options,
-            messages=[Message(role="user", content=task)],
+            messages=[Message(role=Role.USER, content=task)],
             tool_names=[t.name for t in (self._config.tools or [])],
+            iteration_guards=call_options.iteration_guards,
+            verb_trace=verb_trace,
         )
         self._log_loop_start(call_options)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
@@ -146,6 +156,15 @@ class Complete(Verb):
         """Run one loop iteration. Returns (result, tokens, last_content)."""
         response, tokens = await self._run_iteration(ctx.messages, ctx.call_options)
         self._log_response(response, iteration, tokens)
+
+        # Run iteration guards before controller decides.
+        # Don't pass verb_trace here — Complete builds its own Step later and
+        # attaches outcomes explicitly (avoids overwriting the previous step).
+        feedback, outcomes = self._run_iteration_guards(ctx.iteration_guards, response)
+        if feedback is not None:
+            await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
+            return None, tokens, response.content
+
         action, result = await self._process_iteration(
             response,
             ctx.messages,
@@ -156,9 +175,38 @@ class Complete(Verb):
             ctx.on_iteration,
             ctx.tracer,
             ctx.trace_id,
+            ctx.verb_trace,
+            outcomes,
         )
         self._score_action(ctx.acc, action, tokens)
         return result, tokens, response.content
+
+    async def _apply_guard_nudge(
+        self,
+        ctx: _LoopCtx,
+        response: AgentResponse,
+        feedback: str,
+        outcomes: list[GuardOutcome],
+        iteration: int,
+        tokens: int,
+    ) -> None:
+        """Inject iteration-guard feedback into conversation and record the step."""
+        if ctx.on_iteration:
+            await ctx.on_iteration(iteration, response)
+        ctx.messages.append(self._to_message(response))
+        self._ack_response_tools(response, ctx.messages)
+        ctx.messages.append(Message(role=Role.USER, content=feedback))
+        step = self._build_guard_nudge_step(response, ctx.trace_id, feedback)
+        step.guards = outcomes
+        if ctx.verb_trace is not None:
+            ctx.verb_trace.add_step(step)
+        if ctx.tracer:
+            ctx.tracer.write(step)
+        nudge_action = Action(
+            kind=ActionType.INSTRUCT,
+            reason=DecisionReason.ITERATION_GUARD,
+        )
+        self._score_action(ctx.acc, nudge_action, tokens)
 
     async def _process_iteration(
         self,
@@ -171,6 +219,8 @@ class Complete(Verb):
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
         tracer: Tracer | None = None,
         trace_id: str = "",
+        verb_trace: VerbTrace | None = None,
+        guard_outcomes: list[GuardOutcome] | None = None,
     ) -> tuple[Action, TaskResult | None]:
         """Process a single iteration: callback, decide, execute, trace."""
         self._check_tool_support(response)
@@ -190,15 +240,20 @@ class Complete(Verb):
         action = await ctrl.decide(obs)
         self._log_action(action)
 
+        step = self._build_iteration_step(obs, action, response, ctrl, trace_id)
+        if guard_outcomes:
+            step.guards = guard_outcomes
+        if verb_trace is not None:
+            verb_trace.add_step(step)
         if tracer:
-            self._write_trace(tracer, obs, action, response, ctrl, trace_id)
+            tracer.write(step)
 
         result = await self._execute_action(action, response, messages, iteration)
         return action, result
 
     def _default_controller(self) -> DefaultController:
         """Create default controller with config from this verb."""
-        from llm_saia.core.config import Config
+        from ..core.config import Config
 
         # Controller needs a config for classifier calls (no tools).
         # Copy call options with system and temperature from current config.
@@ -250,13 +305,13 @@ class Complete(Verb):
                 self._add_response_if_needed(messages, response)
                 self._ack_response_tools(response, messages)
                 if action.message:
-                    messages.append(Message(role="user", content=action.message))
+                    messages.append(Message(role=Role.USER, content=action.message))
                 return None
 
             case ActionType.SKIP:
                 self._add_response_if_needed(messages, response)
                 self._ack_response_tools(response, messages)
-                messages.append(Message(role="user", content="Continue."))
+                messages.append(Message(role=Role.USER, content="Continue."))
                 return None
 
             case ActionType.COMPLETE:
@@ -293,10 +348,10 @@ class Complete(Verb):
         execute_ids: list[str] | None,
         messages: list[Message],
     ) -> None:
-        """Add synthetic tool_results for tool calls that won't be executed.
+        """Add synthetic tool results for tool calls that won't be executed.
 
         LLM APIs require every tool_call in an assistant message to have a
-        matching tool_result. When we skip executing a tool (e.g., the terminal
+        matching tool result. When we skip executing a tool (e.g., the terminal
         tool during confirmation), we still need to provide a result.
         """
         if execute_ids is None:
@@ -306,7 +361,7 @@ class Complete(Verb):
             if call.id in skip_ids:
                 messages.append(
                     Message(
-                        role="tool_result",
+                        role=Role.TOOL,
                         content="Acknowledged. Awaiting confirmation.",
                         tool_call_id=call.id,
                     )
@@ -326,7 +381,7 @@ class Complete(Verb):
         if messages:
             last = messages[-1]
             if (
-                last.role == "assistant"
+                last.role == Role.ASSISTANT
                 and last.content == response.content
                 and last.tool_calls == (response.tool_calls or None)
             ):
@@ -352,10 +407,9 @@ class Complete(Verb):
         )
 
     @staticmethod
-    def _tag_result(result: TaskResult, trace_id: str, request_id: str | None) -> TaskResult:
-        """Attach tracing IDs to a TaskResult."""
-        result.trace_id = trace_id
-        result.request_id = request_id
+    def _tag_result(result: TaskResult, trace: VerbTrace) -> TaskResult:
+        """Attach VerbTrace to a TaskResult."""
+        result.trace = trace
         return result
 
     def _log_action(self, action: Action) -> None:
@@ -368,42 +422,60 @@ class Complete(Verb):
 
     # --- Trace helpers ---
 
-    def _write_trace(
+    def _build_iteration_step(
         self,
-        tracer: Tracer,
         obs: Observation,
         action: Action,
         response: AgentResponse,
         ctrl: LoopController,
         trace_id: str,
-    ) -> None:
-        """Write one iteration trace record."""
-        # Extract controller internals if available (DefaultController exposes these)
-        iterations_since_nudge = None
-        consecutive_degenerate = None
-        pending_terminal = None
-        if isinstance(ctrl, DefaultController):
-            iterations_since_nudge = obs.iteration - ctrl.iterations_since_last_nudge
-            consecutive_degenerate = ctrl.consecutive_degenerate
-            pending_terminal = ctrl.has_pending_terminal
-
-        # Detect if classifier was called
-        classifier_called = action.reason in (
-            DecisionReason.CLASSIFIED_COMPLETE,
-            DecisionReason.NUDGE_CLASSIFIED,
-        )
-
-        record = build_trace(
-            obs,
-            action,
-            response,
+    ) -> Step:
+        """Build a Step from Complete verb iteration state."""
+        step = Step(
+            phase="iteration",
+            ts=time.time(),
             trace_id=trace_id,
             verb="Complete",
-            phase="loop",
-            request_id=self._call.request_id,
-            classifier_called=classifier_called,
-            iterations_since_nudge=iterations_since_nudge,
-            consecutive_degenerate=consecutive_degenerate,
-            pending_terminal=pending_terminal,
+            llm_call=LLMCall(
+                call_id=response.call_id,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                finish_reason=response.finish_reason,
+            ),
+            tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
+            action=action.kind.value,
+            reason=action.reason.value,
+            nudge_preview=action.message[:200] if action.message else None,
+            classifier_called=action.reason
+            in (DecisionReason.CLASSIFIED_COMPLETE, DecisionReason.NUDGE_CLASSIFIED),
         )
-        tracer.write(record)
+        self._attach_controller_internals(step, obs, ctrl)
+        return step
+
+    @staticmethod
+    def _build_guard_nudge_step(response: AgentResponse, trace_id: str, feedback: str) -> Step:
+        """Build a Step for an iteration guard nudge."""
+        return Step(
+            phase="iteration",
+            ts=time.time(),
+            trace_id=trace_id,
+            verb="Complete",
+            llm_call=LLMCall(
+                call_id=response.call_id,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                finish_reason=response.finish_reason,
+            ),
+            tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
+            action=ActionType.INSTRUCT.value,
+            reason=DecisionReason.ITERATION_GUARD.value,
+            nudge_preview=feedback[:200] if feedback else None,
+        )
+
+    @staticmethod
+    def _attach_controller_internals(step: Step, obs: Observation, ctrl: LoopController) -> None:
+        """Attach DefaultController internals to a Step, if available."""
+        if isinstance(ctrl, DefaultController):
+            step.iterations_since_nudge = obs.iteration - ctrl.iterations_since_last_nudge
+            step.consecutive_degenerate = ctrl.consecutive_degenerate
+            step.pending_terminal = ctrl.has_pending_terminal

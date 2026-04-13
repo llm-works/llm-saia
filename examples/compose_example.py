@@ -32,7 +32,8 @@ Example output:
 from typing import Any
 
 from llm_saia import SAIA
-from llm_saia.core.backend import AgentResponse, Backend, Message
+from llm_saia.core.backend import AgentResponse, Backend
+from llm_saia.core.conversation import Message
 
 
 class DemoBackend(Backend):

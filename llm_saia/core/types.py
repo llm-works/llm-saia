@@ -2,15 +2,57 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 # Re-export backend types for convenience
-from llm_saia.core.backend import AgentResponse, Message, ToolCall, ToolDef
+from .backend import AgentResponse, ToolDef
 
 # Re-export config types for convenience
-from llm_saia.core.config import CallOptions, Config
+from .config import CallOptions, Config
+
+# Re-export conversation types for convenience
+from .conversation import (
+    ConversationLike,
+    ListConversation,
+    Message,
+    MessageAppendable,
+    Role,
+    ToolCall,
+)
+from .trace import VerbTrace
+
+_T = TypeVar("_T")
+
+__all__ = [
+    # Backend types (re-exported)
+    "AgentResponse",
+    "ToolDef",
+    # Conversation types (re-exported)
+    "ConversationLike",
+    "ListConversation",
+    "Message",
+    "MessageAppendable",
+    "Role",
+    "ToolCall",
+    # Config types (re-exported from config.py)
+    "CallOptions",
+    "Config",
+    # Verb results
+    "ChooseResult",
+    "ClassifyResult",
+    "Critique",
+    "Evidence",
+    "FindResult",
+    "VerbResult",
+    "VerifyResult",
+    # Task types
+    "LoopScore",
+    "TaskResult",
+    # Controller types
+    "DecisionReason",
+]
 
 
 class DecisionReason(Enum):
@@ -40,6 +82,9 @@ class DecisionReason(Enum):
     TERMINAL_CONFIRMED = "terminal_confirmed"  # Terminal tool confirmed
     CLASSIFIED_COMPLETE = "classified_complete"  # Classifier detected completion
 
+    # Iteration guard reasons
+    ITERATION_GUARD = "iteration_guard"  # Iteration guard injected feedback
+
     # FAIL reasons
     TERMINAL_CONFIRMED_FAIL = "terminal_confirmed_fail"  # Terminal tool confirmed failure
     CONFIRMATION_RETRIES_EXCEEDED = (
@@ -47,38 +92,19 @@ class DecisionReason(Enum):
     )
 
 
-__all__ = [
-    # Backend types (re-exported)
-    "AgentResponse",
-    "Message",
-    "ToolCall",
-    "ToolDef",
-    # Config types (re-exported from config.py)
-    "CallOptions",
-    "Config",
-    # Verb results
-    "ChooseResult",
-    "ClassifyResult",
-    "Critique",
-    "Evidence",
-    "VerbResult",
-    "VerifyResult",
-    # Task types
-    "LoopScore",
-    "TaskResult",
-    # Controller types
-    "DecisionReason",
-]
-
-
 @dataclass
-class VerbResult:
-    """Result from any verb execution."""
+class VerbResult(Generic[_T]):
+    """Result from any verb execution.
 
-    value: Any
-    verb: str
-    success: bool
-    error: str | None = None
+    Wraps the verb's return value alongside the execution trace.
+
+    Attributes:
+        value: The verb's return value (str for text verbs, T for structured).
+        trace: VerbTrace tree with steps, token counts, and retry metadata.
+    """
+
+    value: _T
+    trace: VerbTrace = field(default_factory=VerbTrace)
 
 
 @dataclass
@@ -126,6 +152,14 @@ class ChooseResult:
 
 
 @dataclass
+class FindResult:
+    """Result from FIND verb."""
+
+    indices: list[int]  # 0-indexed indices of matching items
+    reason: str
+
+
+@dataclass
 class LoopScore:
     """Quality metrics for a Complete loop run.
 
@@ -169,6 +203,5 @@ class TaskResult:
     history: list[Message]
     terminal_data: dict[str, Any] | None = None
     terminal_tool: str | None = None
-    trace_id: str = ""  # Constant across all LLM calls in one verb invocation
-    request_id: str | None = None  # User-provided correlation ID
-    score: LoopScore | None = None  # Loop quality metrics
+    score: LoopScore | None = None
+    trace: VerbTrace = field(default_factory=VerbTrace)

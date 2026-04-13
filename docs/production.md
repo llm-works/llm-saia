@@ -247,6 +247,58 @@ async def main():
         # Cleanup happens via context manager
 ```
 
+## Guards
+
+### Output Guards
+
+Validate the final result and retry if validation fails. See the
+[README](../README.md#output-guards) for basic usage.
+
+```python
+from llm_saia import OutputGuard
+
+guard = OutputGuard(
+    validator=lambda text: None if len(text) < 500 else "Too long",
+    retry_instruction="Keep your response under 500 characters.",
+)
+result = await saia.with_guard(guard).ask(doc, question)
+```
+
+Guards run after completion. If validation fails, the request is retried with the guard's
+`retry_instruction` appended to the prompt. Multiple guards are applied in order; if a retry
+produces a different result, all guards are re-validated from the beginning (capped at 10 rounds).
+
+### Iteration Guards
+
+Enforce behavioral constraints *during* tool-calling loops. Unlike output guards, iteration guards
+run after each LLM response — not at the end.
+
+```python
+from llm_saia import IterationGuard
+
+def require_narrative(response):
+    """Require the LLM to explain its actions, not just call tools silently."""
+    if response.tool_calls and not (response.content or "").strip():
+        return "Explain what you're doing and why."
+    return None
+
+result = await (
+    saia
+    .with_guard(IterationGuard(require_narrative, name="narrative"))
+    .complete(task)
+)
+```
+
+When a guard fires:
+1. Pending tool calls are acknowledged (keeping the conversation valid)
+2. The feedback string is injected as a user message
+3. The loop continues — no retry, just a course correction
+
+Guard outcomes are recorded in trace steps (`Step.guards`) for observability. If a validator
+raises an exception, the error message becomes the feedback string.
+
+`with_guard()` and `with_guards()` accept both guard types and route them automatically.
+
 ## Timeouts and Limits
 
 Protect against runaway loops:

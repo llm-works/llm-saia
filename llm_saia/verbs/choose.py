@@ -1,7 +1,14 @@
 """CHOOSE verb: Force a choice between options."""
 
-from llm_saia.core.types import ChooseResult
-from llm_saia.core.verb import Verb
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ..core.types import ChooseResult, VerbResult
+from ..core.verb import Verb
+
+if TYPE_CHECKING:
+    from ..core.conversation import ConversationLike
 
 
 class Choose(Verb):
@@ -12,12 +19,21 @@ class Choose(Verb):
         options: list[str],
         context: str | None = None,
         criteria: str | None = None,
-    ) -> ChooseResult:
+        *,
+        conversation: ConversationLike | None = None,
+    ) -> VerbResult[ChooseResult]:
         """Select one option from the given choices."""
-        opts = "\n".join(f"- {o}" for o in options)
-        prompt = f"Choose one of these options:\n{opts}"
-        if context:
-            prompt += f"\n\nContext: {context}"
-        if criteria:
-            prompt += f"\n\nCriteria: {criteria}"
-        return await self._complete_structured(prompt, ChooseResult)
+        trace = self._init_verb_trace()
+        try:
+            opts = "\n".join(f"- {o}" for o in options)
+            prompt = f"Choose one of these options:\n{opts}"
+            if context:
+                prompt += f"\n\nContext: {context}"
+            if criteria:
+                prompt += f"\n\nCriteria: {criteria}"
+            value = await self._complete_structured(
+                prompt, ChooseResult, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

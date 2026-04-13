@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from llm_saia.core.backend import Backend, ToolDef
-    from llm_saia.core.logger import Logger
-    from llm_saia.core.trace import Tracer
+    from .backend import Backend, ToolDef
+    from .guard import IterationGuard, OutputGuard
+    from .logger import Logger
+    from .trace import Tracer
 
 __all__ = [
     "CallOptions",
@@ -44,8 +45,22 @@ class CallOptions:
     max_retries: int = 1  # Number of retry attempts (1 = no retry)
     retry_escalation: str | None = None  # Prompt added on retry attempts
 
+    # Parse retry (structured output)
+    parse_retries: int = 0  # Retry attempts on StructuredOutputError (0 = no retry)
+
+    # Output guards (validators with retry)
+    output_guards: tuple[OutputGuard, ...] = field(default_factory=tuple)
+
+    # Iteration guards (behavioral constraints enforced each loop iteration)
+    iteration_guards: tuple[IterationGuard, ...] = field(default_factory=tuple)
+
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
+
+    def __post_init__(self) -> None:
+        """Validate options after initialization."""
+        if self.parse_retries < 0:
+            raise ValueError("parse_retries must be non-negative")
 
 
 @dataclass

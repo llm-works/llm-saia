@@ -4,7 +4,7 @@ SAIA defines what it needs from an LLM backend - implementations live elsewhere
 (e.g., llm-infer/client). This keeps SAIA as a pure language layer.
 
 Usage:
-    from llm_saia.core.backend import Backend, Message, ToolDef, AgentResponse
+    from llm_saia.core.backend import Backend, ToolDef, AgentResponse
 
     class MyBackend(Backend):
         async def chat(self, messages, system=None, tools=None, ...):
@@ -15,9 +15,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-# --- Types for the backend interface ---
+if TYPE_CHECKING:
+    from .conversation import Message, ToolCall
+
+__all__ = [
+    "AgentResponse",
+    "Backend",
+    "ToolDef",
+]
 
 
 @dataclass
@@ -30,25 +37,6 @@ class ToolDef:
 
 
 @dataclass
-class ToolCall:
-    """A tool invocation from the LLM."""
-
-    id: str
-    name: str
-    arguments: dict[str, Any]
-
-
-@dataclass
-class Message:
-    """A message in the conversation history."""
-
-    role: str  # "user", "assistant", "tool_result"
-    content: str
-    tool_calls: list[ToolCall] | None = None
-    tool_call_id: str | None = None  # For tool_result messages
-
-
-@dataclass
 class AgentResponse:
     """Response from LLM that may include tool calls."""
 
@@ -58,9 +46,6 @@ class AgentResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     call_id: str = ""  # Set by SAIA per chat() call for tracing
-
-
-# --- Backend ABC ---
 
 
 class Backend(ABC):

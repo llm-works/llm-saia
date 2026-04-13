@@ -7,7 +7,11 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
-    from llm_saia.core.config import CallOptions, Config
+    from collections.abc import Awaitable, Callable
+
+    from .backend import ToolDef
+    from .config import CallOptions, Config
+    from .guard import IterationGuard, OutputGuard
 
 __all__ = ["Configurable"]
 
@@ -38,11 +42,38 @@ class Configurable(ABC):
 
     def _with_call(self, **kwargs: Any) -> Self:
         """Return new instance with modified CallOptions fields."""
-        from llm_saia.core.config import DEFAULT_CALL
+        from .config import DEFAULT_CALL
 
         base_call = self._config.call or DEFAULT_CALL
         new_call = replace(base_call, **kwargs)
         return self._with_config(call=new_call)
+
+    # --- Config-Level Overrides ---
+
+    def with_tools(
+        self,
+        tools: list[ToolDef],
+        executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
+    ) -> Self:
+        """Return new instance with different tool definitions.
+
+        Useful for benchmarking scenarios where each test case defines its own
+        function schemas (e.g., BFCL). The original instance is unmodified.
+
+        Note:
+            Like all ``with_*()`` methods, arguments are stored by reference
+            (shallow ``dataclasses.replace``). Callers must not mutate the
+            *tools* list after passing it.
+
+        Args:
+            tools: Tool definitions to use for this call.
+            executor: Optional executor to replace the existing one. If None,
+                keeps the current executor.
+        """
+        kwargs: dict[str, Any] = {"tools": tools}
+        if executor is not None:
+            kwargs["executor"] = executor
+        return self._with_config(**kwargs)
 
     # --- Call Options Overrides ---
 
@@ -85,3 +116,82 @@ class Configurable(ABC):
     def with_system(self, system: str | None) -> Self:
         """Return new instance with different system prompt (None to clear)."""
         return self._with_call(system=system)
+
+    def with_parse_retries(self, n: int) -> Self:
+        """Return new instance with specified parse retry attempts.
+
+        When structured output parsing fails (StructuredOutputError), SAIA will
+        retry with feedback to the LLM about what went wrong. This is useful
+        for local/smaller LLMs that may produce malformed JSON.
+
+        Args:
+            n: Number of retry attempts. 0 = no retry (default), 1 = one retry, etc.
+        """
+        return self._with_call(parse_retries=n)
+
+    def with_guard(self, guard: OutputGuard | IterationGuard) -> Self:
+        """Add a guard to this instance.
+
+        Accepts both guard types and routes them to the correct bucket:
+
+        - :class:`OutputGuard` — validates the final result and retries if
+          invalid (applied after completion).
+        - :class:`IterationGuard` — enforces behavioral constraints after each
+          LLM response in a tool-calling loop. On failure the feedback string is
+          injected into the conversation and the loop continues.
+
+        Multiple guards can be chained and are applied in order.
+
+        Example:
+            >>> from llm_saia import IterationGuard
+            >>> from llm_saia.guards import english_only
+            >>> result = await (
+            ...     saia
+            ...     .with_guard(english_only())
+            ...     .with_guard(IterationGuard(require_narrative, name="narrative"))
+            ...     .complete(task)
+            ... )
+
+        Args:
+            guard: OutputGuard or IterationGuard instance.
+        """
+        from .config import DEFAULT_CALL
+        from .guard import IterationGuard as _IG
+
+        base_call = self._config.call or DEFAULT_CALL
+        if isinstance(guard, _IG):
+            new_iter_guards = base_call.iteration_guards + (guard,)
+            return self._with_call(iteration_guards=new_iter_guards)
+        new_guards = base_call.output_guards + (guard,)
+        return self._with_call(output_guards=new_guards)
+
+    def with_guards(self, *guards: OutputGuard | IterationGuard) -> Self:
+        """Add multiple guards at once.
+
+        Convenience method equivalent to chaining multiple with_guard() calls.
+        Accepts a mix of :class:`OutputGuard` and :class:`IterationGuard`
+        instances — each is routed to the correct bucket.
+
+        See :meth:`with_guard` for details on guard behavior.
+
+        Args:
+            *guards: OutputGuard and/or IterationGuard instances to add.
+
+        Raises:
+            ValueError: If no guards are provided.
+        """
+        if not guards:
+            raise ValueError("with_guards requires at least one guard")
+
+        from .config import DEFAULT_CALL
+        from .guard import IterationGuard as _IG
+
+        base_call = self._config.call or DEFAULT_CALL
+        new_output: tuple[OutputGuard, ...] = base_call.output_guards
+        new_iter: tuple[IterationGuard, ...] = base_call.iteration_guards
+        for g in guards:
+            if isinstance(g, _IG):
+                new_iter = new_iter + (g,)
+            else:
+                new_output = new_output + (g,)
+        return self._with_call(output_guards=new_output, iteration_guards=new_iter)

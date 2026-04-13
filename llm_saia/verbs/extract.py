@@ -1,8 +1,14 @@
 """EXTRACT verb: Extract structured data from content."""
 
-from typing import TypeVar
+from __future__ import annotations
 
-from llm_saia.core.verb import Verb
+from typing import TYPE_CHECKING, TypeVar
+
+from ..core.types import VerbResult
+from ..core.verb import Verb
+
+if TYPE_CHECKING:
+    from ..core.conversation import ConversationLike
 
 T = TypeVar("T")
 
@@ -15,9 +21,18 @@ class Extract(Verb):
         content: str,
         schema: type[T],
         instructions: str | None = None,
-    ) -> T:
+        *,
+        conversation: ConversationLike | None = None,
+    ) -> VerbResult[T]:
         """Extract structured data from content according to the schema."""
-        prompt = f"Extract the following information from this content:\n\n{content}"
-        if instructions:
-            prompt += f"\n\nExtraction guidance: {instructions}"
-        return await self._complete_structured(prompt, schema)
+        trace = self._init_verb_trace()
+        try:
+            prompt = f"Extract the following information from this content:\n\n{content}"
+            if instructions:
+                prompt += f"\n\nExtraction guidance: {instructions}"
+            value = await self._complete_structured(
+                prompt, schema, conversation=conversation, _trace=trace
+            )
+            return VerbResult(value=value, trace=trace)
+        finally:
+            self._emit_verb_trace(trace)

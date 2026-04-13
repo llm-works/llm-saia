@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
-from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
-from llm_saia.core.configurable import Configurable
+from .core.config import DEFAULT_CALL, CallOptions, Config
+from .core.configurable import Configurable
 
 if TYPE_CHECKING:
-    from llm_saia.builder import SAIABuilder
-from llm_saia.verbs import (
+    from .builder import SAIABuilder
+from .verbs import (
     Ask,
     Choose,
     Classify,
@@ -19,6 +19,7 @@ from llm_saia.verbs import (
     Critique_,
     Decompose,
     Extract,
+    Find,
     Ground,
     Instruct,
     Refine,
@@ -44,7 +45,7 @@ class SAIA(Configurable):
     @classmethod
     def builder(cls) -> SAIABuilder:
         """Create a fluent builder for SAIA."""
-        from llm_saia.builder import SAIABuilder
+        from .builder import SAIABuilder
 
         return SAIABuilder()
 
@@ -70,9 +71,10 @@ class SAIA(Configurable):
         self.constrain = Constrain(self._config)
         self.critique = Critique_(self._config)
         self.decompose = Decompose(self._config)
+        self.extract = Extract(self._config)
+        self.find = Find(self._config)
         self.ground = Ground(self._config)
         self.instruct = Instruct(self._config)
-        self.extract = Extract(self._config)
         self.refine = Refine(self._config)
         self.synthesize = Synthesize(self._config)
         self.verify = Verify(self._config)

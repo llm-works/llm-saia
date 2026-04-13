@@ -1,9 +1,10 @@
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
-from llm_saia.builder import SAIABuilder
-from llm_saia.core.backend import AgentResponse, Backend, Message, ToolCall, ToolDef
-from llm_saia.core.config import CallOptions, Config, TerminalConfig
-from llm_saia.core.errors import (
+from .builder import SAIABuilder
+from .core.backend import AgentResponse, Backend, ToolDef
+from .core.config import CallOptions, Config, TerminalConfig
+from .core.conversation import Message, Role, ToolCall
+from .core.errors import (
     BackendError,
     ConfigurationError,
     Error,
@@ -11,21 +12,34 @@ from llm_saia.core.errors import (
     ToolExecutionError,
     TruncatedResponseError,
 )
-from llm_saia.core.logger import Logger, NullLogger
-from llm_saia.core.trace import CallbackTracer, Tracer, TracerFactory
-from llm_saia.core.types import (
+from .core.guard import Guarded, IterationGuard, OutputGuard, OutputGuardError
+from .core.logger import Logger, NullLogger
+from .core.trace import (
+    CallbackTracer,
+    GuardOutcome,
+    LLMCall,
+    Step,
+    ToolOutcome,
+    Tracer,
+    TracerFactory,
+    VerbTrace,
+)
+from .core.types import (
     ChooseResult,
     ClassifyResult,
+    ConversationLike,
     Critique,
     DecisionReason,
     Evidence,
+    FindResult,
+    ListConversation,
     LoopScore,
     TaskResult,
     VerbResult,
     VerifyResult,
 )
-from llm_saia.core.verb import Verb
-from llm_saia.saia import SAIA
+from .core.verb import Verb
+from .saia import SAIA
 
 __all__ = [
     # Main class
@@ -39,9 +53,14 @@ __all__ = [
     "Error",
     "BackendError",
     "ConfigurationError",
+    "OutputGuardError",
     "StructuredOutputError",
     "ToolExecutionError",
     "TruncatedResponseError",
+    # Guards
+    "Guarded",
+    "IterationGuard",
+    "OutputGuard",
     # Logger
     "NullLogger",
     "Logger",
@@ -50,6 +69,7 @@ __all__ = [
     "ClassifyResult",
     "Critique",
     "Evidence",
+    "FindResult",
     "VerifyResult",
     "VerbResult",
     # Task types
@@ -58,13 +78,22 @@ __all__ = [
     "LoopScore",
     "Message",
     "CallOptions",
+    "Role",
     "TaskResult",
     "ToolCall",
     "ToolDef",
+    # Conversation protocol
+    "ConversationLike",
+    "ListConversation",
     # Terminal
     "TerminalConfig",
     # Tracing
     "CallbackTracer",
+    "GuardOutcome",
+    "LLMCall",
+    "Step",
+    "ToolOutcome",
     "Tracer",
     "TracerFactory",
+    "VerbTrace",
 ]

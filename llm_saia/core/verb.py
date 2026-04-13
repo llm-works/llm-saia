@@ -4,25 +4,36 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
-from abc import ABC, abstractmethod
-from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, TypeVar
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
-from llm_saia.core.backend import AgentResponse, Message, ToolCall
-from llm_saia.core.config import DEFAULT_CALL, CallOptions, Config
-from llm_saia.core.errors import StructuredOutputError, TruncatedResponseError
-from llm_saia.core.schema import dataclass_to_json_schema, parse_json_to_dataclass
+from .backend import AgentResponse
+from .config import DEFAULT_CALL, CallOptions, Config
+from .configurable import Configurable
+from .conversation import (
+    ConversationLike,
+    ListConversation,
+    Message,
+    MessageAppendable,
+    Role,
+    ToolCall,
+)
+from .errors import StructuredOutputError, TruncatedResponseError
+from .guard import IterationGuard
+from .guards import OutputGuardMixin
+from .logging import VerbLoggingMixin
+from .schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
-    from llm_saia.core.backend import Backend
-    from llm_saia.core.logger import Logger
-    from llm_saia.core.trace import Tracer
+    from .backend import Backend
+    from .trace import GuardOutcome, Tracer, VerbTrace
 
 T = TypeVar("T")
 
+_SENTINEL: Any = object()  # default marker for _chat(tools=...)
 
-class Verb(ABC):
+
+class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     """Base class for all verbs. Subclass this to create custom verbs."""
 
     # Truncation limit for log previews
@@ -31,16 +42,17 @@ class Verb(ABC):
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
         self._config = config
+        self._memory: dict[str, Any] = {}  # Verbs don't use memory
+        self._lg = config.lg
+
+    def _clone(self, config: Config) -> Self:
+        """Create a new instance with the given config."""
+        return self.__class__(config)
 
     @property
     def _backend(self) -> Backend:
         """Get the configured backend."""
         return self._config.backend
-
-    @property
-    def _lg(self) -> Logger | None:
-        """Get the configured logger, if any."""
-        return self._config.lg
 
     def _has_tools(self) -> bool:
         """Check if tools are configured."""
@@ -55,154 +67,45 @@ class Verb(ABC):
         """Get effective call options: override > instance default > global default."""
         return override or self._call
 
-    def _log_loop_start(self, config: CallOptions) -> None:
-        """Log verb loop start if logger available."""
-        if self._lg:
-            self._lg.debug(
-                "verb loop started",
-                extra={
-                    "verb": self.__class__.__name__,
-                    "max_iterations": config.max_iterations,
-                    "timeout_secs": config.timeout_secs,
-                    "max_total_tokens": config.max_total_tokens,
-                },
+    def _structured_output_error(
+        self, error: json.JSONDecodeError, content: str, schema_name: str
+    ) -> StructuredOutputError:
+        """Create appropriate error for structured output parse failure."""
+        error_msg = str(error)
+        # Detect truncation patterns
+        truncation_indicators = (
+            "Unterminated string",
+            "Unexpected end of JSON",
+            "Expecting value",
+            "Expecting ',' delimiter",
+            "Expecting ':' delimiter",
+        )
+        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
+
+        # Verify truncation: error position should be at/near EOF (only whitespace after)
+        pos = getattr(error, "pos", None)
+        if is_truncated and pos is not None and content[pos:].strip():
+            is_truncated = False
+
+        if is_truncated:
+            return TruncatedResponseError(
+                raw_content=content,
+                schema_name=schema_name,
+                parse_error=error_msg,
             )
-
-    def _log_response(self, response: AgentResponse, iteration: int, total_tokens: int) -> None:
-        """Log LLM response if logger available."""
-        if self._lg:
-            self._lg.debug(
-                "llm response received",
-                extra={
-                    "call_id": response.call_id,
-                    "iters": iteration,
-                    "tokens": {
-                        "input": response.input_tokens,
-                        "output": response.output_tokens,
-                        "total": total_tokens,
-                    },
-                    "finish_reason": response.finish_reason,
-                    "tool_calls": len(response.tool_calls) if response.tool_calls else 0,
-                    "preview": self._truncate(response.content, self._PREVIEW_LIMIT),
-                },
-            )
-            tools = (
-                {
-                    str(i + 1): {"name": tc.name, "args": tc.arguments}
-                    for i, tc in enumerate(response.tool_calls)
-                }
-                if response.tool_calls
-                else None
-            )
-            self._lg.trace(
-                "llm response details",
-                extra=OrderedDict([("tools", tools), ("content", response.content)]),
-            )
-
-    def _log_limit_reached(
-        self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
-    ) -> None:
-        """Log when loop limit is reached."""
-        if self._lg:
-            elapsed_secs = time.monotonic() - start_time
-            self._lg.warning(
-                "verb loop limit reached",
-                extra={
-                    "verb": self.__class__.__name__,
-                    "iterations": iteration,
-                    "total_tokens": total_tokens,
-                    "elapsed_secs": int(elapsed_secs),
-                    "limit_type": self._get_limit_type(
-                        config, iteration, elapsed_secs, total_tokens
-                    ),
-                },
-            )
-
-    def _truncate(self, text: str, limit: int) -> str:
-        """Truncate text with '... (N chars)' suffix if over limit."""
-        if not text or len(text) <= limit:
-            return text
-        return f"{text[:limit]}... ({len(text)} chars)"
-
-    # Tool-call JSON patterns that indicate LLM tried to call tools via text output.
-    # These patterns are specific to common function-calling formats (OpenAI, Anthropic).
-    # We require the pattern to look like a tool invocation structure, not just any JSON.
-    _TOOL_CALL_PATTERNS = (
-        '"function_call":',
-        '"tool_calls":',
-        '"tool_use":',
-    )
-
-    # Minimum expected input tokens per tool definition (conservative estimate)
-    _MIN_TOKENS_PER_TOOL = 50
-
-    def _check_tool_support(self, response: AgentResponse) -> None:
-        """Check for signs that the model may not natively support function calling."""
-        if not self._config.warn_tool_support or not self._has_tools() or not self._lg:
-            return
-        self._warn_low_input_tokens(response)
-        self._warn_tool_json_in_text(response)
-
-    def _warn_low_input_tokens(self, response: AgentResponse) -> None:
-        """Warn if input tokens suggest server ignored tool definitions."""
-        if response.tool_calls:  # Tools working, no warning needed
-            return
-        tool_count = len(self._config.tools)
-        min_expected = tool_count * self._MIN_TOKENS_PER_TOOL
-        if response.input_tokens > 0 and response.input_tokens < min_expected:
-            self._lg.warning(  # type: ignore[union-attr]
-                "input tokens suspiciously low - server may be ignoring tool definitions",
-                extra={
-                    "input_tokens": response.input_tokens,
-                    "tool_count": tool_count,
-                    "min_expected": min_expected,
-                },
-            )
-
-    def _warn_tool_json_in_text(self, response: AgentResponse) -> None:
-        """Warn if LLM outputs tool-call JSON as text instead of using tool_calls."""
-        if response.tool_calls or not response.content:
-            return
-        if self._looks_like_tool_call_json(response.content):
-            self._lg.warning(  # type: ignore[union-attr]
-                "tools configured but LLM returned text instead of tool_calls - "
-                "model may not support function calling",
-                extra={
-                    "content_preview": self._truncate(response.content, self._PREVIEW_LIMIT),
-                    "tool_count": len(self._config.tools),
-                },
-            )
-
-    def _looks_like_tool_call_json(self, content: str) -> bool:
-        """Check if content looks like tool-call JSON (not just any JSON with 'name')."""
-        # Explicit tool-call patterns are definitive
-        if any(pattern in content for pattern in self._TOOL_CALL_PATTERNS):
-            return True
-        # "name" alone is too broad; require it alongside "arguments" or "parameters"
-        has_name = '"name":' in content
-        has_args = '"arguments":' in content or '"parameters":' in content
-        return has_name and has_args
-
-    def _log_loop_complete(
-        self, iteration: int, start_time: float, total_tokens: int, content: str
-    ) -> None:
-        """Log when loop completes normally."""
-        if self._lg:
-            self._lg.debug(
-                "verb loop completed",
-                extra={
-                    "verb": self.__class__.__name__,
-                    "iters": iteration + 1,
-                    "total_tokens": total_tokens,
-                    "elapsed_secs": int(time.monotonic() - start_time),
-                    "preview": self._truncate(content, self._PREVIEW_LIMIT),
-                },
-            )
+        return StructuredOutputError(
+            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
+            raw_content=content,
+            schema_name=schema_name,
+            parse_error=error_msg,
+        )
 
     @staticmethod
     def _generate_id() -> str:
         """Generate a short unique ID for tracing (8-char hex)."""
-        return uuid.uuid4().hex[:8]
+        from .trace import _generate_id
+
+        return _generate_id()
 
     def _resolve_tracer(
         self,
@@ -221,29 +124,53 @@ class Verb(ABC):
             active.start(metadata)
         return owns, active
 
-    def _write_base_trace(
+    def _init_verb_trace(self, trace_id: str = "") -> VerbTrace:
+        """Create a new VerbTrace for this verb call."""
+        from .trace import VerbTrace
+
+        trace = VerbTrace(
+            verb=self.__class__.__name__,
+            trace_id=trace_id or self._generate_id(),
+            ts=time.time(),
+            request_id=self._call.request_id,
+        )
+        trace._mono_start = time.monotonic()  # type: ignore[attr-defined]
+        return trace
+
+    def _record_step(
         self,
         response: AgentResponse,
         *,
-        trace_id: str,
-        iteration: int = 0,
-        phase: str = "loop",
+        phase: str,
+        _trace: VerbTrace | None = None,
     ) -> None:
-        """Write a base trace record if a tracer is configured."""
-        tracer = self._config.tracer
-        if not tracer:
-            return
-        from llm_saia.core.trace import build_base_trace
+        """Build a Step from response, append to trace, write to tracer."""
+        from .trace import build_step_from_response
 
-        record = build_base_trace(
+        step = build_step_from_response(
             response,
-            trace_id=trace_id,
-            iteration=iteration,
-            verb=self.__class__.__name__,
             phase=phase,
-            request_id=self._call.request_id,
+            trace_id=_trace.trace_id if _trace else "",
+            verb=self.__class__.__name__,
         )
-        tracer.write(record)
+        if _trace is not None:
+            _trace.add_step(step)
+        tracer = self._config.tracer
+        if tracer:
+            tracer.write(step)
+
+    def _emit_verb_trace(self, trace: VerbTrace) -> None:
+        """Finalize timing and write the full VerbTrace to the configured tracer."""
+        mono_start = getattr(trace, "_mono_start", 0.0)
+        trace.duration_ms = int((time.monotonic() - mono_start) * 1000) if mono_start else 0
+        tracer = self._config.tracer
+        if tracer:
+            tracer.write(trace)
+
+    @staticmethod
+    def _max_tokens(config: CallOptions) -> int | None:
+        """Resolve max_call_tokens to None (no limit) or a positive int."""
+        return config.max_call_tokens if config.max_call_tokens > 0 else None
 
     def _resolve_temperature(self, override: CallOptions | None) -> float | None:
         """Resolve temperature: override CallOptions > instance CallOptions."""
@@ -256,8 +183,20 @@ class Verb(ABC):
         messages: list[Message],
         max_tokens: int | None,
         temperature: float | None = None,
+        *,
+        response_schema: dict[str, Any] | None = None,
+        tools: list[Any] | None = _SENTINEL,
     ) -> AgentResponse:
-        """Execute a single chat call."""
+        """Execute a single chat call.
+
+        Args:
+            messages: Conversation messages.
+            max_tokens: Token limit (None = unlimited).
+            temperature: Sampling temperature.
+            response_schema: JSON schema for structured output.
+            tools: Tool definitions. Default (sentinel) uses config tools;
+                pass ``None`` or ``[]`` to suppress tools.
+        """
         call_id = self._generate_id()
         if self._lg:
             last_msg = messages[-1] if messages else None
@@ -270,14 +209,22 @@ class Verb(ABC):
                     "content": last_msg.content if last_msg else None,
                 },
             )
+        resolved_tools = (
+            (self._config.tools if self._config.tools else None)
+            if tools is _SENTINEL
+            else (tools or None)
+        )
+        t0 = time.monotonic()
         response = await self._backend.chat(
             messages,
             system=self._call.system,
-            tools=self._config.tools if self._config.tools else None,
+            tools=resolved_tools,
             max_tokens=max_tokens,
             temperature=temperature,
+            response_schema=response_schema,
         )
         response.call_id = call_id
+        response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
         return response
 
     async def _loop(
@@ -286,35 +233,60 @@ class Verb(ABC):
         run: CallOptions | None = None,
         schema: type[T] | None = None,
         trace_id: str = "",
+        conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> tuple[str, T | None]:
         """Execute prompt with tool-calling loop."""
         config = self._get_call_options(run)
-        messages: list[Message] = [Message(role="user", content=prompt)]
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
-
+        max_tokens, temperature = self._max_tokens(config), self._resolve_temperature(run)
+        iter_guards = config.iteration_guards
         self._log_loop_start(config)
-        max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
-        temperature = self._resolve_temperature(run)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(messages, max_tokens, temperature)
+            response = await self._chat(conv.as_messages(), max_tokens, temperature)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
-            messages.append(self._to_message(response))
+            conv.append(self._to_message(response))
             self._log_response(response, iteration, total_tokens)
             self._check_tool_support(response)
-            self._write_base_trace(response, trace_id=trace_id, iteration=iteration, phase="loop")
+            self._record_step(response, phase="iteration", _trace=_trace)
 
-            if response.tool_calls:
-                await self._execute_tools(response.tool_calls, messages)
+            if await self._apply_iteration_guards_or_tools(iter_guards, response, conv, _trace):
                 iteration += 1
-            else:
-                self._log_loop_complete(iteration, start_time, total_tokens, response.content)
-                return await self._finalize(prompt, response.content, schema, trace_id, temperature)
+                continue
+            self._log_loop_complete(iteration, start_time, total_tokens, response.content)
+            return await self._finalize(
+                prompt, response.content, schema, trace_id, temperature, _trace=_trace
+            )
 
         self._log_limit_reached(config, iteration, start_time, total_tokens)
-        return await self._finalize(prompt, last_content, schema, trace_id, temperature)
+        return await self._finalize(
+            prompt, last_content, schema, trace_id, temperature, _trace=_trace
+        )
+
+    async def _apply_iteration_guards_or_tools(
+        self,
+        iter_guards: tuple[IterationGuard, ...],
+        response: AgentResponse,
+        conv: ConversationLike,
+        _trace: VerbTrace | None,
+    ) -> bool:
+        """Check iteration guards and execute tools. Returns True if loop should continue."""
+        feedback, _outcomes = self._run_iteration_guards(iter_guards, response, _trace)
+        if feedback is not None:
+            # Acknowledge any pending tool calls so the conversation stays valid
+            for tc in response.tool_calls or []:
+                conv.append(Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id))
+            conv.append(Message(role=Role.USER, content=feedback))
+            return True
+        if response.tool_calls:
+            await self._execute_tools(response.tool_calls, conv)
+            return True
+        return False
 
     def _should_stop(
         self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
@@ -328,28 +300,105 @@ class Verb(ABC):
             return True
         return False
 
-    def _get_limit_type(
-        self, config: CallOptions, iteration: int, elapsed_secs: float, total_tokens: int
-    ) -> str:
-        """Determine which limit caused the loop to stop."""
-        if config.max_iterations > 0 and iteration >= config.max_iterations:
-            return "max_iterations"
-        if config.timeout_secs > 0 and elapsed_secs >= config.timeout_secs:
-            return "timeout"
-        if config.max_total_tokens > 0 and total_tokens >= config.max_total_tokens:
-            return "max_tokens"
-        return "unknown"
+    def _run_iteration_guards(
+        self,
+        guards: tuple[IterationGuard, ...],
+        response: AgentResponse,
+        _trace: VerbTrace | None = None,
+    ) -> tuple[str | None, list[GuardOutcome]]:
+        """Run iteration guards against the current response.
+
+        Returns ``(feedback, outcomes)`` — *feedback* is the combined feedback
+        string if any guard fires (or ``None`` when all pass), and *outcomes*
+        is the list of per-guard results for trace recording.
+
+        When a trace is active **and** a step already exists (base-verb loop),
+        outcomes are attached to the most recent step automatically.  The
+        Complete verb creates its step later, so it attaches outcomes itself.
+        """
+        from .trace import GuardOutcome
+
+        if not guards:
+            return None, []
+
+        feedback_parts: list[str] = []
+        outcomes: list[GuardOutcome] = []
+        for guard in guards:
+            try:
+                result = guard.validator(response)
+            except Exception as e:
+                result = f"Validator raised {type(e).__name__}: {e}"
+            passed = result is None
+            outcomes.append(
+                GuardOutcome(name=guard.name, passed=passed, error=result if not passed else None)
+            )
+            if not passed:
+                self._log_iteration_guard_fired(guard.name, result)
+                feedback_parts.append(result)  # type: ignore[arg-type]
+
+        # Attach outcomes to the most recent step when one already exists
+        if _trace and _trace.steps:
+            _trace.steps[-1].guards = outcomes
+
+        if feedback_parts:
+            return "\n\n".join(feedback_parts), outcomes
+        return None, outcomes
+
+    def _log_iteration_guard_fired(self, name: str | None, feedback: str | None) -> None:
+        """Log that an iteration guard fired."""
+        if self._lg:
+            self._lg.debug(
+                "iteration guard fired",
+                extra={"guard": name, "feedback": feedback},
+            )
 
     def _to_message(self, response: AgentResponse) -> Message:
         """Convert AgentResponse to Message."""
         return Message(
-            role="assistant",
+            role=Role.ASSISTANT,
             content=response.content,
             tool_calls=response.tool_calls if response.tool_calls else None,
         )
 
-    async def _execute_tools(self, tool_calls: list[ToolCall], messages: list[Message]) -> None:
-        """Execute tool calls and append results."""
+    @staticmethod
+    def _fork_conversation(
+        conversation: ConversationLike | None,
+    ) -> ConversationLike | None:
+        """Create a working copy of a conversation for isolated operations.
+
+        Returns None when the caller did not provide a conversation (the
+        downstream helpers will create a throwaway ListConversation).
+        """
+        if conversation is None:
+            return None
+        fork = ListConversation()
+        for msg in conversation.as_messages():
+            fork.append(msg)
+        return fork
+
+    @staticmethod
+    def _merge_conversation(
+        target: ConversationLike | None,
+        source: ConversationLike | None,
+    ) -> None:
+        """Append new messages from *source* back into *target*.
+
+        Only messages added after the fork point (i.e. those beyond the
+        original length of *target*) are copied.
+        """
+        if target is None or source is None:
+            return
+        base_len = len(target.as_messages())
+        for msg in source.as_messages()[base_len:]:
+            target.append(msg)
+
+    async def _execute_tools(self, tool_calls: list[ToolCall], messages: MessageAppendable) -> None:
+        """Execute tool calls and append results.
+
+        Args:
+            tool_calls: Tool calls to execute.
+            messages: Object supporting append() - either list[Message] or ConversationLike.
+        """
         if not self._config.executor:
             if self._lg:
                 self._lg.warning(
@@ -359,7 +408,7 @@ class Verb(ABC):
             return
         for tc in tool_calls:
             result = await self._execute_single_tool(tc)
-            messages.append(Message(role="tool_result", content=str(result), tool_call_id=tc.id))
+            messages.append(Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id))
 
     async def _execute_single_tool(self, tc: ToolCall) -> str:
         """Execute a single tool call with logging."""
@@ -401,107 +450,273 @@ class Verb(ABC):
         schema: type[T] | None,
         trace_id: str = "",
         temperature: float | None = None,
+        _trace: VerbTrace | None = None,
     ) -> tuple[str, T | None]:
         """Finalize result, optionally parsing structured output."""
         if schema:
-            # Request structured output with schema
             structured_prompt = f"{prompt}\n\nBased on the following information:\n{content}"
             json_schema = dataclass_to_json_schema(schema)
-            response = await self._backend.chat(
-                [Message(role="user", content=structured_prompt)],
-                system=self._call.system,
-                response_schema=json_schema,
+            response = await self._chat(
+                [Message(role=Role.USER, content=structured_prompt)],
+                max_tokens=None,
                 temperature=temperature,
+                response_schema=json_schema,
+                tools=[],
             )
-            response.call_id = self._generate_id()
-            self._write_base_trace(response, trace_id=trace_id, phase="finalize")
+            self._record_step(response, phase="finalize", _trace=_trace)
             try:
                 data = json.loads(response.content)
             except json.JSONDecodeError as e:
-                if self._lg:
-                    preview = self._truncate(response.content, self._PREVIEW_LIMIT)
-                    self._lg.warning(
-                        "json parse error in finalize",
-                        extra={
-                            "exception": e,
-                            "content_preview": preview,
-                            "schema": schema.__name__,
-                        },
-                    )
+                self._log_finalize_parse_error(e, response.content, schema.__name__)
                 raise self._structured_output_error(e, response.content, schema.__name__) from e
             result = parse_json_to_dataclass(data, schema)
             return content, result
         return content, None
 
+    def _log_finalize_parse_error(
+        self, error: json.JSONDecodeError, content: str, schema_name: str
+    ) -> None:
+        """Log a JSON parse error during finalize phase."""
+        if self._lg:
+            self._lg.warning(
+                "json parse error in finalize",
+                extra={
+                    "exception": error,
+                    "content_preview": self._truncate(content, self._PREVIEW_LIMIT),
+                    "schema": schema_name,
+                },
+            )
+
     # --- High-level helpers for verbs ---
 
-    async def _complete(self, prompt: str, run: CallOptions | None = None) -> str:
-        """Complete with tools if available, otherwise direct."""
+    async def _complete(
+        self,
+        prompt: str,
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
+    ) -> str:
+        """Complete with tools if available, otherwise direct.
+
+        Applies output guards if configured.
+        """
+        trace = _trace if _trace is not None else self._init_verb_trace()
         if self._has_tools():
-            content, _ = await self._loop(prompt, run=run)
-            return content
-        trace_id = self._generate_id()
-        response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
-            system=self._call.system,
-            temperature=self._resolve_temperature(run),
+            content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=trace)
+        else:
+            content = await self._complete_direct(prompt, run, conversation, trace)
+        result = await self._apply_text_guards(
+            prompt, content, run, conversation=conversation, _trace=trace
         )
-        response.call_id = self._generate_id()
-        self._write_base_trace(response, trace_id=trace_id, phase="direct")
+        if _trace is None:
+            self._emit_verb_trace(trace)
+        return result
+
+    async def _complete_direct(
+        self,
+        prompt: str,
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+        trace: VerbTrace,
+    ) -> str:
+        """Direct (no-tool) text completion. Records step to trace."""
+        config = self._get_call_options(run)
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
+        response = await self._chat(
+            conv.as_messages(),
+            max_tokens=self._max_tokens(config),
+            temperature=self._resolve_temperature(run),
+            tools=[],
+        )
+        conv.append(self._to_message(response))
+        self._record_step(response, phase="attempt", _trace=trace)
+        return response.content
+
+    async def _complete_text_attempt(
+        self,
+        prompt: str,
+        run: CallOptions | None = None,
+        phase: str = "direct",
+        conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
+    ) -> str:
+        """Single attempt at text completion without applying guards.
+
+        Used by guard retry logic to avoid recursion.
+        """
+        if self._has_tools():
+            content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=_trace)
+            return content
+        config = self._get_call_options(run)
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
+        response = await self._chat(
+            conv.as_messages(),
+            max_tokens=self._max_tokens(config),
+            temperature=self._resolve_temperature(run),
+            tools=[],
+        )
+        conv.append(self._to_message(response))
+        self._record_step(response, phase=phase, _trace=_trace)
         return response.content
 
     async def _complete_structured(
-        self, prompt: str, schema: type[T], run: CallOptions | None = None
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
     ) -> T:
-        """Complete structured with tools if available, otherwise direct."""
+        """Complete structured with retry on StructuredOutputError.
+
+        Retry count controlled by CallOptions.parse_retries (default: 0).
+        Output guards are applied after successful parsing.
+        """
+        trace = _trace if _trace is not None else self._init_verb_trace()
+        config = self._get_call_options(run)
+        max_attempts = 1 + config.parse_retries
+        last_error: StructuredOutputError | None = None
+
+        for attempt in range(max_attempts):
+            phase = "attempt" if attempt == 0 else "parse_retry"
+            try:
+                result = await self._structured_attempt_cycle(
+                    prompt, schema, run, conversation, last_error, attempt, phase, trace
+                )
+                result = await self._apply_guards(
+                    prompt, result, schema, run, conversation=conversation, _trace=trace
+                )
+                if _trace is None:
+                    self._emit_verb_trace(trace)
+                return result
+            except StructuredOutputError as e:
+                last_error = e
+                self._mark_last_step_parse_failure(trace, e)
+                if attempt < max_attempts - 1:
+                    self._log_parse_retry(schema.__name__, attempt + 1, max_attempts, e)
+                    continue
+                if _trace is None:
+                    self._emit_verb_trace(trace)
+                raise
+
+        raise last_error  # type: ignore[misc]
+
+    async def _structured_attempt_cycle(
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+        last_error: StructuredOutputError | None,
+        attempt: int,
+        phase: str,
+        trace: VerbTrace,
+    ) -> T:
+        """Run one parse attempt: build prompt, fork conv, call backend."""
+        use_prompt = self._retry_prompt_or_original(prompt, schema, last_error, attempt)
+        attempt_conv = self._fork_conversation(conversation)
+        result = await self._complete_structured_attempt(
+            use_prompt, schema, run, conversation=attempt_conv, _trace=trace, _phase=phase
+        )
+        self._merge_conversation(conversation, attempt_conv)
+        return result
+
+    @staticmethod
+    def _mark_last_step_parse_failure(trace: VerbTrace, error: StructuredOutputError) -> None:
+        """Mark the last step in the trace as a parse failure."""
+        if trace.steps:
+            trace.steps[-1].parsed = False
+            trace.steps[-1].parse_error = error.parse_error
+
+    async def _complete_structured_attempt(
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None = None,
+        conversation: ConversationLike | None = None,
+        _trace: VerbTrace | None = None,
+        _phase: str = "attempt",
+    ) -> T:
+        """Single attempt at structured completion."""
         if self._has_tools():
-            _, result = await self._loop(prompt, run=run, schema=schema)
+            _, result = await self._loop(
+                prompt, run=run, schema=schema, conversation=conversation, _trace=_trace
+            )
             if result is not None:
                 return result
         # Direct structured completion
-        trace_id = self._generate_id()
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
         json_schema = dataclass_to_json_schema(schema)
-        response = await self._backend.chat(
-            [Message(role="user", content=prompt)],
-            system=self._call.system,
-            response_schema=json_schema,
+        max_tokens = self._max_tokens(self._get_call_options(run))
+        response = await self._chat(
+            conv.as_messages(),
+            max_tokens=max_tokens,
             temperature=self._resolve_temperature(run),
+            response_schema=json_schema,
+            tools=[],
         )
-        response.call_id = self._generate_id()
-        self._write_base_trace(response, trace_id=trace_id, phase="direct")
+        conv.append(self._to_message(response))
+        self._record_step(response, phase=_phase, _trace=_trace)
         try:
             data = json.loads(response.content)
         except json.JSONDecodeError as e:
             raise self._structured_output_error(e, response.content, schema.__name__) from e
         return parse_json_to_dataclass(data, schema)
 
-    def _structured_output_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
-    ) -> StructuredOutputError:
-        """Create appropriate error for structured output parse failure."""
-        error_msg = str(error)
-        # Detect truncation patterns
-        truncation_indicators = (
-            "Unterminated string",
-            "Unexpected end of JSON",
-            "Expecting value",
-            "Expecting ',' delimiter",
-            "Expecting ':' delimiter",
+    def _retry_prompt_or_original(
+        self,
+        prompt: str,
+        schema: type[T],
+        last_error: StructuredOutputError | None,
+        attempt: int,
+    ) -> str:
+        """Return original prompt on first attempt, retry prompt on subsequent ones."""
+        if attempt == 0:
+            return prompt
+        return self._build_parse_retry_prompt(
+            prompt,
+            schema,
+            last_error,  # type: ignore[arg-type]
         )
-        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
 
-        if is_truncated:
-            return TruncatedResponseError(
-                raw_content=content,
-                schema_name=schema_name,
-                parse_error=error_msg,
-            )
-        return StructuredOutputError(
-            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
-            raw_content=content,
-            schema_name=schema_name,
-            parse_error=error_msg,
+    def _build_parse_retry_prompt(
+        self, original_prompt: str, schema: type[T], error: StructuredOutputError
+    ) -> str:
+        """Build a retry prompt with feedback about the parse failure."""
+        parts = [original_prompt, "\n\n---\n\nYour previous response could not be parsed."]
+
+        if error.parse_error:
+            parts.append(f"\n\nParse error: {error.parse_error}")
+
+        if error.raw_content:
+            # Truncate raw content to avoid token bloat
+            raw = error.raw_content
+            if len(raw) > 500:
+                raw = raw[:500] + "... (truncated)"
+            parts.append(f"\n\nYour response was:\n```\n{raw}\n```")
+
+        parts.append(
+            f"\n\nPlease provide a valid JSON response matching the {schema.__name__} schema."
         )
+        return "".join(parts)
+
+    def _log_parse_retry(
+        self, schema_name: str, attempt: int, max_attempts: int, error: StructuredOutputError
+    ) -> None:
+        """Log parse retry attempt."""
+        if self._lg:
+            self._lg.debug(
+                "parse retry",
+                extra={
+                    "schema": schema_name,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "parse_error": error.parse_error,
+                },
+            )
 
     @abstractmethod
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:

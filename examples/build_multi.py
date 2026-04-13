@@ -124,7 +124,7 @@ async def main() -> None:  # cq: exempt
 
             # 1. Decompose (local)
             print(f"{C.CYAN}[decompose]{C.RESET} breaking down task...")
-            subtasks = await local.decompose(TASK)
+            subtasks = (await local.decompose(TASK)).value
             print(f"{C.CYAN}[decompose]{C.RESET} {len(subtasks)} subtasks")
             for t in subtasks:
                 label = t if len(t) <= 60 else t[:60] + "..."
@@ -136,38 +136,40 @@ async def main() -> None:  # cq: exempt
             for i, t in enumerate(subtasks):
                 label = t if len(t) <= 50 else t[:50] + "..."
                 print(f"  [{i + 1}/{len(subtasks)}] {label}", end=" ", flush=True)
-                parts.append(await local.instruct(f"Write Python for: {t}"))
+                parts.append((await local.instruct(f"Write Python for: {t}")).value)
                 print("done")
 
             # 3. Verify each (smart)
             print(f"\n{C.YELLOW}[verify]{C.RESET} checking code quality...")
             for i, code in enumerate(parts):
                 print(f"  [{i + 1}/{len(parts)}] verifying...", end=" ", flush=True)
-                result = await smart.verify(code, "valid Python, handles errors")
+                result = (await smart.verify(code, "valid Python, handles errors")).value
                 status = "✓" if result.passed else "✗"
                 print(f"{status} {result.reason[:40]}")
 
                 # 4. Critique failures (smart)
                 if not result.passed:
                     print(f"  {C.YELLOW}[critique]{C.RESET}...", end=" ", flush=True)
-                    critique = await smart.critique(code)
+                    critique = (await smart.critique(code)).value
                     print(f"{len(critique.weaknesses)} issues")
 
                     # 5. Refine (local) - only if there are weaknesses
                     if critique.weaknesses:
                         print(f"  {C.GREEN}[refine]{C.RESET}...", end=" ", flush=True)
                         feedback = "\n".join(critique.weaknesses)
-                        parts[i] = await local.refine(code, feedback)
+                        parts[i] = (await local.refine(code, feedback)).value
                         print("improved")
                     else:
                         print(f"  {C.GREEN}[refine]{C.RESET}... skipped (no issues)")
 
             # 6. Combine (smart) - using ask() to merge code parts
             print(f"\n{C.MAGENTA}[ask]{C.RESET} combining into final script...")
-            final = await smart.ask(
-                "Combine into one script:\n" + "\n---\n".join(parts),
-                "Output only working Python code",
-            )
+            final = (
+                await smart.ask(
+                    "Combine into one script:\n" + "\n---\n".join(parts),
+                    "Output only working Python code",
+                )
+            ).value
             print(f"\n{C.MAGENTA}[ask]{C.RESET}\n{final}")
 
 

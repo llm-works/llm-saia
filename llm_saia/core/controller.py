@@ -15,12 +15,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
-from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
-from llm_saia.core.types import DecisionReason
+from .classifier import LLMTaskStateClassifier, TaskState
+from .types import DecisionReason
 
 if TYPE_CHECKING:
-    from llm_saia.core.backend import AgentResponse, Message, ToolCall
-    from llm_saia.core.config import Config, TerminalConfig
+    from .backend import AgentResponse
+    from .config import Config, TerminalConfig
+    from .conversation import Message, ToolCall
 
 
 @dataclass
