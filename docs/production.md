@@ -299,6 +299,94 @@ raises an exception, the error message becomes the feedback string.
 
 `with_guard()` and `with_guards()` accept both guard types and route them automatically.
 
+## Terminal Tools
+
+A terminal tool signals task completion. When the model calls the terminal tool, SAIA extracts
+the result and stops the loop.
+
+```python
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal_tool("report_findings")
+    .build()
+)
+
+result = await saia.complete(task)
+print(result.terminal_data)  # Arguments from the terminal tool call
+```
+
+### Confirmation Behavior
+
+By default, SAIA asks the model to call the terminal tool twice to confirm completion. This
+prevents accidental termination but can cause issues: many models respond to "call again to
+confirm" with text like "Confirming..." instead of a second tool call.
+
+When confirmation fails, `terminal_data` is `None` even though the model called the terminal
+tool with valid data. The data is still accessible via `result.history`, but this is
+inconvenient.
+
+**Recommendation:** Disable confirmation unless you specifically need it:
+
+```python
+# Recommended: complete immediately on first terminal call
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal_tool("report_findings", require_confirmation=False)
+    .build()
+)
+
+# Legacy: require confirmation (default)
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal_tool("report_findings")  # require_confirmation=True by default
+    .build()
+)
+```
+
+### Terminal Tool Configuration
+
+For advanced control, use `.terminal()` instead of `.terminal_tool()`:
+
+```python
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal(
+        tool="complete_task",
+        output_field="summary",        # Field to use for result.output
+        status_field="status",         # Field containing completion status
+        failure_values=("stuck", "failed"),  # Status values that indicate failure
+        require_confirmation=False,
+    )
+    .build()
+)
+```
+
+### Extracting Data from History
+
+If `terminal_data` is `None` (due to confirmation failure), you can extract the terminal tool
+call from `result.history`:
+
+```python
+result = await saia.complete(task)
+
+if result.terminal_data is None:
+    # Fallback: scan history for terminal tool call
+    for msg in reversed(result.history):
+        if msg.tool_calls:
+            for call in msg.tool_calls:
+                if call.name == "report_findings":
+                    findings = call.arguments
+                    break
+```
+
 ## Timeouts and Limits
 
 Protect against runaway loops:

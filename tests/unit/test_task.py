@@ -338,6 +338,52 @@ class TestTask:
         # Output is from the confirmation response
         assert result.output == "Confirmed complete"
 
+    async def test_task_terminal_tool_no_confirmation_completes_immediately(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Task completes on first terminal tool call when require_confirmation=False."""
+        terminal_tool_def = ToolDef(
+            name="report_findings",
+            description="Report final findings",
+            parameters={
+                "type": "object",
+                "properties": {"findings": {"type": "string"}},
+                "required": ["findings"],
+            },
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="report_findings",
+            require_confirmation=False,  # No confirmation needed
+        )
+
+        # Single call to terminal tool should complete immediately
+        mock_backend.queue_tool_response(
+            AgentResponse(
+                content="Here are my findings",
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="report_findings",
+                        arguments={"findings": "Found 5 relevant items"},
+                    )
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Research something")
+
+        assert result.completed is True
+        assert result.iterations == 1  # Only one call, no confirmation needed
+        assert result.terminal_tool == "report_findings"
+        assert result.terminal_data == {"findings": "Found 5 relevant items"}
+        assert result.output == "Here are my findings"
+
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:

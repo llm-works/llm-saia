@@ -56,6 +56,20 @@ class TestSAIABuilder:
 
         assert saia._config.terminal is not None
         assert saia._config.terminal.tool == "finish"
+        assert saia._config.terminal.require_confirmation is True  # Default
+
+    def test_build_with_terminal_tool_no_confirmation(self, mock_backend: MockBackend) -> None:
+        """Build with terminal tool and require_confirmation=False."""
+        saia = (
+            SAIA.builder()
+            .backend(mock_backend)
+            .terminal_tool("finish", require_confirmation=False)
+            .build()
+        )
+
+        assert saia._config.terminal is not None
+        assert saia._config.terminal.tool == "finish"
+        assert saia._config.terminal.require_confirmation is False
 
     def test_build_with_logger(self, mock_backend: MockBackend) -> None:
         """Build with logger."""

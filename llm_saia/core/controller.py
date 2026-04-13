@@ -214,8 +214,26 @@ class DefaultController:
                 return call
         return None
 
+    def _make_terminal_action(self, call: ToolCall, fallback_content: str) -> Action:
+        """Create a completion/failure action from a terminal tool call."""
+        output = self._extract_terminal_output(call.arguments, fallback_content)
+        is_failure = self._is_terminal_failure(call.arguments)
+        return Action(
+            ActionType.FAIL if is_failure else ActionType.COMPLETE,
+            DecisionReason.TERMINAL_CONFIRMED_FAIL
+            if is_failure
+            else DecisionReason.TERMINAL_CONFIRMED,
+            output=output,
+            terminal_data=call.arguments,
+            terminal_tool=call.name,
+        )
+
     def _request_confirmation(self, call: ToolCall, obs: Observation) -> Action:
         """Request confirmation for terminal tool."""
+        # Skip confirmation if disabled - complete immediately on first call
+        if self.config.terminal and not self.config.terminal.require_confirmation:
+            return self._make_terminal_action(call, obs.response.content)
+
         self._pending_terminal = call
         self._confirmation_retries = 0
         self._failure_retries = 0
@@ -244,22 +262,12 @@ class DefaultController:
         if self._has_contradiction(obs.response.content, obs.tool_names):
             return self._handle_contradiction(obs.response.content)
 
-        output = self._extract_terminal_output(call.arguments, obs.response.content)
         is_failure = self._is_terminal_failure(call.arguments)
-
         if is_failure and self._failure_retries < self.config.max_failure_retries:
             return self._handle_failure_retry(call.arguments)
 
         self._pending_terminal = None
-        return Action(
-            ActionType.FAIL if is_failure else ActionType.COMPLETE,
-            DecisionReason.TERMINAL_CONFIRMED_FAIL
-            if is_failure
-            else DecisionReason.TERMINAL_CONFIRMED,
-            output=output,
-            terminal_data=call.arguments,
-            terminal_tool=call.name,
-        )
+        return self._make_terminal_action(call, obs.response.content)
 
     def _handle_contradiction(self, content: str) -> Action:
         """Handle contradictory confirmation (continuation signals detected)."""

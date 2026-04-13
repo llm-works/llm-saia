@@ -69,12 +69,18 @@ class TerminalConfig:
 
     The terminal tool is a special tool that signals task completion.
     When the LLM calls this tool, the controller confirms and extracts the result.
+
+    Note:
+        Many models respond to confirmation prompts with text instead of a second
+        tool call, causing ``terminal_data`` to be ``None``. Set
+        ``require_confirmation=False`` if you don't need explicit confirmation.
     """
 
     tool: str  # Name of the terminal tool (e.g., "complete_task")
     output_field: str | None = None  # Field containing output (default: check common names)
     status_field: str | None = None  # Field containing status (default: "status")
     failure_values: tuple[str, ...] = ("stuck", "failed", "error")  # Status values = failure
+    require_confirmation: bool = True  # Require second call to confirm completion
 
 
 @dataclass

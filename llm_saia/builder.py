@@ -72,6 +72,8 @@ class SAIABuilder:
         output_field: str | None = None,
         status_field: str | None = None,
         failure_values: tuple[str, ...] | None = None,
+        *,
+        require_confirmation: bool = True,
     ) -> SAIABuilder:
         """Set terminal tool configuration for task completion.
 
@@ -80,21 +82,32 @@ class SAIABuilder:
             output_field: Field in tool args containing output (default: check common names)
             status_field: Field in tool args containing status (default: "status")
             failure_values: Status values that indicate failure (default: stuck/failed/error)
+            require_confirmation: If True, require model to call terminal tool twice to
+                confirm completion. If False, complete immediately on first call.
+                Note: Many models respond to confirmation prompts with text instead of
+                a tool call, causing terminal_data to be None. Set to False if you
+                don't need explicit confirmation.
         """
         self._terminal = TerminalConfig(
             tool=tool,
             output_field=output_field,
             status_field=status_field,
             failure_values=failure_values or ("stuck", "failed", "error"),
+            require_confirmation=require_confirmation,
         )
         return self
 
-    def terminal_tool(self, name: str) -> SAIABuilder:
+    def terminal_tool(self, name: str, *, require_confirmation: bool = True) -> SAIABuilder:
         """Set terminal tool name for task completion (simple form).
 
         For more control, use .terminal() instead.
+
+        Args:
+            name: Name of the terminal tool
+            require_confirmation: If True, require model to call terminal tool twice.
+                If False, complete immediately on first call. Default True.
         """
-        self._terminal = TerminalConfig(tool=name)
+        self._terminal = TerminalConfig(tool=name, require_confirmation=require_confirmation)
         return self
 
     def logger(self, lg: Logger) -> SAIABuilder:

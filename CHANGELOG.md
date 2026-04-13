@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `require_confirmation` parameter for terminal tools. Set to `False` to complete immediately
+  on first terminal tool call without requiring a confirmation call. Many models respond to
+  confirmation prompts with text instead of a tool call, causing `terminal_data` to be `None`.
+  Use `.terminal_tool("name", require_confirmation=False)` to avoid this issue.
+
 ## [0.3.0] - 2026-04-13
 
 ### Added
