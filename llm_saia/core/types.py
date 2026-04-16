@@ -72,6 +72,7 @@ class DecisionReason(Enum):
     TEXT_TOOL_PATTERN = "text_tool_pattern"  # LLM wrote tool names as text
     TERMINAL_CONFIRMATION_REQUEST = "terminal_confirmation_request"  # Asking to confirm terminal
     TERMINAL_FAILURE_RETRY = "terminal_failure_retry"  # Retry after terminal failure
+    TERMINAL_SCHEMA_RETRY = "terminal_schema_retry"  # Retry after schema validation failure
     CONTRADICTION_DETECTED = "contradiction_detected"  # LLM contradicted terminal confirmation
     NUDGE_CLASSIFIED = "nudge_classified"  # Classifier suggests nudge (wants_continue, stuck, etc)
 

@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .logger import Logger
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .backend import Backend, ToolDef
     from .guard import IterationGuard, OutputGuard
-    from .logger import Logger
     from .trace import Tracer
 
 __all__ = [
@@ -41,13 +42,6 @@ class CallOptions:
     timeout_secs: float = 0  # Soft timeout in seconds (0 = no timeout)
     max_iterations: int = 3  # Max tool-calling rounds (0 = unlimited)
 
-    # Retry behavior
-    max_retries: int = 1  # Number of retry attempts (1 = no retry)
-    retry_escalation: str | None = None  # Prompt added on retry attempts
-
-    # Parse retry (structured output)
-    parse_retries: int = 0  # Retry attempts on StructuredOutputError (0 = no retry)
-
     # Output guards (validators with retry)
     output_guards: tuple[OutputGuard, ...] = field(default_factory=tuple)
 
@@ -56,11 +50,6 @@ class CallOptions:
 
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
-
-    def __post_init__(self) -> None:
-        """Validate options after initialization."""
-        if self.parse_retries < 0:
-            raise ValueError("parse_retries must be non-negative")
 
 
 @dataclass
@@ -91,12 +80,12 @@ class Config:
     For per-call options, see CallOptions.
     """
 
+    lg: Logger  # Logger is always first, never optional
     backend: Backend
     tools: list[ToolDef]
     executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None
     call: CallOptions | None = None  # Per-call options (defaults applied if None)
     terminal: TerminalConfig | None = None  # Terminal tool configuration
-    lg: Logger | None = None
     tracer: Tracer | None = None  # Default tracer for iteration tracing
     warn_tool_support: bool = True
 

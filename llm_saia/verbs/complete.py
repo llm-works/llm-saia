@@ -54,7 +54,6 @@ class Complete(Verb):
         task: str,
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None = None,
         controller: LoopController | None = None,
-        tracer: Tracer | None = None,
     ) -> TaskResult:
         """Execute a task using tools until completion or limit reached.
 
@@ -62,8 +61,6 @@ class Complete(Verb):
             task: The task description / prompt.
             on_iteration: Optional async callback invoked each iteration.
             controller: Custom loop controller (uses default if None).
-            tracer: Per-call tracer (closed on completion). Falls back to
-                config tracer if not provided.
         """
         if not self._has_tools():
             raise ValueError("Complete requires tools and executor to be configured.")
@@ -73,20 +70,16 @@ class Complete(Verb):
         ctrl = controller or self._default_controller()
         ctrl.reset()
 
-        owns_tracer, active_tracer = self._resolve_tracer(
-            tracer,
+        # Tracer is from config - caller owns it and is responsible for closing.
+        tracer = self._resolve_tracer(
             {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
         )
 
         try:
-            result = await self._run_loop(
-                task, trace_id, ctrl, active_tracer, on_iteration, verb_trace
-            )
-            self._emit_verb_trace(verb_trace)
+            result = await self._run_loop(task, trace_id, ctrl, tracer, on_iteration, verb_trace)
             return self._tag_result(result, verb_trace)
         finally:
-            if active_tracer and owns_tracer:
-                active_tracer.close()
+            self._emit_verb_trace(verb_trace)
 
     @staticmethod
     def _score_action(acc: list[int], action: Action, tokens: int) -> None:
@@ -160,7 +153,9 @@ class Complete(Verb):
         # Run iteration guards before controller decides.
         # Don't pass verb_trace here — Complete builds its own Step later and
         # attaches outcomes explicitly (avoids overwriting the previous step).
-        feedback, outcomes = self._run_iteration_guards(ctx.iteration_guards, response)
+        feedback, outcomes = self._run_iteration_guards(
+            ctx.iteration_guards, response, iteration, ctx.call_options.max_iterations
+        )
         if feedback is not None:
             await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
             return None, tokens, response.content
@@ -196,6 +191,17 @@ class Complete(Verb):
         ctx.messages.append(self._to_message(response))
         self._ack_response_tools(response, ctx.messages)
         ctx.messages.append(Message(role=Role.USER, content=feedback))
+        # Log guard feedback injection (critical for debugging stuck loops)
+        self._lg.trace(
+            "guard feedback injected into conversation",
+            extra={
+                "iteration": iteration,
+                "guards_fired": [o.name for o in outcomes if not o.passed],
+                "feedback_len": len(feedback),
+                "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+                "acked_tools": [tc.name for tc in (response.tool_calls or [])],
+            },
+        )
         step = self._build_guard_nudge_step(response, ctx.trace_id, feedback)
         step.guards = outcomes
         if ctx.verb_trace is not None:
@@ -262,20 +268,18 @@ class Complete(Verb):
             temperature=self._call.temperature,
         )
         llm_config = Config(
+            lg=self._config.lg,
             backend=self._config.backend,
             tools=[],
             executor=None,
             call=call_options,
             terminal=None,
-            lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
         )
-        call = self._config.call or DEFAULT_COMPLETE_CALL
         return DefaultController(
             config=ControllerConfig(
                 llm_config=llm_config,
                 terminal=self._config.terminal,
-                max_failure_retries=call.max_retries,
             ),
         )
 
@@ -414,11 +418,23 @@ class Complete(Verb):
 
     def _log_action(self, action: Action) -> None:
         """Log the controller's decision."""
-        if self._lg:
-            self._lg.debug(
-                "controller_action",
-                extra={"kind": action.kind.value, "reason": action.reason.value},
-            )
+        self._lg.debug(
+            "controller_action",
+            extra={"kind": action.kind.value, "reason": action.reason.value},
+        )
+        # Detailed trace with all action fields
+        self._lg.trace(
+            "controller decision details",
+            extra={
+                "action": action.kind.value,
+                "reason": action.reason.value,
+                "nudge": action.message[:200] if action.message else None,
+                "output": action.output[:200] if action.output else None,
+                "terminal_tool": action.terminal_tool,
+                "terminal_data": action.terminal_data,
+                "tool_ids": action.tool_ids_to_execute,
+            },
+        )
 
     # --- Trace helpers ---
 

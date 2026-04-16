@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from llm_saia.core.config import CallOptions, Config
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import (
     AgentResponse,
     ClassifyResult,
@@ -791,11 +792,11 @@ class TestTask:
         )
 
         config = Config(
+            lg=NullLogger(),
             backend=mock_backend,
             tools=sample_tools + [terminal_tool_def],
             executor=dummy_executor,
             terminal=TerminalConfig(tool="finish", failure_values=("stuck", "failed")),
-            call=CallOptions(max_retries=0),  # No failure retries
         )
         from llm_saia import SAIA
 
@@ -836,30 +837,11 @@ class TestTask:
 class TestDefaultController:
     """Tests for DefaultController."""
 
-    def test_has_contradiction_detects_continuation_signals(
-        self, mock_backend: MockBackend
-    ) -> None:
-        """Controller detects continuation signals in confirmation."""
-        from llm_saia.core.controller import ControllerConfig, DefaultController
-
-        config = Config(backend=mock_backend, tools=[], executor=None)
-        controller = DefaultController(config=ControllerConfig(llm_config=config))
-
-        # Should detect contradiction
-        assert controller._has_contradiction("Let me check one more thing")
-        assert controller._has_contradiction("I will continue")
-        assert controller._has_contradiction("Let's proceed")
-
-        # Clean confirmation - no contradiction
-        assert not controller._has_contradiction("Confirmed")
-        assert not controller._has_contradiction("Yes, done")
-        assert not controller._has_contradiction("")
-
     def test_backoff_default_is_three(self, mock_backend: MockBackend) -> None:
         """Default backoff iterations is 3."""
         from llm_saia.core.controller import ControllerConfig
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config)
         assert ctrl_config.backoff_iterations == 3
 
@@ -867,7 +849,7 @@ class TestDefaultController:
         """Empty response detected when no content and no tool calls."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         # No content, no tool calls → empty
@@ -891,7 +873,7 @@ class TestDefaultController:
         """Text tool pattern detected when LLM writes tool names as text."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         tools = ["read_file", "run_command", "execute", "search"]
@@ -918,7 +900,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
         controller.reset()
         # Set last nudge to current iteration (normally would cause backoff)
@@ -947,7 +929,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
         controller.reset()
         controller._last_nudge_iteration = 5
@@ -979,7 +961,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=2)
         controller = DefaultController(config=ctrl_config)
         controller.reset()
@@ -1019,7 +1001,7 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=1)
         controller = DefaultController(config=ctrl_config)
         controller.reset()
@@ -1074,7 +1056,7 @@ class TestTaskStateClassifier:
         """Classifier returns COMPLETED when LLM classifies as completed."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -1091,7 +1073,7 @@ class TestTaskStateClassifier:
         """Classifier returns STUCK when LLM classifies as stuck."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -1109,7 +1091,7 @@ class TestTaskStateClassifier:
         """Classifier falls back to WANTS_CONTINUE on invalid category."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(

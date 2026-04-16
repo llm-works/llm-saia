@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .backend import ToolDef
     from .config import CallOptions, Config
     from .guard import IterationGuard, OutputGuard
+    from .trace import Tracer
 
 __all__ = ["Configurable"]
 
@@ -49,6 +50,10 @@ class Configurable(ABC):
         return self._with_config(call=new_call)
 
     # --- Config-Level Overrides ---
+
+    def with_tracer(self, tracer: Tracer) -> Self:
+        """Return new instance with specified tracer for iteration tracing."""
+        return self._with_config(tracer=tracer)
 
     def with_tools(
         self,
@@ -101,10 +106,6 @@ class Configurable(ABC):
         """Return new instance with specified per-call token limit."""
         return self._with_call(max_call_tokens=n)
 
-    def with_retries(self, max_retries: int, escalation: str | None = None) -> Self:
-        """Return new instance with retry settings."""
-        return self._with_call(max_retries=max_retries, retry_escalation=escalation)
-
     def with_temperature(self, temp: float | None) -> Self:
         """Return new instance with specified sampling temperature (None to clear)."""
         return self._with_call(temperature=temp)
@@ -116,18 +117,6 @@ class Configurable(ABC):
     def with_system(self, system: str | None) -> Self:
         """Return new instance with different system prompt (None to clear)."""
         return self._with_call(system=system)
-
-    def with_parse_retries(self, n: int) -> Self:
-        """Return new instance with specified parse retry attempts.
-
-        When structured output parsing fails (StructuredOutputError), SAIA will
-        retry with feedback to the LLM about what went wrong. This is useful
-        for local/smaller LLMs that may produce malformed JSON.
-
-        Args:
-            n: Number of retry attempts. 0 = no retry (default), 1 = one retry, etc.
-        """
-        return self._with_call(parse_retries=n)
 
     def with_guard(self, guard: OutputGuard | IterationGuard) -> Self:
         """Add a guard to this instance.

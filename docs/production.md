@@ -119,7 +119,7 @@ SAIA writes JSONL traces for every LLM call. Use traces for debugging, monitorin
 ### Enable Tracing
 
 ```python
-# File-based tracing
+# File-based tracing (at build time)
 saia = (
     SAIA.builder()
     .backend(backend)
@@ -138,6 +138,15 @@ def handle_trace(record: dict) -> None:
         alerts.send(record)
 
 saia = SAIA.builder().backend(backend).tracing.callback(handle_trace).build()
+
+# Per-call tracer override (fluent API)
+from llm_saia.core.trace import FileTracer
+
+tracer = FileTracer("/tmp/debug.jsonl")
+try:
+    result = await saia.with_tracer(tracer).complete(task)
+finally:
+    tracer.close()
 ```
 
 ### Trace Record Fields
@@ -274,11 +283,11 @@ Enforce behavioral constraints *during* tool-calling loops. Unlike output guards
 run after each LLM response — not at the end.
 
 ```python
-from llm_saia import IterationGuard
+from llm_saia import IterationContext, IterationGuard
 
-def require_narrative(response):
+def require_narrative(ctx: IterationContext) -> str | None:
     """Require the LLM to explain its actions, not just call tools silently."""
-    if response.tool_calls and not (response.content or "").strip():
+    if ctx.response.tool_calls and not (ctx.response.content or "").strip():
         return "Explain what you're doing and why."
     return None
 
@@ -287,6 +296,31 @@ result = await (
     .with_guard(IterationGuard(require_narrative, name="narrative"))
     .complete(task)
 )
+```
+
+`IterationContext` provides:
+- `response` — the current `AgentResponse`
+- `iteration` — current iteration number (0-indexed)
+- `max_iterations` — maximum iterations configured
+- `remaining` — iterations remaining (including current)
+
+Use iteration info for adaptive guards:
+
+```python
+from llm_saia import UNLIMITED
+
+def force_terminal(ctx: IterationContext) -> str | None:
+    """Force terminal tool call when iterations are running low."""
+    # Skip if unlimited iterations
+    if ctx.remaining == UNLIMITED:
+        return None
+    # Check if response already calls the terminal tool
+    has_terminal = any(
+        tc.name == "report_findings" for tc in (ctx.response.tool_calls or [])
+    )
+    if ctx.remaining <= 3 and not has_terminal:
+        return "You must call report_findings now to complete the task."
+    return None
 ```
 
 When a guard fires:
@@ -367,6 +401,51 @@ saia = (
     )
     .build()
 )
+```
+
+### Terminal Iteration Guards
+
+SAIA provides built-in iteration guards for common terminal tool behaviors. These are opt-in
+and run during each iteration of the tool loop.
+
+**Reject Failure Status:**
+
+```python
+from llm_saia.guards import terminal_status
+
+# Reject terminal calls with "stuck" or "failed" status, ask to retry
+guard = terminal_status(
+    tool="complete_task",
+    status_field="status",
+    failure_values=("stuck", "failed"),
+    max_retries=3,
+    escalate=True,  # Increasingly forceful retry messages
+)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+**Validate Schema:**
+
+```python
+from llm_saia.guards import terminal_schema
+
+# Validate terminal tool arguments against JSON schema
+guard = terminal_schema(tools, "report_findings", max_retries=2)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+**Detect Contradictions:**
+
+```python
+from llm_saia.guards import contradiction
+
+# Detect hedging language ("however", "unfortunately", "I can't")
+# when the terminal tool is called
+guard = contradiction("complete_task", max_retries=2)
+
+result = await saia.with_guard(guard).complete(task)
 ```
 
 ### Extracting Data from History
@@ -454,6 +533,51 @@ class StructlogAdapter:
         self._log.error(msg, **(extra or {}))
 
 saia = SAIA.builder().backend(backend).logger(StructlogAdapter()).build()
+```
+
+### Trace-Level Observability
+
+Enable trace-level logging to see detailed execution flow. This is invaluable for debugging stuck
+loops, understanding why the LLM repeated an action, or verifying that guards fired correctly.
+
+> **Privacy Warning:** Trace logs may contain sensitive information including user messages,
+> tool results, and LLM responses. Apply appropriate redaction, retention policies, and access
+> controls before enabling trace-level logging in production environments.
+
+**What trace logs show:**
+
+| Log Message | What It Contains |
+|-------------|------------------|
+| `"verb started"` | Verb name, trace_id |
+| `"verb completed"` | Duration, step count |
+| `"sending messages to llm"` | Message count by role, last user message preview, recent tool results |
+| `"tool result returned to llm"` | Tool name, result length, truncated preview (1000 chars) |
+| `"running iteration guards"` | List of guard names being checked |
+| `"iteration guards triggered feedback"` | Which guards fired, feedback preview |
+| `"guard feedback injected into conversation"` | Full feedback content, acknowledged tool names |
+| `"controller decision details"` | Action, reason, terminal_tool, terminal_data |
+| `"checking guard"` / `"guard passed"` | Output guard validation progress |
+
+**Debugging stuck loops:**
+
+When a loop gets stuck (LLM repeats the same action), trace logs answer:
+
+1. **Did the LLM receive the tool result?** Check `"tool result returned to llm"` — shows the
+   exact string (e.g., "BLOCKED" or "WRAP UP") that was sent back.
+
+2. **Did guards fire and inject feedback?** Check `"guard feedback injected into conversation"` —
+   shows the feedback message and which tool calls were acknowledged.
+
+3. **What context did it see before repeating?** Check `"sending messages to llm"` — shows
+   message counts and the last user message (often a guard nudge or tool result).
+
+**Example trace session:**
+
+```
+TRACE sending messages to llm {"call_id": "abc123", "msg_count": 8, "by_role": {"user": 3, "assistant": 3, "tool": 2}, "last_user_msg": "You reported status='stuck' but the task is not complete..."}
+TRACE tool result returned to llm {"tool": "read_file", "result_len": 2500, "result": "def process_data(x):..."}
+TRACE iteration guards triggered feedback {"guards_fired": ["terminal_status"], "feedback_preview": "You reported status='stuck' but the task is not complete. Try a different approach."}
+TRACE guard feedback injected into conversation {"feedback_len": 85, "acked_tools": ["complete_task"]}
 ```
 
 ## Monitoring Checklist

@@ -12,6 +12,7 @@ from llm_saia import Guarded, OutputGuard, OutputGuardError
 from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import Config
 from llm_saia.core.conversation import Message
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import ToolDef
 from llm_saia.guards import (
     ascii_only,
@@ -70,7 +71,7 @@ class SequencedMockBackend(MockBackend):
 
 def make_config(backend: MockBackend) -> Config:
     """Create a Config with no tools (direct backend calls)."""
-    return Config(backend=backend, tools=[], executor=None)
+    return Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
 
 
 @dataclass
@@ -491,36 +492,6 @@ class TestUnicodeHandling:
         assert guard.validator("Sure! 日本語で答えます") is not None
 
 
-class TestGuardWithParseRetries:
-    """Tests for interaction between guards and parse_retries."""
-
-    async def test_guards_applied_after_parse_retries(self) -> None:
-        """Guards are applied after successful parsing (including parse retries)."""
-        backend = SequencedMockBackend()
-        # First: invalid JSON (triggers parse retry)
-        backend.queue_json_response("not json")
-        # Second: valid JSON but fails guard
-        backend.queue_json_response(json.dumps({"text": "Bad 日本語", "score": 1}))
-        # Third: valid JSON and passes guard
-        backend.queue_json_response(json.dumps({"text": "Good", "score": 2}))
-
-        guard = OutputGuard(
-            validator=lambda x: "Non-ASCII" if any(ord(c) > 127 for c in str(x)) else None,
-            retry_instruction="ASCII only.",
-            max_retries=1,
-        )
-
-        from llm_saia.core.config import CallOptions
-
-        call = CallOptions(parse_retries=1)
-        config = Config(backend=backend, tools=[], executor=None, call=call)
-        extract = Extract(config).with_guard(guard)
-        result = await extract("test", SimpleResult)
-
-        assert result.value.text == "Good"
-        assert backend.call_count == 3  # 1 parse fail + 1 guard fail + 1 success
-
-
 class TestTextGuards:
     """Tests for guards applied to text-returning verbs (Ask, etc.)."""
 
@@ -770,7 +741,7 @@ class TestEscalatingRetryInstruction:
         )
 
         backend = SequencedMockBackend()
-        config = Config(backend=backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
         backend.queue_json_response("bad")
         backend.queue_json_response("good")
 

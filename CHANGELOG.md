@@ -8,10 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `IterationContext` passed to `IterationGuard` validators, providing access to `response`,
+  `iteration`, `max_iterations`, and `remaining` property. Enables guards that adapt behavior
+  based on loop progress (e.g., force terminal tool when iterations are running low).
 - `require_confirmation` parameter for terminal tools. Set to `False` to complete immediately
   on first terminal tool call without requiring a confirmation call. Many models respond to
   confirmation prompts with text instead of a tool call, causing `terminal_data` to be `None`.
   Use `.terminal_tool("name", require_confirmation=False)` to avoid this issue.
+- `with_tracer()` fluent API for per-call tracer override (consistent with other `with_*` methods)
+- Built-in iteration guards in `llm_saia.guards`:
+  - `terminal_status(tool, status_field, failure_values)` - reject terminal calls with failure status
+  - `terminal_schema(tools, terminal_tool)` - validate terminal args against JSON schema
+  - `contradiction(terminal_tool)` - detect hedging language when terminal tool is called
+- **Trace-level observability** for debugging stuck loops and agent behavior. Enable trace logging
+  to see detailed execution flow:
+  - Tool results returned to LLM (truncated preview for large results)
+  - Guard triggers with feedback content injected into conversation
+  - Message assembly showing what's sent to LLM each iteration (counts by role, last user
+    message, recent tool results)
+  - Verb lifecycle (start, completion with duration and step count)
+  - Controller decisions with terminal tool data
+
+### Changed
+- **BREAKING**: `IterationGuard.validator` signature changed from `Callable[[AgentResponse], str | None]`
+  to `Callable[[IterationContext], str | None]`. Access response via `ctx.response`.
+- **BREAKING**: `lg: Logger` is now the first field in `Config` (was after `backend`). This
+  follows the project convention that logger is always the first parameter.
+- Logger is now required in `Config` (defaults to `NullLogger()` via builder). Removed all
+  internal `if self._lg:` checks.
+
+### Removed
+- **BREAKING**: `retries()` / `with_retries()` removed. Terminal failure retry behavior
+  should be implemented via `IterationGuard` instead.
+- **BREAKING**: `parse_retries()` / `with_parse_retries()` removed. Structured output parse
+  retry behavior should be implemented via guards instead.
+- **BREAKING**: `CallOptions.max_retries`, `CallOptions.retry_escalation`,
+  `CallOptions.parse_retries` removed.
+- Controller no longer handles terminal failure retries or confirmation contradiction
+  detection internally. These behaviors can be implemented via guards for opt-in use.
 
 ## [0.3.0] - 2026-04-13
 

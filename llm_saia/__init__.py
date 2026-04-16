@@ -12,7 +12,14 @@ from .core.errors import (
     ToolExecutionError,
     TruncatedResponseError,
 )
-from .core.guard import Guarded, IterationGuard, OutputGuard, OutputGuardError
+from .core.guard import (
+    UNLIMITED,
+    Guarded,
+    IterationContext,
+    IterationGuard,
+    OutputGuard,
+    OutputGuardError,
+)
 from .core.logger import Logger, NullLogger
 from .core.trace import (
     CallbackTracer,
@@ -59,8 +66,10 @@ __all__ = [
     "TruncatedResponseError",
     # Guards
     "Guarded",
+    "IterationContext",
     "IterationGuard",
     "OutputGuard",
+    "UNLIMITED",
     # Logger
     "NullLogger",
     "Logger",

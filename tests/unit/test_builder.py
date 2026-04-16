@@ -110,13 +110,6 @@ class TestSAIABuilder:
 
         assert saia.call_options.timeout_secs == 30.0
 
-    def test_build_with_retries(self, mock_backend: MockBackend) -> None:
-        """Build with retries."""
-        saia = SAIA.builder().backend(mock_backend).retries(3, "Try harder").build()
-
-        assert saia.call_options.max_retries == 3
-        assert saia.call_options.retry_escalation == "Try harder"
-
     def test_fluent_chaining(self, mock_backend: MockBackend) -> None:
         """All methods return self for chaining."""
         tools = [ToolDef(name="test", description="test", parameters={})]
@@ -134,7 +127,6 @@ class TestSAIABuilder:
             .max_call_tokens(2048)
             .max_tokens(8000)
             .timeout(60.0)
-            .retries(2, "Be more careful")
             .build()
         )
 
@@ -147,5 +139,3 @@ class TestSAIABuilder:
         assert saia.call_options.max_call_tokens == 2048
         assert saia.call_options.max_total_tokens == 8000
         assert saia.call_options.timeout_secs == 60.0
-        assert saia.call_options.max_retries == 2
-        assert saia.call_options.retry_escalation == "Be more careful"

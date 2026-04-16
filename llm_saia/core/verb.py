@@ -19,7 +19,7 @@ from .conversation import (
     ToolCall,
 )
 from .errors import StructuredOutputError, TruncatedResponseError
-from .guard import IterationGuard
+from .guard import IterationContext, IterationGuard
 from .guards import OutputGuardMixin
 from .logging import VerbLoggingMixin
 from .schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -107,22 +107,12 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
         return _generate_id()
 
-    def _resolve_tracer(
-        self,
-        tracer: Tracer | None,
-        metadata: dict[str, Any],
-    ) -> tuple[bool, Tracer | None]:
-        """Resolve per-call vs config tracer and call start().
-
-        Returns ``(owns_tracer, active_tracer)``.  A per-call tracer is
-        *owned* (the caller is responsible for closing it); the config
-        tracer is *borrowed* (shared across calls, never closed by a verb).
-        """
-        owns = tracer is not None
-        active = tracer or self._config.tracer
-        if active:
-            active.start(metadata)
-        return owns, active
+    def _resolve_tracer(self, metadata: dict[str, Any]) -> Tracer | None:
+        """Get config tracer and call start() if present."""
+        tracer = self._config.tracer
+        if tracer:
+            tracer.start(metadata)
+        return tracer
 
     def _init_verb_trace(self, trace_id: str = "") -> VerbTrace:
         """Create a new VerbTrace for this verb call."""
@@ -135,6 +125,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             request_id=self._call.request_id,
         )
         trace._mono_start = time.monotonic()  # type: ignore[attr-defined]
+        self._lg.trace("verb started", extra={"verb": trace.verb, "trace_id": trace.trace_id})
         return trace
 
     def _record_step(
@@ -163,6 +154,15 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         """Finalize timing and write the full VerbTrace to the configured tracer."""
         mono_start = getattr(trace, "_mono_start", 0.0)
         trace.duration_ms = int((time.monotonic() - mono_start) * 1000) if mono_start else 0
+        self._lg.trace(
+            "verb completed",
+            extra={
+                "verb": trace.verb,
+                "trace_id": trace.trace_id,
+                "duration_ms": trace.duration_ms,
+                "steps": len(trace.steps),
+            },
+        )
         tracer = self._config.tracer
         if tracer:
             tracer.write(trace)
@@ -198,17 +198,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 pass ``None`` or ``[]`` to suppress tools.
         """
         call_id = self._generate_id()
-        if self._lg:
-            last_msg = messages[-1] if messages else None
-            self._lg.trace(
-                "sending chat",
-                extra={
-                    "call_id": call_id,
-                    "msg_count": len(messages),
-                    "last_role": last_msg.role if last_msg else None,
-                    "content": last_msg.content if last_msg else None,
-                },
-            )
+        self._log_message_assembly(call_id, messages)
         resolved_tools = (
             (self._config.tools if self._config.tools else None)
             if tools is _SENTINEL
@@ -227,6 +217,19 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
         return response
 
+    def _init_loop(
+        self,
+        prompt: str,
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+    ) -> tuple[CallOptions, ConversationLike, int | None, float | None]:
+        """Initialize loop state and return (config, conversation, max_tokens, temperature)."""
+        config = self._get_call_options(run)
+        conv = conversation if conversation is not None else ListConversation()
+        conv.append(Message(role=Role.USER, content=prompt))
+        self._log_loop_start(config)
+        return config, conv, self._max_tokens(config), self._resolve_temperature(run)
+
     async def _loop(
         self,
         prompt: str,
@@ -237,14 +240,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         _trace: VerbTrace | None = None,
     ) -> tuple[str, T | None]:
         """Execute prompt with tool-calling loop."""
-        config = self._get_call_options(run)
-        conv = conversation if conversation is not None else ListConversation()
-        conv.append(Message(role=Role.USER, content=prompt))
+        config, conv, max_tokens, temperature = self._init_loop(prompt, run, conversation)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
-        max_tokens, temperature = self._max_tokens(config), self._resolve_temperature(run)
-        iter_guards = config.iteration_guards
-        self._log_loop_start(config)
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
             response = await self._chat(conv.as_messages(), max_tokens, temperature)
@@ -255,7 +253,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             self._check_tool_support(response)
             self._record_step(response, phase="iteration", _trace=_trace)
 
-            if await self._apply_iteration_guards_or_tools(iter_guards, response, conv, _trace):
+            if await self._apply_iteration_guards_or_tools(
+                config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
+            ):
                 iteration += 1
                 continue
             self._log_loop_complete(iteration, start_time, total_tokens, response.content)
@@ -273,15 +273,28 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         iter_guards: tuple[IterationGuard, ...],
         response: AgentResponse,
         conv: ConversationLike,
+        iteration: int,
+        max_iterations: int,
         _trace: VerbTrace | None,
     ) -> bool:
         """Check iteration guards and execute tools. Returns True if loop should continue."""
-        feedback, _outcomes = self._run_iteration_guards(iter_guards, response, _trace)
+        feedback, _outcomes = self._run_iteration_guards(
+            iter_guards, response, iteration, max_iterations, _trace
+        )
         if feedback is not None:
             # Acknowledge any pending tool calls so the conversation stays valid
             for tc in response.tool_calls or []:
                 conv.append(Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id))
             conv.append(Message(role=Role.USER, content=feedback))
+            # Log the guard feedback being injected (critical for debugging stuck loops)
+            self._lg.trace(
+                "guard feedback injected into conversation",
+                extra={
+                    "feedback_len": len(feedback),
+                    "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+                    "acked_tools": [tc.name for tc in (response.tool_calls or [])],
+                },
+            )
             return True
         if response.tool_calls:
             await self._execute_tools(response.tool_calls, conv)
@@ -304,6 +317,8 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         self,
         guards: tuple[IterationGuard, ...],
         response: AgentResponse,
+        iteration: int,
+        max_iterations: int,
         _trace: VerbTrace | None = None,
     ) -> tuple[str | None, list[GuardOutcome]]:
         """Run iteration guards against the current response.
@@ -311,46 +326,77 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         Returns ``(feedback, outcomes)`` — *feedback* is the combined feedback
         string if any guard fires (or ``None`` when all pass), and *outcomes*
         is the list of per-guard results for trace recording.
-
-        When a trace is active **and** a step already exists (base-verb loop),
-        outcomes are attached to the most recent step automatically.  The
-        Complete verb creates its step later, so it attaches outcomes itself.
         """
         from .trace import GuardOutcome
 
         if not guards:
             return None, []
 
+        ctx = IterationContext(
+            response=response, iteration=iteration, max_iterations=max_iterations
+        )
+        self._lg.trace("running iteration guards", extra={"guards": [g.name for g in guards]})
+        feedback_parts, outcomes = self._eval_guards(guards, ctx, GuardOutcome)
+        self._attach_guard_outcomes(_trace, outcomes)
+        return self._finalize_guard_result(feedback_parts, outcomes)
+
+    def _eval_guards(
+        self,
+        guards: tuple[IterationGuard, ...],
+        ctx: IterationContext,
+        outcome_cls: type[GuardOutcome],
+    ) -> tuple[list[str], list[GuardOutcome]]:
+        """Evaluate each guard and collect feedback and outcomes."""
         feedback_parts: list[str] = []
         outcomes: list[GuardOutcome] = []
         for guard in guards:
-            try:
-                result = guard.validator(response)
-            except Exception as e:
-                result = f"Validator raised {type(e).__name__}: {e}"
+            result = self._eval_single_guard(guard, ctx)
             passed = result is None
             outcomes.append(
-                GuardOutcome(name=guard.name, passed=passed, error=result if not passed else None)
+                outcome_cls(name=guard.name, passed=passed, error=result if not passed else None)
             )
             if not passed:
                 self._log_iteration_guard_fired(guard.name, result)
                 feedback_parts.append(result)  # type: ignore[arg-type]
+        return feedback_parts, outcomes
 
-        # Attach outcomes to the most recent step when one already exists
+    def _eval_single_guard(self, guard: IterationGuard, ctx: IterationContext) -> str | None:
+        """Evaluate a single guard, catching exceptions."""
+        try:
+            return guard.validator(ctx)
+        except Exception as e:
+            return f"Validator raised {type(e).__name__}: {e}"
+
+    def _attach_guard_outcomes(
+        self, _trace: VerbTrace | None, outcomes: list[GuardOutcome]
+    ) -> None:
+        """Attach outcomes to the most recent step if trace exists."""
         if _trace and _trace.steps:
             _trace.steps[-1].guards = outcomes
 
+    def _finalize_guard_result(
+        self, feedback_parts: list[str], outcomes: list[GuardOutcome]
+    ) -> tuple[str | None, list[GuardOutcome]]:
+        """Combine feedback and log the result."""
         if feedback_parts:
-            return "\n\n".join(feedback_parts), outcomes
+            combined = "\n\n".join(feedback_parts)
+            self._lg.trace(
+                "iteration guards triggered feedback",
+                extra={
+                    "guards_fired": [o.name for o in outcomes if not o.passed],
+                    "feedback_preview": combined[:300] if len(combined) > 300 else combined,
+                },
+            )
+            return combined, outcomes
+        self._lg.trace("all iteration guards passed")
         return None, outcomes
 
     def _log_iteration_guard_fired(self, name: str | None, feedback: str | None) -> None:
         """Log that an iteration guard fired."""
-        if self._lg:
-            self._lg.debug(
-                "iteration guard fired",
-                extra={"guard": name, "feedback": feedback},
-            )
+        self._lg.debug(
+            "iteration guard fired",
+            extra={"guard": name, "feedback": feedback},
+        )
 
     def _to_message(self, response: AgentResponse) -> Message:
         """Convert AgentResponse to Message."""
@@ -400,11 +446,10 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             messages: Object supporting append() - either list[Message] or ConversationLike.
         """
         if not self._config.executor:
-            if self._lg:
-                self._lg.warning(
-                    "tool calls received but no executor configured",
-                    extra={"tool_count": len(tool_calls)},
-                )
+            self._lg.warning(
+                "tool calls received but no executor configured",
+                extra={"tool_count": len(tool_calls)},
+            )
             return
         for tc in tool_calls:
             result = await self._execute_single_tool(tc)
@@ -423,25 +468,36 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
     def _log_tool_start(self, tc: ToolCall) -> None:
         """Log tool execution start."""
-        if self._lg:
-            self._lg.trace(
-                "executing tool...",
-                extra={"tool": tc.name, "id": tc.id, "tool_args": tc.arguments},
-            )
+        self._lg.trace(
+            "executing tool...",
+            extra={"tool": tc.name, "id": tc.id, "tool_args": tc.arguments},
+        )
 
     def _log_tool_success(self, tc: ToolCall, result: Any) -> None:
-        """Log successful tool execution."""
-        if self._lg:
-            extra = {"tool": tc.name, "id": tc.id, "tool_args": tc.arguments, "result": str(result)}
-            self._lg.trace("tool executed", extra=extra)
+        """Log successful tool execution with result preview."""
+        result_str = str(result)
+        # Truncate large results but show enough context for debugging
+        result_preview = (
+            result_str
+            if len(result_str) <= 1000
+            else f"{result_str[:1000]}... ({len(result_str)} chars)"
+        )
+        self._lg.trace(
+            "tool result returned to llm",
+            extra={
+                "tool": tc.name,
+                "id": tc.id,
+                "result_len": len(result_str),
+                "result": result_preview,
+            },
+        )
 
     def _log_tool_error(self, tc: ToolCall, error: Exception) -> None:
         """Log failed tool execution."""
-        if self._lg:
-            self._lg.warning(
-                "tool execution failed",
-                extra={"tool": tc.name, "id": tc.id, "tool_args": tc.arguments, "exception": error},
-            )
+        self._lg.warning(
+            "tool execution failed",
+            extra={"tool": tc.name, "id": tc.id, "tool_args": tc.arguments, "exception": error},
+        )
 
     async def _finalize(
         self,
@@ -477,15 +533,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         self, error: json.JSONDecodeError, content: str, schema_name: str
     ) -> None:
         """Log a JSON parse error during finalize phase."""
-        if self._lg:
-            self._lg.warning(
-                "json parse error in finalize",
-                extra={
-                    "exception": error,
-                    "content_preview": self._truncate(content, self._PREVIEW_LIMIT),
-                    "schema": schema_name,
-                },
-            )
+        self._lg.warning(
+            "json parse error in finalize",
+            extra={
+                "exception": error,
+                "content_preview": self._truncate(content, self._PREVIEW_LIMIT),
+                "schema": schema_name,
+            },
+        )
 
     # --- High-level helpers for verbs ---
 
@@ -569,14 +624,11 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
     ) -> T:
-        """Complete structured with retry on StructuredOutputError.
-
-        Retry count controlled by CallOptions.parse_retries (default: 0).
-        Output guards are applied after successful parsing.
-        """
+        """Complete structured with output guards applied after parsing."""
         trace = _trace if _trace is not None else self._init_verb_trace()
-        config = self._get_call_options(run)
-        max_attempts = 1 + config.parse_retries
+        # max_attempts=1 (no retry): parse retry was removed as a built-in behavior.
+        # The retry infrastructure is preserved for potential future guard-based retry.
+        max_attempts = 1
         last_error: StructuredOutputError | None = None
 
         for attempt in range(max_attempts):
@@ -707,16 +759,15 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         self, schema_name: str, attempt: int, max_attempts: int, error: StructuredOutputError
     ) -> None:
         """Log parse retry attempt."""
-        if self._lg:
-            self._lg.debug(
-                "parse retry",
-                extra={
-                    "schema": schema_name,
-                    "attempt": attempt,
-                    "max_attempts": max_attempts,
-                    "parse_error": error.parse_error,
-                },
-            )
+        self._lg.debug(
+            "parse retry",
+            extra={
+                "schema": schema_name,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "parse_error": error.parse_error,
+            },
+        )
 
     @abstractmethod
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:

@@ -62,10 +62,10 @@ class TestLoggerIntegration:
         saia = make_saia(mock_backend, lg=logger)
         assert saia._config.lg is logger
 
-    def test_saia_without_logger(self, mock_backend: MockBackend) -> None:
-        """SAIA works without a logger."""
+    def test_saia_without_logger_uses_null_logger(self, mock_backend: MockBackend) -> None:
+        """SAIA defaults to NullLogger when no logger provided."""
         saia = make_saia(mock_backend)
-        assert saia._config.lg is None
+        assert isinstance(saia._config.lg, NullLogger)
 
     def test_logger_preserved_in_with_methods(self, mock_backend: MockBackend) -> None:
         """Logger is preserved through with_* methods."""
