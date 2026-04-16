@@ -11,7 +11,7 @@ import pytest
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
-from llm_saia.core.logger import Logger
+from llm_saia.core.logger import Logger, NullLogger
 from llm_saia.core.types import (
     AgentResponse,
     Message,
@@ -192,11 +192,11 @@ def make_saia(
     )
     call = CallOptions(system=system) if system is not None else None
     config = Config(
+        lg=lg or NullLogger(),
         backend=backend,
         tools=tools or [],
         executor=executor,
         call=call,
         terminal=terminal,
-        lg=lg,
     )
     return SAIA(config)

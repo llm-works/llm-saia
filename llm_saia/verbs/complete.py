@@ -150,7 +150,9 @@ class Complete(Verb):
         # Run iteration guards before controller decides.
         # Don't pass verb_trace here — Complete builds its own Step later and
         # attaches outcomes explicitly (avoids overwriting the previous step).
-        feedback, outcomes = self._run_iteration_guards(ctx.iteration_guards, response)
+        feedback, outcomes = self._run_iteration_guards(
+            ctx.iteration_guards, response, iteration, ctx.call_options.max_iterations
+        )
         if feedback is not None:
             await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
             return None, tokens, response.content
@@ -186,6 +188,17 @@ class Complete(Verb):
         ctx.messages.append(self._to_message(response))
         self._ack_response_tools(response, ctx.messages)
         ctx.messages.append(Message(role=Role.USER, content=feedback))
+        # Log guard feedback injection (critical for debugging stuck loops)
+        self._lg.trace(
+            "guard feedback injected into conversation",
+            extra={
+                "iteration": iteration,
+                "guards_fired": [o.name for o in outcomes if not o.passed],
+                "feedback_len": len(feedback),
+                "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+                "acked_tools": [tc.name for tc in (response.tool_calls or [])],
+            },
+        )
         step = self._build_guard_nudge_step(response, ctx.trace_id, feedback)
         step.guards = outcomes
         if ctx.verb_trace is not None:
@@ -252,12 +265,12 @@ class Complete(Verb):
             temperature=self._call.temperature,
         )
         llm_config = Config(
+            lg=self._config.lg,
             backend=self._config.backend,
             tools=[],
             executor=None,
             call=call_options,
             terminal=None,
-            lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
         )
         return DefaultController(
@@ -402,11 +415,23 @@ class Complete(Verb):
 
     def _log_action(self, action: Action) -> None:
         """Log the controller's decision."""
-        if self._lg:
-            self._lg.debug(
-                "controller_action",
-                extra={"kind": action.kind.value, "reason": action.reason.value},
-            )
+        self._lg.debug(
+            "controller_action",
+            extra={"kind": action.kind.value, "reason": action.reason.value},
+        )
+        # Detailed trace with all action fields
+        self._lg.trace(
+            "controller decision details",
+            extra={
+                "action": action.kind.value,
+                "reason": action.reason.value,
+                "nudge": action.message[:200] if action.message else None,
+                "output": action.output[:200] if action.output else None,
+                "terminal_tool": action.terminal_tool,
+                "terminal_data": action.terminal_data,
+                "tool_ids": action.tool_ids_to_execute,
+            },
+        )
 
     # --- Trace helpers ---
 

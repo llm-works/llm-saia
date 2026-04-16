@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .logger import Logger
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .backend import Backend, ToolDef
     from .guard import IterationGuard, OutputGuard
-    from .logger import Logger
     from .trace import Tracer
 
 __all__ = [
@@ -79,12 +80,12 @@ class Config:
     For per-call options, see CallOptions.
     """
 
+    lg: Logger  # Logger is always first, never optional
     backend: Backend
     tools: list[ToolDef]
     executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None
     call: CallOptions | None = None  # Per-call options (defaults applied if None)
     terminal: TerminalConfig | None = None  # Terminal tool configuration
-    lg: Logger | None = None
     tracer: Tracer | None = None  # Default tracer for iteration tracing
     warn_tool_support: bool = True
 

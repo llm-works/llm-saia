@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from .core import trace
 from .core.backend import Backend, ToolDef
 from .core.config import DEFAULT_CALL, CallOptions, Config, TerminalConfig
-from .core.logger import Logger
+from .core.logger import Logger, NullLogger
 
 if TYPE_CHECKING:
     from .saia import SAIA
@@ -32,7 +32,7 @@ class SAIABuilder:
         self._tools: list[ToolDef] = []
         self._executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None
         self._terminal: TerminalConfig | None = None
-        self._lg: Logger | None = None
+        self._lg: Logger = NullLogger()
         self._warn_tool_support: bool = True
         self._tracer: trace.Tracer | None = None
         # CallOptions fields (from DEFAULT_CALL)
@@ -178,12 +178,12 @@ class SAIABuilder:
             request_id=self._request_id,
         )
         config = Config(
+            lg=self._lg,
             backend=self._backend,
             tools=self._tools,
             executor=self._executor,
             call=call,
             terminal=self._terminal,
-            lg=self._lg,
             tracer=self._tracer,
             warn_tool_support=self._warn_tool_support,
         )

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .errors import Error
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-__all__ = ["Guarded", "IterationGuard", "OutputGuard", "OutputGuardError"]
+__all__ = [
+    "Guarded",
+    "IterationContext",
+    "IterationGuard",
+    "OutputGuard",
+    "OutputGuardError",
+]
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,30 @@ class OutputGuard:
 
 
 @dataclass(frozen=True)
+class IterationContext:
+    """Context passed to iteration guard validators.
+
+    Provides access to the current response and loop state, enabling guards
+    that adapt behavior based on iteration progress (e.g., force terminal
+    tool near the end of the loop).
+
+    Attributes:
+        response: The current LLM response to validate.
+        iteration: Current iteration number (0-indexed).
+        max_iterations: Maximum iterations configured for the loop.
+    """
+
+    response: Any  # AgentResponse, but Any to avoid circular import
+    iteration: int
+    max_iterations: int
+
+    @property
+    def remaining(self) -> int:
+        """Iterations remaining (including current)."""
+        return max(0, self.max_iterations - self.iteration)
+
+
+@dataclass(frozen=True)
 class IterationGuard:
     """Behavioral constraint enforced after each LLM response in a tool-calling loop.
 
@@ -66,26 +94,33 @@ class IterationGuard:
     validator returns a feedback string the message is injected into the
     conversation and the loop continues — no retry, just a nudge.
 
-    The validator receives an :class:`~llm_saia.core.backend.AgentResponse` so it
-    can inspect both ``content`` and ``tool_calls``.
+    The validator receives an :class:`IterationContext` with the response and
+    loop state, so it can inspect ``content``, ``tool_calls``, and adapt
+    behavior based on iteration progress.
 
     Args:
-        validator: Receives the current ``AgentResponse``. Return ``None`` when
+        validator: Receives :class:`IterationContext`. Return ``None`` when
             the response is acceptable, or a feedback string to inject.
         name: Optional name for logging and trace records.
 
     Example:
         >>> guard = IterationGuard(
-        ...     validator=lambda r: (
+        ...     validator=lambda ctx: (
         ...         "Explain what you're doing and why."
-        ...         if r.tool_calls and not (r.content or "").strip()
+        ...         if ctx.response.tool_calls and not (ctx.response.content or "").strip()
         ...         else None
         ...     ),
         ...     name="narrative",
         ... )
+
+        >>> # Force terminal tool when iterations are running low
+        >>> def force_terminal(ctx: IterationContext) -> str | None:
+        ...     if ctx.remaining <= 3 and not calls_terminal(ctx.response):
+        ...         return "You must call report_findings now."
+        ...     return None
     """
 
-    validator: Callable[[Any], str | None]
+    validator: Callable[[IterationContext], str | None]
     name: str | None = None
 
 

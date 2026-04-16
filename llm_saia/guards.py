@@ -19,7 +19,7 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .core.guard import IterationGuard, OutputGuard
+from .core.guard import IterationContext, IterationGuard, OutputGuard
 
 if TYPE_CHECKING:
     from .core.backend import AgentResponse
@@ -436,8 +436,8 @@ def terminal_status(
     failure_set = frozenset(failure_values)
     state = _GuardState(max_retries)
 
-    def check(response: AgentResponse) -> str | None:
-        status = _find_failure_status(response, tool, status_field, failure_set)
+    def check(ctx: IterationContext) -> str | None:
+        status = _find_failure_status(ctx.response, tool, status_field, failure_set)
         if status is None:
             return None
         return state.feedback(_status_feedback, escalate, status=status)
@@ -462,12 +462,12 @@ def terminal_schema(
     """
     schema = _find_tool_schema(tools, terminal_tool)
     if schema is None:
-        return IterationGuard(validator=lambda r: None, name="terminal_schema")
+        return IterationGuard(validator=lambda ctx: None, name="terminal_schema")
 
     state = _GuardState(max_retries)
 
-    def check(response: AgentResponse) -> str | None:
-        errors = _find_schema_errors(response, terminal_tool, schema)
+    def check(ctx: IterationContext) -> str | None:
+        errors = _find_schema_errors(ctx.response, terminal_tool, schema)
         if not errors:
             return None
         return state.feedback(_schema_feedback, escalate, tool=terminal_tool, errors=errors)
@@ -493,8 +493,8 @@ def contradiction(
     """
     state = _GuardState(max_retries)
 
-    def check(response: AgentResponse) -> str | None:
-        signal = _find_contradiction(response, terminal_tool)
+    def check(ctx: IterationContext) -> str | None:
+        signal = _find_contradiction(ctx.response, terminal_tool)
         if signal is None:
             return None
         return state.feedback(_contradiction_feedback, escalate, tool=terminal_tool, signal=signal)

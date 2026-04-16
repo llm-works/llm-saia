@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import (
     ChooseResult,
     ClassifyResult,
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.unit
 
 def make_config(backend: MockBackend) -> Config:
     """Create a Config with no tools (direct backend calls)."""
-    return Config(backend=backend, tools=[], executor=None)
+    return Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
 
 
 class TestAsk:

@@ -12,6 +12,7 @@ from llm_saia import Guarded, OutputGuard, OutputGuardError
 from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import Config
 from llm_saia.core.conversation import Message
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import ToolDef
 from llm_saia.guards import (
     ascii_only,
@@ -70,7 +71,7 @@ class SequencedMockBackend(MockBackend):
 
 def make_config(backend: MockBackend) -> Config:
     """Create a Config with no tools (direct backend calls)."""
-    return Config(backend=backend, tools=[], executor=None)
+    return Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
 
 
 @dataclass
@@ -740,7 +741,7 @@ class TestEscalatingRetryInstruction:
         )
 
         backend = SequencedMockBackend()
-        config = Config(backend=backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
         backend.queue_json_response("bad")
         backend.queue_json_response("good")
 

@@ -10,6 +10,7 @@ import pytest
 from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import CallOptions, Config
 from llm_saia.core.conversation import ListConversation, Message, Role
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import ToolDef
 from llm_saia.verbs import Ask, Constrain, Extract, Instruct
 from tests.unit.conftest import MockBackend
@@ -19,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 def make_config(backend: MockBackend, call: CallOptions | None = None) -> Config:
     """Create a Config with no tools (direct backend calls)."""
-    return Config(backend=backend, tools=[], executor=None, call=call)
+    return Config(lg=NullLogger(), backend=backend, tools=[], executor=None, call=call)
 
 
 # ---------------------------------------------------------------------------
