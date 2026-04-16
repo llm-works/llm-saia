@@ -13,6 +13,7 @@ from .core.errors import (
     TruncatedResponseError,
 )
 from .core.guard import (
+    UNLIMITED,
     Guarded,
     IterationContext,
     IterationGuard,
@@ -68,6 +69,7 @@ __all__ = [
     "IterationContext",
     "IterationGuard",
     "OutputGuard",
+    "UNLIMITED",
     # Logger
     "NullLogger",
     "Logger",

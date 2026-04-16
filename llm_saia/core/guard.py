@@ -14,6 +14,7 @@ __all__ = [
     "IterationGuard",
     "OutputGuard",
     "OutputGuardError",
+    "UNLIMITED",
 ]
 
 
@@ -61,6 +62,10 @@ class OutputGuard:
         return self.retry_instruction
 
 
+# Sentinel for unlimited iterations (avoids sys.maxsize import in hot path)
+UNLIMITED = 2**63 - 1
+
+
 @dataclass(frozen=True)
 class IterationContext:
     """Context passed to iteration guard validators.
@@ -81,7 +86,12 @@ class IterationContext:
 
     @property
     def remaining(self) -> int:
-        """Iterations remaining (including current)."""
+        """Iterations remaining (including current).
+
+        Returns :const:`UNLIMITED` when ``max_iterations=0`` (unlimited).
+        """
+        if self.max_iterations == 0:
+            return UNLIMITED
         return max(0, self.max_iterations - self.iteration)
 
 

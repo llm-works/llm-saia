@@ -446,11 +446,12 @@ class TestTerminalStatusGuard:
         response = _make_response(
             tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
         )
-        feedback1 = guard.validator(_make_ctx(response))
+        # Use incrementing iterations to simulate consecutive failures within same task
+        feedback1 = guard.validator(_make_ctx(response, iteration=0))
         assert feedback1 is not None
         assert "MUST" not in feedback1
 
-        feedback2 = guard.validator(_make_ctx(response))
+        feedback2 = guard.validator(_make_ctx(response, iteration=1))
         assert feedback2 is not None
         assert "MUST" in feedback2
 
@@ -459,9 +460,26 @@ class TestTerminalStatusGuard:
         response = _make_response(
             tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
         )
-        assert guard.validator(_make_ctx(response)) is not None
-        assert guard.validator(_make_ctx(response)) is not None
-        assert guard.validator(_make_ctx(response)) is None
+        # Use incrementing iterations to simulate consecutive failures within same task
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None
+
+    def test_state_resets_on_new_task(self) -> None:
+        """Guard state resets when iteration=0 (new task starts)."""
+        guard = terminal_status("done", "status", ("stuck",), max_retries=2)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        # First task: exhaust retries
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None  # exhausted
+
+        # Second task: iteration=0 resets state, guard fires again
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None  # exhausted again
 
     def test_non_dict_arguments_passes(self) -> None:
         guard = terminal_status("done", "status", ("stuck",))
@@ -529,20 +547,22 @@ class TestTerminalSchemaGuard:
         response = _make_response(
             tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done"})]
         )
-        feedback1 = guard.validator(_make_ctx(response))
+        # Use incrementing iterations to simulate consecutive failures within same task
+        feedback1 = guard.validator(_make_ctx(response, iteration=0))
         assert feedback1 is not None
         assert "STILL" not in feedback1
 
-        feedback2 = guard.validator(_make_ctx(response))
+        feedback2 = guard.validator(_make_ctx(response, iteration=1))
         assert feedback2 is not None
         assert "STILL" in feedback2
 
     def test_exhausted_retries_passes(self, tools: list[ToolDef]) -> None:
         guard = terminal_schema(tools, "report", max_retries=2)
         response = _make_response(tool_calls=[ToolCall(id="1", name="report", arguments={})])
-        assert guard.validator(_make_ctx(response)) is not None
-        assert guard.validator(_make_ctx(response)) is not None
-        assert guard.validator(_make_ctx(response)) is None
+        # Use incrementing iterations to simulate consecutive failures within same task
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None
 
     def test_unknown_tool_creates_noop_guard(self) -> None:
         guard = terminal_schema([], "nonexistent")
@@ -609,11 +629,12 @@ class TestContradictionGuard:
             content="However, something went wrong",
             tool_calls=[ToolCall(id="1", name="done", arguments={})],
         )
-        feedback1 = guard.validator(_make_ctx(response))
+        # Use incrementing iterations to simulate consecutive failures within same task
+        feedback1 = guard.validator(_make_ctx(response, iteration=0))
         assert feedback1 is not None
         assert "2nd" not in feedback1
 
-        feedback2 = guard.validator(_make_ctx(response))
+        feedback2 = guard.validator(_make_ctx(response, iteration=1))
         assert feedback2 is not None
         assert "2nd" in feedback2
 
@@ -623,9 +644,10 @@ class TestContradictionGuard:
             content="Unfortunately this failed",
             tool_calls=[ToolCall(id="1", name="done", arguments={})],
         )
-        assert guard.validator(_make_ctx(response)) is not None
-        assert guard.validator(_make_ctx(response)) is not None
-        assert guard.validator(_make_ctx(response)) is None
+        # Use incrementing iterations to simulate consecutive failures within same task
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None
 
 
 class TestOrdinalHelper:

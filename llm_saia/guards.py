@@ -437,6 +437,7 @@ def terminal_status(
     state = _GuardState(max_retries)
 
     def check(ctx: IterationContext) -> str | None:
+        state.reset_if_new(ctx.iteration)
         status = _find_failure_status(ctx.response, tool, status_field, failure_set)
         if status is None:
             return None
@@ -467,6 +468,7 @@ def terminal_schema(
     state = _GuardState(max_retries)
 
     def check(ctx: IterationContext) -> str | None:
+        state.reset_if_new(ctx.iteration)
         errors = _find_schema_errors(ctx.response, terminal_tool, schema)
         if not errors:
             return None
@@ -494,6 +496,7 @@ def contradiction(
     state = _GuardState(max_retries)
 
     def check(ctx: IterationContext) -> str | None:
+        state.reset_if_new(ctx.iteration)
         signal = _find_contradiction(ctx.response, terminal_tool)
         if signal is None:
             return None
@@ -506,13 +509,21 @@ def contradiction(
 
 
 class _GuardState:
-    """Tracks retry count for iteration guards."""
+    """Tracks retry count for iteration guards.
+
+    Automatically resets when a new task starts (iteration 0).
+    """
 
     __slots__ = ("max_retries", "count")
 
     def __init__(self, max_retries: int) -> None:
         self.max_retries = max_retries
         self.count = 0
+
+    def reset_if_new(self, iteration: int) -> None:
+        """Reset counter if this is the start of a new task."""
+        if iteration == 0:
+            self.count = 0
 
     def feedback(
         self, fn: Callable[..., tuple[str, str]], escalate: bool, **kwargs: Any
