@@ -70,13 +70,16 @@ class Complete(Verb):
         ctrl = controller or self._default_controller()
         ctrl.reset()
 
+        # Tracer is from config - caller owns it and is responsible for closing.
         tracer = self._resolve_tracer(
             {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
         )
 
-        result = await self._run_loop(task, trace_id, ctrl, tracer, on_iteration, verb_trace)
-        self._emit_verb_trace(verb_trace)
-        return self._tag_result(result, verb_trace)
+        try:
+            result = await self._run_loop(task, trace_id, ctrl, tracer, on_iteration, verb_trace)
+            return self._tag_result(result, verb_trace)
+        finally:
+            self._emit_verb_trace(verb_trace)
 
     @staticmethod
     def _score_action(acc: list[int], action: Action, tokens: int) -> None:

@@ -635,7 +635,17 @@ _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
 
 
 def _validate_schema(data: Any, schema: dict[str, Any]) -> list[str]:
-    """Basic JSON schema validation. Returns list of error messages."""
+    """Basic JSON schema validation for terminal tool arguments.
+
+    Returns list of error messages. Only validates:
+    - Data is a dict
+    - Required top-level fields are present
+    - Top-level field types match (via _type_matches)
+
+    Does NOT validate: nested objects, array item types, enums, patterns,
+    additionalProperties, or other JSON Schema features. For full validation,
+    use a dedicated JSON Schema library like jsonschema.
+    """
     errors: list[str] = []
     if not isinstance(data, dict):
         return [f"expected object, got {type(data).__name__}"]

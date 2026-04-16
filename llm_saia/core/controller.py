@@ -265,13 +265,13 @@ class DefaultController:
         self._pending_terminal = None
         return self._make_terminal_action(call, obs.response.content)
 
-    def _is_terminal_failure(self, arguments: dict[str, Any]) -> bool:
+    def _is_terminal_failure(self, arguments: Any) -> bool:
         """Check if terminal tool arguments indicate failure.
 
         Uses configured status_field if set, otherwise checks "status".
         Returns True if status value exactly matches any failure value (case-insensitive).
+        Returns False if arguments is not a dict.
         """
-        # Handle non-dict arguments gracefully
         if not isinstance(arguments, dict):
             return False
 
@@ -290,13 +290,13 @@ class DefaultController:
         status_lower = str(status_value).lower()
         return status_lower in {v.lower() for v in failure_values}
 
-    def _extract_terminal_output(self, arguments: dict[str, Any], fallback: str) -> str:
+    def _extract_terminal_output(self, arguments: Any, fallback: str) -> str:
         """Extract output from terminal tool arguments.
 
         Uses the configured output_field if set.
         Falls back to checking common field names, then response content.
+        Returns fallback if arguments is not a dict.
         """
-        # Handle non-dict arguments gracefully
         if not isinstance(arguments, dict):
             return fallback
 

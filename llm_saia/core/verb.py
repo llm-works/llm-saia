@@ -626,6 +626,8 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     ) -> T:
         """Complete structured with output guards applied after parsing."""
         trace = _trace if _trace is not None else self._init_verb_trace()
+        # max_attempts=1 (no retry): parse retry was removed as a built-in behavior.
+        # The retry infrastructure is preserved for potential future guard-based retry.
         max_attempts = 1
         last_error: StructuredOutputError | None = None
 

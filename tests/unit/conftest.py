@@ -192,7 +192,7 @@ def make_saia(
     )
     call = CallOptions(system=system) if system is not None else None
     config = Config(
-        lg=lg or NullLogger(),
+        lg=lg if lg is not None else NullLogger(),
         backend=backend,
         tools=tools or [],
         executor=executor,

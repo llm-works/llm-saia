@@ -143,8 +143,10 @@ saia = SAIA.builder().backend(backend).tracing.callback(handle_trace).build()
 from llm_saia.core.trace import FileTracer
 
 tracer = FileTracer("/tmp/debug.jsonl")
-result = await saia.with_tracer(tracer).complete(task)
-tracer.close()
+try:
+    result = await saia.with_tracer(tracer).complete(task)
+finally:
+    tracer.close()
 ```
 
 ### Trace Record Fields
@@ -305,9 +307,18 @@ result = await (
 Use iteration info for adaptive guards:
 
 ```python
+from llm_saia import UNLIMITED
+
 def force_terminal(ctx: IterationContext) -> str | None:
     """Force terminal tool call when iterations are running low."""
-    if ctx.remaining <= 3 and not calls_terminal(ctx.response):
+    # Skip if unlimited iterations
+    if ctx.remaining == UNLIMITED:
+        return None
+    # Check if response already calls the terminal tool
+    has_terminal = any(
+        tc.name == "report_findings" for tc in (ctx.response.tool_calls or [])
+    )
+    if ctx.remaining <= 3 and not has_terminal:
         return "You must call report_findings now to complete the task."
     return None
 ```
@@ -528,6 +539,10 @@ saia = SAIA.builder().backend(backend).logger(StructlogAdapter()).build()
 
 Enable trace-level logging to see detailed execution flow. This is invaluable for debugging stuck
 loops, understanding why the LLM repeated an action, or verifying that guards fired correctly.
+
+> **Privacy Warning:** Trace logs may contain sensitive information including user messages,
+> tool results, and LLM responses. Apply appropriate redaction, retention policies, and access
+> controls before enabling trace-level logging in production environments.
 
 **What trace logs show:**
 
