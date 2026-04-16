@@ -42,8 +42,6 @@ class SAIABuilder:
         self._max_call_tokens: int = DEFAULT_CALL.max_call_tokens
         self._max_total_tokens: int = DEFAULT_CALL.max_total_tokens
         self._timeout_secs: float = DEFAULT_CALL.timeout_secs
-        self._max_retries: int = DEFAULT_CALL.max_retries
-        self._retry_escalation: str | None = DEFAULT_CALL.retry_escalation
         self._request_id: str | None = DEFAULT_CALL.request_id
 
     def backend(self, backend: Backend) -> SAIABuilder:
@@ -149,12 +147,6 @@ class SAIABuilder:
         self._timeout_secs = secs
         return self
 
-    def retries(self, max_retries: int, escalation: str | None = None) -> SAIABuilder:
-        """Set retry configuration."""
-        self._max_retries = max_retries
-        self._retry_escalation = escalation
-        return self
-
     def request_id(self, request_id: str) -> SAIABuilder:
         """Set user-provided correlation ID."""
         self._request_id = request_id
@@ -183,8 +175,6 @@ class SAIABuilder:
             max_total_tokens=self._max_total_tokens,
             timeout_secs=self._timeout_secs,
             max_iterations=self._max_iterations,
-            max_retries=self._max_retries,
-            retry_escalation=self._retry_escalation,
             request_id=self._request_id,
         )
         config = Config(

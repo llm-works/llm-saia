@@ -41,13 +41,6 @@ class CallOptions:
     timeout_secs: float = 0  # Soft timeout in seconds (0 = no timeout)
     max_iterations: int = 3  # Max tool-calling rounds (0 = unlimited)
 
-    # Retry behavior
-    max_retries: int = 1  # Number of retry attempts (1 = no retry)
-    retry_escalation: str | None = None  # Prompt added on retry attempts
-
-    # Parse retry (structured output)
-    parse_retries: int = 0  # Retry attempts on StructuredOutputError (0 = no retry)
-
     # Output guards (validators with retry)
     output_guards: tuple[OutputGuard, ...] = field(default_factory=tuple)
 
@@ -56,11 +49,6 @@ class CallOptions:
 
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
-
-    def __post_init__(self) -> None:
-        """Validate options after initialization."""
-        if self.parse_retries < 0:
-            raise ValueError("parse_retries must be non-negative")
 
 
 @dataclass

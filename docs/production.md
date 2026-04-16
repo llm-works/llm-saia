@@ -119,7 +119,7 @@ SAIA writes JSONL traces for every LLM call. Use traces for debugging, monitorin
 ### Enable Tracing
 
 ```python
-# File-based tracing
+# File-based tracing (at build time)
 saia = (
     SAIA.builder()
     .backend(backend)
@@ -138,6 +138,13 @@ def handle_trace(record: dict) -> None:
         alerts.send(record)
 
 saia = SAIA.builder().backend(backend).tracing.callback(handle_trace).build()
+
+# Per-call tracer override (fluent API)
+from llm_saia.core.trace import FileTracer
+
+tracer = FileTracer("/tmp/debug.jsonl")
+result = await saia.with_tracer(tracer).complete(task)
+tracer.close()
 ```
 
 ### Trace Record Fields
@@ -367,6 +374,51 @@ saia = (
     )
     .build()
 )
+```
+
+### Terminal Iteration Guards
+
+SAIA provides built-in iteration guards for common terminal tool behaviors. These are opt-in
+and run during each iteration of the tool loop.
+
+**Reject Failure Status:**
+
+```python
+from llm_saia.guards import terminal_status
+
+# Reject terminal calls with "stuck" or "failed" status, ask to retry
+guard = terminal_status(
+    tool="complete_task",
+    status_field="status",
+    failure_values=("stuck", "failed"),
+    max_retries=3,
+    escalate=True,  # Increasingly forceful retry messages
+)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+**Validate Schema:**
+
+```python
+from llm_saia.guards import terminal_schema
+
+# Validate terminal tool arguments against JSON schema
+guard = terminal_schema(tools, "report_findings", max_retries=2)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+**Detect Contradictions:**
+
+```python
+from llm_saia.guards import contradiction
+
+# Detect hedging language ("however", "unfortunately", "I can't")
+# when the terminal tool is called
+guard = contradiction("complete_task", max_retries=2)
+
+result = await saia.with_guard(guard).complete(task)
 ```
 
 ### Extracting Data from History

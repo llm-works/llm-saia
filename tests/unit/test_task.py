@@ -795,7 +795,6 @@ class TestTask:
             tools=sample_tools + [terminal_tool_def],
             executor=dummy_executor,
             terminal=TerminalConfig(tool="finish", failure_values=("stuck", "failed")),
-            call=CallOptions(max_retries=0),  # No failure retries
         )
         from llm_saia import SAIA
 
@@ -835,25 +834,6 @@ class TestTask:
 
 class TestDefaultController:
     """Tests for DefaultController."""
-
-    def test_has_contradiction_detects_continuation_signals(
-        self, mock_backend: MockBackend
-    ) -> None:
-        """Controller detects continuation signals in confirmation."""
-        from llm_saia.core.controller import ControllerConfig, DefaultController
-
-        config = Config(backend=mock_backend, tools=[], executor=None)
-        controller = DefaultController(config=ControllerConfig(llm_config=config))
-
-        # Should detect contradiction
-        assert controller._has_contradiction("Let me check one more thing")
-        assert controller._has_contradiction("I will continue")
-        assert controller._has_contradiction("Let's proceed")
-
-        # Clean confirmation - no contradiction
-        assert not controller._has_contradiction("Confirmed")
-        assert not controller._has_contradiction("Yes, done")
-        assert not controller._has_contradiction("")
 
     def test_backoff_default_is_three(self, mock_backend: MockBackend) -> None:
         """Default backoff iterations is 3."""

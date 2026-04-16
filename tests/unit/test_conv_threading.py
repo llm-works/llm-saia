@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -175,67 +174,6 @@ class SequencedMockBackend(MockBackend):
             return self._make_response(content)
 
         return await super().chat(messages, system, tools, response_schema, max_tokens, temperature)
-
-
-class TestParseRetryIsolation:
-    """Parse retries should not pollute the caller's conversation."""
-
-    async def test_retry_does_not_leak_failed_attempts(self) -> None:
-        """After retry, caller's conversation should only have the final exchange."""
-        backend = SequencedMockBackend()
-        # First attempt: invalid JSON -> triggers retry
-        backend.queue_raw_response("not json {")
-        # Second attempt: valid JSON -> success
-        backend.queue_raw_response(json.dumps({"value": "success"}))
-
-        call = CallOptions(parse_retries=1)
-        conv = ListConversation()
-
-        extract = Extract(make_config(backend, call=call))
-        result = await extract("content", SimpleResult, conversation=conv)
-
-        assert result.value.value == "success"
-        # Only the successful exchange should be in the conversation
-        # (not the failed attempt's user+assistant pair)
-        msgs = conv.as_messages()
-        assert len(msgs) == 2
-        assert msgs[0].role == Role.USER
-        assert msgs[1].role == Role.ASSISTANT
-
-    async def test_retry_without_conversation_still_works(self) -> None:
-        """Parse retry with no conversation should work as before."""
-        backend = SequencedMockBackend()
-        backend.queue_raw_response("bad json")
-        backend.queue_raw_response(json.dumps({"value": "ok"}))
-
-        call = CallOptions(parse_retries=1)
-        extract = Extract(make_config(backend, call=call))
-        result = await extract("content", SimpleResult)
-
-        assert result.value.value == "ok"
-
-    async def test_retry_preserves_prior_history(self) -> None:
-        """Parse retry should still send prior conversation to backend."""
-        backend = SequencedMockBackend()
-        backend.queue_raw_response("invalid")
-        backend.queue_raw_response(json.dumps({"value": "ok"}))
-
-        call = CallOptions(parse_retries=1)
-        conv = ListConversation()
-        conv.append(Message(role=Role.USER, content="prior"))
-        conv.append(Message(role=Role.ASSISTANT, content="prior answer"))
-
-        extract = Extract(make_config(backend, call=call))
-        result = await extract("content", SimpleResult, conversation=conv)
-
-        assert result.value.value == "ok"
-        # Conversation should have prior + final exchange only
-        msgs = conv.as_messages()
-        assert len(msgs) == 4  # 2 prior + 2 final
-        assert msgs[0].content == "prior"
-        assert msgs[1].content == "prior answer"
-        assert msgs[2].role == Role.USER
-        assert msgs[3].role == Role.ASSISTANT
 
 
 # ---------------------------------------------------------------------------

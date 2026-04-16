@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on first terminal tool call without requiring a confirmation call. Many models respond to
   confirmation prompts with text instead of a tool call, causing `terminal_data` to be `None`.
   Use `.terminal_tool("name", require_confirmation=False)` to avoid this issue.
+- `with_tracer()` fluent API for per-call tracer override (consistent with other `with_*` methods)
+- Built-in iteration guards in `llm_saia.guards`:
+  - `terminal_status(tool, status_field, failure_values)` - reject terminal calls with failure status
+  - `terminal_schema(tools, terminal_tool)` - validate terminal args against JSON schema
+  - `contradiction(terminal_tool)` - detect hedging language when terminal tool is called
+
+### Changed
+- **BREAKING**: `Complete.__call__()` no longer accepts `tracer=` parameter. Use fluent API:
+  `saia.with_tracer(tracer).complete(task)` instead of `saia.complete(task, tracer=tracer)`.
+
+### Removed
+- **BREAKING**: `retries()` / `with_retries()` removed. Terminal failure retry behavior
+  should be implemented via `IterationGuard` instead.
+- **BREAKING**: `parse_retries()` / `with_parse_retries()` removed. Structured output parse
+  retry behavior should be implemented via guards instead.
+- **BREAKING**: `CallOptions.max_retries`, `CallOptions.retry_escalation`, 
+  `CallOptions.parse_retries` removed.
+- Controller no longer handles terminal failure retries or confirmation contradiction
+  detection internally. These behaviors can be implemented via guards for opt-in use.
 
 ## [0.3.0] - 2026-04-13
 

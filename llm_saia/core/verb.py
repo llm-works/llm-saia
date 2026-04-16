@@ -107,22 +107,12 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
         return _generate_id()
 
-    def _resolve_tracer(
-        self,
-        tracer: Tracer | None,
-        metadata: dict[str, Any],
-    ) -> tuple[bool, Tracer | None]:
-        """Resolve per-call vs config tracer and call start().
-
-        Returns ``(owns_tracer, active_tracer)``.  A per-call tracer is
-        *owned* (the caller is responsible for closing it); the config
-        tracer is *borrowed* (shared across calls, never closed by a verb).
-        """
-        owns = tracer is not None
-        active = tracer or self._config.tracer
-        if active:
-            active.start(metadata)
-        return owns, active
+    def _resolve_tracer(self, metadata: dict[str, Any]) -> Tracer | None:
+        """Get config tracer and call start() if present."""
+        tracer = self._config.tracer
+        if tracer:
+            tracer.start(metadata)
+        return tracer
 
     def _init_verb_trace(self, trace_id: str = "") -> VerbTrace:
         """Create a new VerbTrace for this verb call."""
@@ -569,14 +559,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
     ) -> T:
-        """Complete structured with retry on StructuredOutputError.
-
-        Retry count controlled by CallOptions.parse_retries (default: 0).
-        Output guards are applied after successful parsing.
-        """
+        """Complete structured with output guards applied after parsing."""
         trace = _trace if _trace is not None else self._init_verb_trace()
-        config = self._get_call_options(run)
-        max_attempts = 1 + config.parse_retries
+        max_attempts = 1
         last_error: StructuredOutputError | None = None
 
         for attempt in range(max_attempts):

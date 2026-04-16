@@ -54,7 +54,6 @@ class Complete(Verb):
         task: str,
         on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None = None,
         controller: LoopController | None = None,
-        tracer: Tracer | None = None,
     ) -> TaskResult:
         """Execute a task using tools until completion or limit reached.
 
@@ -62,8 +61,6 @@ class Complete(Verb):
             task: The task description / prompt.
             on_iteration: Optional async callback invoked each iteration.
             controller: Custom loop controller (uses default if None).
-            tracer: Per-call tracer (closed on completion). Falls back to
-                config tracer if not provided.
         """
         if not self._has_tools():
             raise ValueError("Complete requires tools and executor to be configured.")
@@ -73,20 +70,13 @@ class Complete(Verb):
         ctrl = controller or self._default_controller()
         ctrl.reset()
 
-        owns_tracer, active_tracer = self._resolve_tracer(
-            tracer,
+        tracer = self._resolve_tracer(
             {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
         )
 
-        try:
-            result = await self._run_loop(
-                task, trace_id, ctrl, active_tracer, on_iteration, verb_trace
-            )
-            self._emit_verb_trace(verb_trace)
-            return self._tag_result(result, verb_trace)
-        finally:
-            if active_tracer and owns_tracer:
-                active_tracer.close()
+        result = await self._run_loop(task, trace_id, ctrl, tracer, on_iteration, verb_trace)
+        self._emit_verb_trace(verb_trace)
+        return self._tag_result(result, verb_trace)
 
     @staticmethod
     def _score_action(acc: list[int], action: Action, tokens: int) -> None:
@@ -270,12 +260,10 @@ class Complete(Verb):
             lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
         )
-        call = self._config.call or DEFAULT_COMPLETE_CALL
         return DefaultController(
             config=ControllerConfig(
                 llm_config=llm_config,
                 terminal=self._config.terminal,
-                max_failure_retries=call.max_retries,
             ),
         )
 

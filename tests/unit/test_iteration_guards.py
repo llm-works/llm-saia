@@ -1,4 +1,4 @@
-"""Tests for IterationGuard feature."""
+"""Tests for IterationGuard feature and built-in iteration guards."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from llm_saia.core.backend import AgentResponse
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.conversation import Message, ToolCall
 from llm_saia.core.types import ToolDef
+from llm_saia.guards import _ordinal, contradiction, terminal_schema, terminal_status
 from llm_saia.verbs import Ask, Instruct
 from llm_saia.verbs.complete import Complete
 from tests.unit.conftest import MockBackend
@@ -374,3 +375,257 @@ class TestIterationGuardInComplete:
         guard_steps = [s for s in result.trace.steps if s.reason == "iteration_guard"]
         assert len(guard_steps) >= 1
         assert guard_steps[0].nudge_preview == "Explain."
+
+
+# ---------------------------------------------------------------------------
+# Built-in iteration guard factories
+# ---------------------------------------------------------------------------
+
+
+def _make_response(
+    content: str = "",
+    tool_calls: list[ToolCall] | None = None,
+) -> AgentResponse:
+    """Create a minimal AgentResponse for testing."""
+    return AgentResponse(
+        content=content,
+        tool_calls=tool_calls,
+        input_tokens=10,
+        output_tokens=10,
+        call_id="test-call",
+        finish_reason="stop",
+    )
+
+
+class TestTerminalStatusGuard:
+    """Tests for terminal_status guard factory."""
+
+    def test_no_tool_calls_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response("Just some text")
+        assert guard.validator(response) is None
+
+    def test_non_terminal_tool_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="other_tool", arguments={"status": "stuck"})]
+        )
+        assert guard.validator(response) is None
+
+    def test_success_status_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "complete"})]
+        )
+        assert guard.validator(response) is None
+
+    def test_failure_status_returns_feedback(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        feedback = guard.validator(response)
+        assert feedback is not None
+        assert "stuck" in feedback
+
+    def test_escalation_on_repeated_failures(self) -> None:
+        guard = terminal_status("done", "status", ("stuck",), max_retries=3, escalate=True)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        feedback1 = guard.validator(response)
+        assert feedback1 is not None
+        assert "MUST" not in feedback1
+
+        feedback2 = guard.validator(response)
+        assert feedback2 is not None
+        assert "MUST" in feedback2
+
+    def test_exhausted_retries_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck",), max_retries=2)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        assert guard.validator(response) is not None
+        assert guard.validator(response) is not None
+        assert guard.validator(response) is None
+
+    def test_non_dict_arguments_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck",))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments="not a dict")]  # type: ignore
+        )
+        assert guard.validator(response) is None
+
+
+class TestTerminalSchemaGuard:
+    """Tests for terminal_schema guard factory."""
+
+    @pytest.fixture
+    def tools(self) -> list[ToolDef]:
+        return [
+            ToolDef(
+                name="report",
+                description="Report findings",
+                parameters={
+                    "type": "object",
+                    "required": ["summary", "score"],
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "score": {"type": "integer"},
+                    },
+                },
+            ),
+        ]
+
+    def test_no_tool_calls_passes(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response("Just some text")
+        assert guard.validator(response) is None
+
+    def test_valid_arguments_passes(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done", "score": 5})]
+        )
+        assert guard.validator(response) is None
+
+    def test_missing_required_field_returns_feedback(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done"})]
+        )
+        feedback = guard.validator(response)
+        assert feedback is not None
+        assert "schema errors" in feedback
+        assert "score" in feedback
+
+    def test_wrong_type_returns_feedback(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response(
+            tool_calls=[
+                ToolCall(id="1", name="report", arguments={"summary": "done", "score": "five"})
+            ]
+        )
+        feedback = guard.validator(response)
+        assert feedback is not None
+        assert "expected integer" in feedback
+
+    def test_escalation_on_repeated_failures(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report", max_retries=3, escalate=True)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done"})]
+        )
+        feedback1 = guard.validator(response)
+        assert feedback1 is not None
+        assert "STILL" not in feedback1
+
+        feedback2 = guard.validator(response)
+        assert feedback2 is not None
+        assert "STILL" in feedback2
+
+    def test_exhausted_retries_passes(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report", max_retries=2)
+        response = _make_response(tool_calls=[ToolCall(id="1", name="report", arguments={})])
+        assert guard.validator(response) is not None
+        assert guard.validator(response) is not None
+        assert guard.validator(response) is None
+
+    def test_unknown_tool_creates_noop_guard(self) -> None:
+        guard = terminal_schema([], "nonexistent")
+        response = _make_response(tool_calls=[ToolCall(id="1", name="nonexistent", arguments={})])
+        assert guard.validator(response) is None
+
+
+class TestContradictionGuard:
+    """Tests for contradiction guard factory."""
+
+    def test_no_tool_calls_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response("I can't do this")
+        assert guard.validator(response) is None
+
+    def test_non_terminal_tool_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="However, I can't do this",
+            tool_calls=[ToolCall(id="1", name="other_tool", arguments={})],
+        )
+        assert guard.validator(response) is None
+
+    def test_terminal_without_contradiction_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="Task completed successfully!",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        assert guard.validator(response) is None
+
+    def test_terminal_with_empty_content_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        assert guard.validator(response) is None
+
+    def test_contradiction_detected(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="However, I wasn't able to complete everything",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        feedback = guard.validator(response)
+        assert feedback is not None
+        assert "contradictory" in feedback
+
+    def test_detects_various_signals(self) -> None:
+        signals = ["unfortunately", "i can't", "i cannot", "not possible", "unable to"]
+        for signal in signals:
+            guard = contradiction("done")
+            response = _make_response(
+                content=f"Task done, {signal} verify everything",
+                tool_calls=[ToolCall(id="1", name="done", arguments={})],
+            )
+            feedback = guard.validator(response)
+            assert feedback is not None, f"Should detect signal: {signal}"
+
+    def test_escalation_on_repeated_contradictions(self) -> None:
+        guard = contradiction("done", max_retries=3, escalate=True)
+        response = _make_response(
+            content="However, something went wrong",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        feedback1 = guard.validator(response)
+        assert feedback1 is not None
+        assert "2nd" not in feedback1
+
+        feedback2 = guard.validator(response)
+        assert feedback2 is not None
+        assert "2nd" in feedback2
+
+    def test_exhausted_retries_passes(self) -> None:
+        guard = contradiction("done", max_retries=2)
+        response = _make_response(
+            content="Unfortunately this failed",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        assert guard.validator(response) is not None
+        assert guard.validator(response) is not None
+        assert guard.validator(response) is None
+
+
+class TestOrdinalHelper:
+    """Tests for _ordinal helper."""
+
+    def test_ordinals(self) -> None:
+        assert _ordinal(1) == "1st"
+        assert _ordinal(2) == "2nd"
+        assert _ordinal(3) == "3rd"
+        assert _ordinal(4) == "4th"
+        assert _ordinal(11) == "11th"
+        assert _ordinal(12) == "12th"
+        assert _ordinal(13) == "13th"
+        assert _ordinal(21) == "21st"
+        assert _ordinal(22) == "22nd"
+        assert _ordinal(23) == "23rd"
