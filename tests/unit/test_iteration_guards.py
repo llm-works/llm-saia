@@ -503,9 +503,8 @@ class TestCompleteConversationSupport:
         assert len(messages_sent_to_llm) == 3
         # First call sees just the initial message
         assert len(messages_sent_to_llm[0]) == 1
-        # Later calls should see compacted view (2 messages) after threshold
-        # The exact count depends on when compaction triggers, but it should be <= full history
-        assert len(messages_sent_to_llm[2]) <= len(conv.full_history)
+        # Third call sees compacted view (exactly 2 messages after threshold)
+        assert len(messages_sent_to_llm[2]) == 2
 
     async def test_no_conversation_works_as_before(self) -> None:
         """Complete works without conversation parameter (backward compatible)."""

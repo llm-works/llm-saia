@@ -346,10 +346,12 @@ class Complete(Verb):
 
             case ActionType.COMPLETE:
                 self._add_response_if_needed(ctx, response)
+                self._ack_response_tools(response, ctx)
                 return self._make_result(True, action, response, ctx.messages, iteration)
 
             case ActionType.FAIL:
                 self._add_response_if_needed(ctx, response)
+                self._ack_response_tools(response, ctx)
                 return self._make_result(False, action, response, ctx.messages, iteration)
 
         return None
