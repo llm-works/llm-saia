@@ -116,13 +116,13 @@ class TestSchemaRetryGuard:
     def test_schema_retry_defaults(self) -> None:
         """schema_retry has expected defaults."""
         guard = schema_retry()
-        assert guard.max_retries == 2
+        assert guard.parse_max_retries == 2
         assert guard.name == "schema_retry"
 
     def test_schema_retry_custom_retries(self) -> None:
         """schema_retry accepts custom max_retries."""
         guard = schema_retry(max_retries=5)
-        assert guard.max_retries == 5
+        assert guard.parse_max_retries == 5
 
     def test_schema_retry_returns_none_without_parse_error(self) -> None:
         """schema_retry does nothing in tool loop context (no parse_error)."""
@@ -177,19 +177,22 @@ class TestSchemaRetryGuard:
         assert "FAILED" in instr2
         assert "2 TIMES" in instr2
 
-    def test_schema_retry_returns_none_on_last_attempt(self) -> None:
-        """schema_retry returns None on last attempt (no point retrying)."""
+    def test_schema_retry_returns_feedback_on_any_attempt(self) -> None:
+        """schema_retry returns feedback on any attempt (caller handles bounds)."""
         guard = schema_retry()
         error = StructuredOutputError("Invalid JSON", raw_content="not json")
         response = AgentResponse(content="not json", tool_calls=[])
+        # Even on last attempt, guard returns feedback - caller decides whether to use it
         ctx = IterationContext(
             response=response,
             iteration=2,  # Last attempt (max_iterations - 1)
             max_iterations=3,
             parse_error=error,
         )
-        # Should return None on last attempt
-        assert guard.validator(ctx) is None
+        # Guard always provides feedback; caller handles iteration bounds
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        assert "FAILED" in feedback  # Escalated message on attempt > 0
 
 
 class TestParseGuardIntegration:
@@ -244,7 +247,7 @@ class TestParseGuardIntegration:
 
     @pytest.mark.asyncio
     async def test_multiple_parse_guards_stack_retries(self) -> None:
-        """Multiple parse guards stack their max_retries."""
+        """Multiple parse guards stack their parse_max_retries."""
         backend = SequencedMockBackend()
         # Queue 4 invalid responses, then valid
         for _ in range(4):
@@ -282,7 +285,7 @@ class TestCustomIterationGuardForParse:
         guard = IterationGuard(
             validator=only_retry_truncated,
             name="truncation_retry",
-            max_retries=2,
+            parse_max_retries=2,
         )
 
         backend = SequencedMockBackend()

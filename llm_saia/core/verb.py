@@ -634,9 +634,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         """Complete structured with iteration guards (for parse retry) and output guards."""
         trace = _trace if _trace is not None else self._init_verb_trace()
         config = self._get_call_options(run)
-        # Guards with max_retries > 0 participate in parse retry
-        parse_retry_guards = tuple(g for g in config.iteration_guards if g.max_retries > 0)
-        max_attempts = 1 + sum(g.max_retries for g in parse_retry_guards)
+        # Guards with parse_max_retries > 0 participate in parse retry
+        parse_retry_guards = tuple(g for g in config.iteration_guards if g.parse_max_retries > 0)
+        max_attempts = 1 + sum(g.parse_max_retries for g in parse_retry_guards)
         state: _ParseRetryState = {"error": None, "feedback": None}
 
         for attempt in range(max_attempts):
@@ -723,7 +723,11 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         max_attempts: int,
         trace: VerbTrace,
     ) -> str | None:
-        """Evaluate iteration guards in parse retry context."""
+        """Evaluate iteration guards in parse retry context.
+
+        Like tool loop guards, evaluates all guards and combines feedback.
+        Uses _eval_single_guard for consistent exception handling.
+        """
         if not guards:
             return None
         ctx = IterationContext(
@@ -732,12 +736,13 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             max_iterations=max_attempts,
             parse_error=error,
         )
+        feedback_parts: list[str] = []
         for guard in guards:
-            feedback = guard.validator(ctx)
+            feedback = self._eval_single_guard(guard, ctx)
             if feedback is not None:
                 self._log_parse_guard_trigger(guard.name, attempt, feedback)
-                return feedback
-        return None
+                feedback_parts.append(feedback)
+        return "\n\n".join(feedback_parts) if feedback_parts else None
 
     def _log_parse_guard_trigger(self, name: str | None, attempt: int, feedback: str) -> None:
         """Log when a parse guard triggers a retry."""

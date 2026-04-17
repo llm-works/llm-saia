@@ -119,18 +119,24 @@ class IterationGuard:
        and the loop continues.
 
     2. **Parse retry**: When structured output parsing fails (``ctx.parse_error``
-       is set). Guards with ``max_retries > 0`` participate in parse retry.
+       is set). Guards with ``parse_max_retries > 0`` participate in parse retry.
        Return feedback to retry, or ``None`` to stop retrying.
 
     The validator receives an :class:`IterationContext` with the response and
     loop state. Check ``ctx.parse_error`` to detect parse retry context.
 
+    When multiple guards have ``parse_max_retries > 0``, their retry budgets are
+    **summed** to determine total attempts. For example, two guards with
+    ``parse_max_retries=2`` each allow up to 5 attempts (1 initial + 2 + 2).
+    Each attempt evaluates all participating guards; their feedback is combined.
+
     Args:
         validator: Receives :class:`IterationContext`. Return ``None`` when
             the response is acceptable, or a feedback string to inject/retry.
         name: Optional name for logging and trace records.
-        max_retries: For parse retry context only. Guards with ``max_retries > 0``
-            participate in parse retry. Default 0 (tool loop only).
+        parse_max_retries: Retry budget for parse retry context. Guards with
+            ``parse_max_retries > 0`` participate when structured output parsing
+            fails. Default 0 (tool loop only, no parse retry).
 
     Example:
         >>> # Tool loop guard - require explanation with tool calls
@@ -150,7 +156,7 @@ class IterationGuard:
 
     validator: Callable[[IterationContext], str | None]
     name: str | None = None
-    max_retries: int = 0  # >0 enables parse retry participation
+    parse_max_retries: int = 0  # >0 enables parse retry participation
 
 
 class Guarded:

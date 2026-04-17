@@ -419,11 +419,11 @@ def schema_retry(max_retries: int = 2, *, escalate: bool = True) -> IterationGua
     """
 
     def check(ctx: IterationContext) -> str | None:
-        if ctx.parse_error is None or ctx.iteration >= ctx.max_iterations - 1:
-            return None  # Not a parse error or exhausted retries
+        if ctx.parse_error is None:
+            return None  # Not a parse error context (tool loop)
         return _schema_retry_feedback(ctx, escalate)
 
-    return IterationGuard(validator=check, name="schema_retry", max_retries=max_retries)
+    return IterationGuard(validator=check, name="schema_retry", parse_max_retries=max_retries)
 
 
 def _schema_retry_feedback(ctx: IterationContext, escalate: bool) -> str:
