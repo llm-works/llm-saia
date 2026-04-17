@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 from abc import abstractmethod
@@ -420,7 +421,13 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     async def _append_msg(target: MessageAppendable, msg: Message) -> None:
         """Append message, using async if target supports it."""
         if isinstance(target, AsyncConversationLike):
-            await target.append_async(msg)
+            result = target.append_async(msg)
+            if not inspect.isawaitable(result):
+                raise TypeError(
+                    f"{type(target).__name__}.append_async() must be async (return awaitable), "
+                    f"got {type(result).__name__}"
+                )
+            await result
         else:
             target.append(msg)
 

@@ -611,6 +611,35 @@ class TestAsyncConversationLikeSupport:
         assert conv.sync_append_count == 0
         assert len(conv.full_history) == conv.async_append_count
 
+    async def test_tool_execution_syncs_via_async_append(self) -> None:
+        """Tool execution results are synced to async conversation via append_async."""
+        backend = MockBackend()
+        # First response: non-terminal tool call (search)
+        search_call = ToolCall(id="tc_search", name="search", arguments={"q": "test"})
+        backend.queue_response(_tool_response("Searching...", [search_call]))
+        # Second response: terminal tool call (done)
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        # Third response: confirmation
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        # Verify tool result message was synced (Role.TOOL in history)
+        tool_messages = [m for m in conv.full_history if m.role == "tool"]
+        assert len(tool_messages) >= 1, "Tool result should be synced to async conversation"
+
 
 # ---------------------------------------------------------------------------
 # Built-in iteration guard factories
