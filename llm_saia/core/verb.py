@@ -811,11 +811,23 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         )
         conv.append(self._to_message(response))
         self._record_step(response, phase=_phase, _trace=_trace)
+        return self._parse_structured_response(response.content, schema)
+
+    def _parse_structured_response(self, content: str, schema: type[T]) -> T:
+        """Parse JSON response into schema, raising StructuredOutputError on failure."""
         try:
-            data = json.loads(response.content)
+            data = json.loads(content)
         except json.JSONDecodeError as e:
-            raise self._structured_output_error(e, response.content, schema.__name__) from e
-        return parse_json_to_dataclass(data, schema)
+            raise self._structured_output_error(e, content, schema.__name__) from e
+        try:
+            return parse_json_to_dataclass(data, schema)
+        except (TypeError, ValueError) as e:
+            raise StructuredOutputError(
+                f"Response does not match {schema.__name__}: {e}",
+                raw_content=content,
+                schema_name=schema.__name__,
+                parse_error=str(e),
+            ) from e
 
     def _retry_prompt_or_original(
         self,

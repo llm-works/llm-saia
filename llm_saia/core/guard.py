@@ -158,6 +158,11 @@ class IterationGuard:
     name: str | None = None
     parse_max_retries: int = 0  # >0 enables parse retry participation
 
+    def __post_init__(self) -> None:
+        """Validate parse_max_retries is non-negative."""
+        if self.parse_max_retries < 0:
+            raise ValueError(f"parse_max_retries must be >= 0, got {self.parse_max_retries}")
+
 
 class Guarded:
     """Marker for field-level guards in Annotated types.

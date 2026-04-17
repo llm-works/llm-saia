@@ -132,14 +132,11 @@ class Configurable(ABC):
         Multiple guards can be chained and are applied in order.
 
         Example:
-            >>> from llm_saia import IterationGuard
             >>> from llm_saia.guards import english_only, schema_retry
-            >>> result = await (
-            ...     saia
-            ...     .with_guard(english_only())
-            ...     .with_guard(schema_retry())
-            ...     .complete(task)
-            ... )
+            >>> # OutputGuard (english_only) applies to any completion
+            >>> result = await saia.with_guard(english_only()).complete(task)
+            >>> # IterationGuard with parse_max_retries applies to structured output
+            >>> result = await saia.with_guard(schema_retry()).extract(Article, text)
 
         Args:
             guard: OutputGuard or IterationGuard instance.

@@ -124,6 +124,11 @@ class TestSchemaRetryGuard:
         guard = schema_retry(max_retries=5)
         assert guard.parse_max_retries == 5
 
+    def test_iteration_guard_rejects_negative_parse_max_retries(self) -> None:
+        """IterationGuard raises ValueError for negative parse_max_retries."""
+        with pytest.raises(ValueError, match="parse_max_retries must be >= 0"):
+            IterationGuard(validator=lambda ctx: None, parse_max_retries=-1)
+
     def test_schema_retry_returns_none_without_parse_error(self) -> None:
         """schema_retry does nothing in tool loop context (no parse_error)."""
         guard = schema_retry()
@@ -205,6 +210,23 @@ class TestParseGuardIntegration:
         # First response: invalid JSON
         backend.queue_response('{"name": "Alice"')  # Missing closing brace
         # Second response: valid JSON
+        backend.queue_response('{"name": "Alice", "age": 30}')
+
+        config = _make_config(backend)
+        extract = Extract(config).with_guard(schema_retry(max_retries=2))
+
+        result = await extract("Extract person", Person)
+        assert result.value.name == "Alice"
+        assert result.value.age == 30
+        assert backend.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_parse_retry_on_schema_mismatch(self) -> None:
+        """schema_retry retries when JSON is valid but doesn't match schema."""
+        backend = SequencedMockBackend()
+        # First response: valid JSON but missing required field (no 'age')
+        backend.queue_response('{"name": "Alice"}')
+        # Second response: valid JSON with all required fields
         backend.queue_response('{"name": "Alice", "age": 30}')
 
         config = _make_config(backend)
