@@ -55,11 +55,15 @@ class _LoopCtx:
         """Messages for LLM calls - uses conv (possibly compacted) if available."""
         return self.conv.as_messages() if self.conv is not None else self.messages
 
-    def append(self, msg: Message) -> None:
-        """Append to internal history and external conv (if present)."""
+    async def append(self, msg: Message) -> None:
+        """Append to internal history and external conv (if present).
+
+        Uses async append when conversation supports it (e.g., for non-blocking
+        compaction with LLM-based summarization).
+        """
         self.messages.append(msg)
         if self.conv is not None:
-            self.conv.append(msg)
+            await Verb._append_msg(self.conv, msg)
 
 
 class Complete(Verb):
@@ -124,7 +128,7 @@ class Complete(Verb):
         """Build LoopScore from accumulated stats."""
         return LoopScore(iters, acc[0], acc[1], acc[2], total_tokens, acc[3])
 
-    def _init_loop_ctx(
+    async def _init_loop_ctx(
         self,
         task: str,
         trace_id: str,
@@ -152,7 +156,7 @@ class Complete(Verb):
         )
         # Sync initial message to external conversation if provided
         if conversation is not None:
-            conversation.append(initial_msg)
+            await self._append_msg(conversation, initial_msg)
         return ctx
 
     async def _run_loop(
@@ -166,7 +170,7 @@ class Complete(Verb):
         conversation: ConversationLike | None = None,
     ) -> TaskResult:
         """Execute the main tool-calling loop."""
-        ctx = self._init_loop_ctx(
+        ctx = await self._init_loop_ctx(
             task, trace_id, ctrl, tracer, on_iteration, verb_trace, conversation
         )
         self._log_loop_start(ctx.call_options)
@@ -221,9 +225,9 @@ class Complete(Verb):
         """Inject iteration-guard feedback into conversation and record the step."""
         if ctx.on_iteration:
             await ctx.on_iteration(iteration, response)
-        ctx.append(self._to_message(response))
-        self._ack_response_tools(response, ctx)
-        ctx.append(Message(role=Role.USER, content=feedback))
+        await ctx.append(self._to_message(response))
+        await self._ack_response_tools(response, ctx)
+        await ctx.append(Message(role=Role.USER, content=feedback))
         # Log guard feedback injection (critical for debugging stuck loops)
         self._lg.trace(
             "guard feedback injected into conversation",
@@ -332,26 +336,26 @@ class Complete(Verb):
                 return None
 
             case ActionType.INSTRUCT:
-                self._add_response_if_needed(ctx, response)
-                self._ack_response_tools(response, ctx)
+                await self._add_response_if_needed(ctx, response)
+                await self._ack_response_tools(response, ctx)
                 if action.message:
-                    ctx.append(Message(role=Role.USER, content=action.message))
+                    await ctx.append(Message(role=Role.USER, content=action.message))
                 return None
 
             case ActionType.SKIP:
-                self._add_response_if_needed(ctx, response)
-                self._ack_response_tools(response, ctx)
-                ctx.append(Message(role=Role.USER, content="Continue."))
+                await self._add_response_if_needed(ctx, response)
+                await self._ack_response_tools(response, ctx)
+                await ctx.append(Message(role=Role.USER, content="Continue."))
                 return None
 
             case ActionType.COMPLETE:
-                self._add_response_if_needed(ctx, response)
-                self._ack_response_tools(response, ctx)
+                await self._add_response_if_needed(ctx, response)
+                await self._ack_response_tools(response, ctx)
                 return self._make_result(True, action, response, ctx.messages, iteration)
 
             case ActionType.FAIL:
-                self._add_response_if_needed(ctx, response)
-                self._ack_response_tools(response, ctx)
+                await self._add_response_if_needed(ctx, response)
+                await self._ack_response_tools(response, ctx)
                 return self._make_result(False, action, response, ctx.messages, iteration)
 
         return None
@@ -360,13 +364,23 @@ class Complete(Verb):
         self, action: Action, response: AgentResponse, ctx: _LoopCtx
     ) -> None:
         """Handle EXECUTE_TOOLS action: add response, ack skipped, execute."""
-        ctx.append(self._to_message(response))
+        await ctx.append(self._to_message(response))
         if response.tool_calls:
             calls = self._filter_tool_calls(response.tool_calls, action.tool_ids_to_execute)
-            self._ack_skipped_tools(
+            await self._ack_skipped_tools(
                 response.tool_calls, action.tool_ids_to_execute, ctx, confirmation_pending=True
             )
-            await self._execute_tools(calls, ctx)  # ctx satisfies MessageAppendable
+            # Execute tools - pass internal list, then sync to conv
+            pre_len = len(ctx.messages)
+            await self._execute_tools(calls, ctx.messages)
+            await self._sync_tool_results_to_conv(ctx, pre_len)
+
+    async def _sync_tool_results_to_conv(self, ctx: _LoopCtx, pre_len: int) -> None:
+        """Sync tool results from internal list to external conversation."""
+        if ctx.conv is None:
+            return
+        for msg in ctx.messages[pre_len:]:
+            await self._append_msg(ctx.conv, msg)
 
     def _filter_tool_calls(
         self, tool_calls: list[ToolCall], tool_ids: list[str] | None
@@ -376,7 +390,7 @@ class Complete(Verb):
             return tool_calls
         return [c for c in tool_calls if c.id in tool_ids]
 
-    def _ack_skipped_tools(
+    async def _ack_skipped_tools(
         self,
         all_calls: list[ToolCall],
         execute_ids: list[str] | None,
@@ -403,18 +417,18 @@ class Complete(Verb):
         skip_ids = {c.id for c in all_calls} - set(execute_ids)
         for call in all_calls:
             if call.id in skip_ids:
-                ctx.append(Message(role=Role.TOOL, content=content, tool_call_id=call.id))
+                await ctx.append(Message(role=Role.TOOL, content=content, tool_call_id=call.id))
 
-    def _ack_response_tools(self, response: AgentResponse, ctx: _LoopCtx) -> None:
+    async def _ack_response_tools(self, response: AgentResponse, ctx: _LoopCtx) -> None:
         """Acknowledge all tool_calls in a response that won't be executed.
 
         Must be called after _add_response_if_needed for INSTRUCT/SKIP/COMPLETE/FAIL
         paths where the assistant message contains tool_calls but no tools are executed.
         """
         if response.tool_calls:
-            self._ack_skipped_tools(response.tool_calls, [], ctx)
+            await self._ack_skipped_tools(response.tool_calls, [], ctx)
 
-    def _add_response_if_needed(self, ctx: _LoopCtx, response: AgentResponse) -> None:
+    async def _add_response_if_needed(self, ctx: _LoopCtx, response: AgentResponse) -> None:
         """Add response to messages if not already added."""
         if ctx.messages:
             last = ctx.messages[-1]
@@ -424,7 +438,7 @@ class Complete(Verb):
                 and last.tool_calls == (response.tool_calls or None)
             ):
                 return
-        ctx.append(self._to_message(response))
+        await ctx.append(self._to_message(response))
 
     def _make_result(
         self,

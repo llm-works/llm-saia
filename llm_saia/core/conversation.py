@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
+    "AsyncConversationLike",
     "ConversationLike",
     "ListConversation",
     "Message",
@@ -103,6 +104,29 @@ class ConversationLike(Protocol):
 
     def as_messages(self) -> list[Message]:
         """Return current messages as a list (view, not copy)."""
+        ...
+
+
+@runtime_checkable
+class AsyncConversationLike(ConversationLike, Protocol):
+    """Extended protocol with async append support for non-blocking compaction.
+
+    Use this when conversation operations may trigger I/O (e.g., LLM-based
+    compaction). The ``append_async()`` method allows compaction to run without
+    blocking the event loop.
+
+    Implementations should support both ``append()`` and ``append_async()``:
+        - ``append()``: Synchronous append (may block or raise if async compaction needed)
+        - ``append_async()``: Non-blocking append with async compaction support
+    """
+
+    async def append_async(self, msg: Message) -> None:
+        """Append a message asynchronously.
+
+        Async variant of ``append()`` that supports non-blocking compaction.
+        Use this when the conversation may trigger I/O during append (e.g.,
+        LLM-based summarization for compaction).
+        """
         ...
 
 

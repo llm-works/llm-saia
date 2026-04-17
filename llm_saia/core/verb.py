@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 from abc import abstractmethod
@@ -11,6 +12,7 @@ from .backend import AgentResponse
 from .config import DEFAULT_CALL, CallOptions, Config
 from .configurable import Configurable
 from .conversation import (
+    AsyncConversationLike,
     ConversationLike,
     ListConversation,
     Message,
@@ -224,7 +226,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
         return response
 
-    def _init_loop(
+    async def _init_loop(
         self,
         prompt: str,
         run: CallOptions | None,
@@ -233,7 +235,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         """Initialize loop state and return (config, conversation, max_tokens, temperature)."""
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
-        conv.append(Message(role=Role.USER, content=prompt))
+        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         self._log_loop_start(config)
         return config, conv, self._max_tokens(config), self._resolve_temperature(run)
 
@@ -247,7 +249,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         _trace: VerbTrace | None = None,
     ) -> tuple[str, T | None]:
         """Execute prompt with tool-calling loop."""
-        config, conv, max_tokens, temperature = self._init_loop(prompt, run, conversation)
+        config, conv, max_tokens, temperature = await self._init_loop(prompt, run, conversation)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
@@ -255,7 +257,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             response = await self._chat(conv.as_messages(), max_tokens, temperature)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
-            conv.append(self._to_message(response))
+            await self._append_msg(conv, self._to_message(response))
             self._log_response(response, iteration, total_tokens)
             self._check_tool_support(response)
             self._record_step(response, phase="iteration", _trace=_trace)
@@ -291,8 +293,10 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         if feedback is not None:
             # Acknowledge any pending tool calls so the conversation stays valid
             for tc in response.tool_calls or []:
-                conv.append(Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id))
-            conv.append(Message(role=Role.USER, content=feedback))
+                await self._append_msg(
+                    conv, Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id)
+                )
+            await self._append_msg(conv, Message(role=Role.USER, content=feedback))
             # Log the guard feedback being injected (critical for debugging stuck loops)
             self._lg.trace(
                 "guard feedback injected into conversation",
@@ -414,6 +418,20 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         )
 
     @staticmethod
+    async def _append_msg(target: MessageAppendable, msg: Message) -> None:
+        """Append message, using async if target supports it."""
+        if isinstance(target, AsyncConversationLike):
+            result = target.append_async(msg)
+            if not inspect.isawaitable(result):
+                raise TypeError(
+                    f"{type(target).__name__}.append_async() must be async (return awaitable), "
+                    f"got {type(result).__name__}"
+                )
+            await result
+        else:
+            target.append(msg)
+
+    @staticmethod
     def _fork_conversation(
         conversation: ConversationLike | None,
     ) -> ConversationLike | None:
@@ -430,7 +448,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         return fork
 
     @staticmethod
-    def _merge_conversation(
+    async def _merge_conversation(
         target: ConversationLike | None,
         source: ConversationLike | None,
     ) -> None:
@@ -443,14 +461,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             return
         base_len = len(target.as_messages())
         for msg in source.as_messages()[base_len:]:
-            target.append(msg)
+            await Verb._append_msg(target, msg)
 
     async def _execute_tools(self, tool_calls: list[ToolCall], messages: MessageAppendable) -> None:
         """Execute tool calls and append results.
 
         Args:
             tool_calls: Tool calls to execute.
-            messages: Object supporting append() - either list[Message] or ConversationLike.
+            messages: Object supporting append() - list[Message] or ConversationLike.
         """
         if not self._config.executor:
             self._lg.warning(
@@ -460,7 +478,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             return
         for tc in tool_calls:
             result = await self._execute_single_tool(tc)
-            messages.append(Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id))
+            await self._append_msg(
+                messages, Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id)
+            )
 
     async def _execute_single_tool(self, tc: ToolCall) -> str:
         """Execute a single tool call with logging."""
@@ -584,14 +604,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         """Direct (no-tool) text completion. Records step to trace."""
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
-        conv.append(Message(role=Role.USER, content=prompt))
+        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         response = await self._chat(
             conv.as_messages(),
             max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
             tools=[],
         )
-        conv.append(self._to_message(response))
+        await self._append_msg(conv, self._to_message(response))
         self._record_step(response, phase="attempt", _trace=trace)
         return response.content
 
@@ -612,14 +632,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             return content
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
-        conv.append(Message(role=Role.USER, content=prompt))
+        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         response = await self._chat(
             conv.as_messages(),
             max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
             tools=[],
         )
-        conv.append(self._to_message(response))
+        await self._append_msg(conv, self._to_message(response))
         self._record_step(response, phase=phase, _trace=_trace)
         return response.content
 
@@ -771,7 +791,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         result = await self._complete_structured_attempt(
             use_prompt, schema, run, conversation=attempt_conv, _trace=trace, _phase=phase
         )
-        self._merge_conversation(conversation, attempt_conv)
+        await self._merge_conversation(conversation, attempt_conv)
         return result
 
     @staticmethod
@@ -799,7 +819,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 return result
         # Direct structured completion
         conv = conversation if conversation is not None else ListConversation()
-        conv.append(Message(role=Role.USER, content=prompt))
+        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         json_schema = dataclass_to_json_schema(schema)
         max_tokens = self._max_tokens(self._get_call_options(run))
         response = await self._chat(
@@ -809,7 +829,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             response_schema=json_schema,
             tools=[],
         )
-        conv.append(self._to_message(response))
+        await self._append_msg(conv, self._to_message(response))
         self._record_step(response, phase=_phase, _trace=_trace)
         return self._parse_structured_response(response.content, schema)
 

@@ -526,6 +526,121 @@ class TestCompleteConversationSupport:
         assert len(result.history) >= 2
 
 
+class AsyncCompactingConversation:
+    """Mock async conversation that tracks which append method is called."""
+
+    def __init__(self) -> None:
+        self._messages: list[Message] = []
+        self.sync_append_count = 0
+        self.async_append_count = 0
+
+    def append(self, msg: Message) -> None:
+        self._messages.append(msg)
+        self.sync_append_count += 1
+
+    async def append_async(self, msg: Message) -> None:
+        self._messages.append(msg)
+        self.async_append_count += 1
+
+    def as_messages(self) -> list[Message]:
+        return self._messages
+
+    @property
+    def full_history(self) -> list[Message]:
+        return self._messages
+
+
+class TestAsyncConversationLikeSupport:
+    """Tests for AsyncConversationLike protocol support."""
+
+    async def test_async_append_used_for_async_conversation(self) -> None:
+        """Complete uses append_async when conversation supports it."""
+        backend = MockBackend()
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        assert len(conv.full_history) == conv.async_append_count
+
+    async def test_sync_append_used_for_sync_conversation(self) -> None:
+        """Complete uses sync append when conversation doesn't support async."""
+        backend = MockBackend()
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()  # Sync-only conversation
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        assert len(conv.full_history) >= 2
+
+    async def test_non_complete_verb_uses_async_append(self) -> None:
+        """Non-Complete verbs (Ask, etc.) use append_async when conversation supports it."""
+        backend = MockBackend()
+        backend.queue_response(_tool_response("The answer is 42."))
+
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
+        verb = Ask(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("some artifact", "what is the answer?", conversation=conv)
+
+        assert result.value == "The answer is 42."
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        assert len(conv.full_history) == conv.async_append_count
+
+    async def test_tool_execution_syncs_via_async_append(self) -> None:
+        """Tool execution results are synced to async conversation via append_async."""
+        backend = MockBackend()
+        # First response: non-terminal tool call (search)
+        search_call = ToolCall(id="tc_search", name="search", arguments={"q": "test"})
+        backend.queue_response(_tool_response("Searching...", [search_call]))
+        # Second response: terminal tool call (done)
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        # Third response: confirmation
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        # Verify tool result message was synced (Role.TOOL in history)
+        tool_messages = [m for m in conv.full_history if m.role == "tool"]
+        assert len(tool_messages) >= 1, "Tool result should be synced to async conversation"
+
+
 # ---------------------------------------------------------------------------
 # Built-in iteration guard factories
 # ---------------------------------------------------------------------------

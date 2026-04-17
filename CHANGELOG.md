@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `AsyncConversationLike` protocol for non-blocking conversation append. Extends `ConversationLike`
+  with `append_async()` method. All verbs use `append_async()` when the conversation supports it,
+  allowing compaction strategies that involve I/O (e.g., LLM-based summarization) to run without
+  blocking the event loop.
 - `Complete` verb now accepts optional `conversation: ConversationLike` parameter. When provided,
   messages are appended to both an internal history (returned in `TaskResult.history`) and the
   external conversation. The LLM sees `conversation.as_messages()` which may be compacted,
