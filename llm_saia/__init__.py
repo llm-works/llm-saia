@@ -32,6 +32,7 @@ from .core.trace import (
     VerbTrace,
 )
 from .core.types import (
+    AsyncConversationLike,
     ChooseResult,
     ClassifyResult,
     ConversationLike,
@@ -92,6 +93,7 @@ __all__ = [
     "ToolCall",
     "ToolDef",
     # Conversation protocol
+    "AsyncConversationLike",
     "ConversationLike",
     "ListConversation",
     # Terminal

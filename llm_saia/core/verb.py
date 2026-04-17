@@ -450,7 +450,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
         Args:
             tool_calls: Tool calls to execute.
-            messages: Object supporting append() - either list[Message] or ConversationLike.
+            messages: Object supporting append() - list[Message] or ConversationLike.
         """
         if not self._config.executor:
             self._lg.warning(

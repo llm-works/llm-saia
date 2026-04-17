@@ -14,6 +14,7 @@ from .config import CallOptions, Config
 
 # Re-export conversation types for convenience
 from .conversation import (
+    AsyncConversationLike,
     ConversationLike,
     ListConversation,
     Message,
@@ -30,6 +31,7 @@ __all__ = [
     "AgentResponse",
     "ToolDef",
     # Conversation types (re-exported)
+    "AsyncConversationLike",
     "ConversationLike",
     "ListConversation",
     "Message",
