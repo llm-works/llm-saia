@@ -74,15 +74,28 @@ class IterationContext:
     that adapt behavior based on iteration progress (e.g., force terminal
     tool near the end of the loop).
 
+    This context is used in two scenarios:
+
+    1. **Tool loop**: Guards run after each LLM response during tool calling.
+       ``response`` contains the LLM response, ``parse_error`` is ``None``.
+
+    2. **Parse retry**: Guards run when structured output parsing fails.
+       ``response`` contains the response that failed to parse,
+       ``parse_error`` contains the :class:`StructuredOutputError`.
+
+    Guards can check ``parse_error`` to determine which scenario they're in.
+
     Attributes:
         response: The current LLM response to validate.
-        iteration: Current iteration number (0-indexed).
-        max_iterations: Maximum iterations configured for the loop.
+        iteration: Current iteration/attempt number (0-indexed).
+        max_iterations: Maximum iterations/attempts configured.
+        parse_error: If set, indicates this is a parse retry context.
     """
 
     response: Any  # AgentResponse, but Any to avoid circular import
     iteration: int
     max_iterations: int
+    parse_error: Any = None  # StructuredOutputError, but Any to avoid circular import
 
     @property
     def remaining(self) -> int:
@@ -97,41 +110,47 @@ class IterationContext:
 
 @dataclass(frozen=True)
 class IterationGuard:
-    """Behavioral constraint enforced after each LLM response in a tool-calling loop.
+    """Behavioral constraint enforced after each LLM response in a loop.
 
-    Unlike :class:`OutputGuard` (which validates the final result and retries the
-    whole completion), an ``IterationGuard`` runs *during* the loop.  When its
-    validator returns a feedback string the message is injected into the
-    conversation and the loop continues — no retry, just a nudge.
+    Runs in two contexts:
+
+    1. **Tool loop**: After each LLM response during tool calling. When the
+       validator returns a feedback string, it's injected into the conversation
+       and the loop continues.
+
+    2. **Parse retry**: When structured output parsing fails (``ctx.parse_error``
+       is set). Guards with ``max_retries > 0`` participate in parse retry.
+       Return feedback to retry, or ``None`` to stop retrying.
 
     The validator receives an :class:`IterationContext` with the response and
-    loop state, so it can inspect ``content``, ``tool_calls``, and adapt
-    behavior based on iteration progress.
+    loop state. Check ``ctx.parse_error`` to detect parse retry context.
 
     Args:
         validator: Receives :class:`IterationContext`. Return ``None`` when
-            the response is acceptable, or a feedback string to inject.
+            the response is acceptable, or a feedback string to inject/retry.
         name: Optional name for logging and trace records.
+        max_retries: For parse retry context only. Guards with ``max_retries > 0``
+            participate in parse retry. Default 0 (tool loop only).
 
     Example:
+        >>> # Tool loop guard - require explanation with tool calls
         >>> guard = IterationGuard(
         ...     validator=lambda ctx: (
-        ...         "Explain what you're doing and why."
-        ...         if ctx.response.tool_calls and not (ctx.response.content or "").strip()
+        ...         "Explain what you're doing."
+        ...         if ctx.response.tool_calls and not ctx.parse_error
         ...         else None
         ...     ),
         ...     name="narrative",
         ... )
 
-        >>> # Force terminal tool when iterations are running low
-        >>> def force_terminal(ctx: IterationContext) -> str | None:
-        ...     if ctx.remaining <= 3 and not calls_terminal(ctx.response):
-        ...         return "You must call report_findings now."
-        ...     return None
+        >>> # Parse retry guard - retry on JSON errors
+        >>> from llm_saia.guards import schema_retry
+        >>> saia.with_guard(schema_retry(max_retries=2))
     """
 
     validator: Callable[[IterationContext], str | None]
     name: str | None = None
+    max_retries: int = 0  # >0 enables parse retry participation
 
 
 class Guarded:

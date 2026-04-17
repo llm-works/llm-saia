@@ -126,18 +126,18 @@ class Configurable(ABC):
         - :class:`OutputGuard` — validates the final result and retries if
           invalid (applied after completion).
         - :class:`IterationGuard` — enforces behavioral constraints after each
-          LLM response in a tool-calling loop. On failure the feedback string is
-          injected into the conversation and the loop continues.
+          LLM response in a loop. Runs during tool loops and parse retry loops.
+          On failure the feedback string is injected and the loop continues.
 
         Multiple guards can be chained and are applied in order.
 
         Example:
             >>> from llm_saia import IterationGuard
-            >>> from llm_saia.guards import english_only
+            >>> from llm_saia.guards import english_only, schema_retry
             >>> result = await (
             ...     saia
             ...     .with_guard(english_only())
-            ...     .with_guard(IterationGuard(require_narrative, name="narrative"))
+            ...     .with_guard(schema_retry())
             ...     .complete(task)
             ... )
 
@@ -164,7 +164,7 @@ class Configurable(ABC):
         See :meth:`with_guard` for details on guard behavior.
 
         Args:
-            *guards: OutputGuard and/or IterationGuard instances to add.
+            *guards: Guard instances to add.
 
         Raises:
             ValueError: If no guards are provided.
