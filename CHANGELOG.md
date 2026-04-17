@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Complete` verb now accepts optional `conversation: ConversationLike` parameter. When provided,
+  messages are appended to both an internal history (returned in `TaskResult.history`) and the
+  external conversation. The LLM sees `conversation.as_messages()` which may be compacted,
+  enabling long-running tool loops without unbounded context growth. `TaskResult.history` always
+  contains the complete uncompacted history.
 - `IterationContext` passed to `IterationGuard` validators, providing access to `response`,
   `iteration`, `max_iterations`, and `remaining` property. Enables guards that adapt behavior
   based on loop progress (e.g., force terminal tool when iterations are running low).

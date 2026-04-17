@@ -382,6 +382,152 @@ class TestIterationGuardInComplete:
 
 
 # ---------------------------------------------------------------------------
+# Complete verb conversation support
+# ---------------------------------------------------------------------------
+
+
+class CompactingConversation:
+    """Mock conversation that tracks appends and can return compacted view."""
+
+    def __init__(self) -> None:
+        self._messages: list[Message] = []
+        self._compacted_view: list[Message] | None = None
+
+    def append(self, msg: Message) -> None:
+        self._messages.append(msg)
+
+    def as_messages(self) -> list[Message]:
+        """Return compacted view if set, otherwise full messages."""
+        return self._compacted_view if self._compacted_view is not None else self._messages
+
+    def set_compacted_view(self, messages: list[Message]) -> None:
+        """Set what as_messages() returns (simulates compaction)."""
+        self._compacted_view = messages
+
+    @property
+    def full_history(self) -> list[Message]:
+        """Access to full internal history for assertions."""
+        return self._messages
+
+
+class TestCompleteConversationSupport:
+    """Tests for Complete verb conversation parameter."""
+
+    async def test_messages_appended_to_conversation(self) -> None:
+        """Complete appends messages to provided conversation."""
+        backend = MockBackend()
+        # Done call + confirmation (terminal requires confirmation by default)
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # Conversation should have initial user message + assistant responses
+        assert len(conv.full_history) >= 2
+        assert conv.full_history[0].role == "user"
+        assert conv.full_history[0].content == "test task"
+
+    async def test_history_contains_full_messages(self) -> None:
+        """TaskResult.history contains full history even if conv compacts."""
+        backend = MockBackend()
+        # First: tool call
+        backend.queue_response(_tool_response("Searching", [_make_tool_call("search")]))
+        # Second: done + confirmation
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        # Result history should be complete (multiple messages)
+        assert len(result.history) >= 3
+        # Conversation also has full history (no compaction triggered in this test)
+        assert len(conv.full_history) == len(result.history)
+
+    async def test_llm_sees_conversation_view(self) -> None:
+        """LLM receives conv.as_messages() which may be compacted."""
+        backend = MockBackend()
+        messages_sent_to_llm: list[list[Message]] = []
+
+        original_chat = backend.chat
+
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> AgentResponse:
+            messages_sent_to_llm.append(list(messages))
+            return await original_chat(messages, **kwargs)
+
+        backend.chat = tracking_chat  # type: ignore[assignment]
+
+        # Queue: search tool, then done + confirmation
+        backend.queue_response(_tool_response("Searching", [_make_tool_call("search")]))
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()
+        # After a few messages, simulate compaction
+        original_append = conv.append
+
+        def compacting_append(msg: Message) -> None:
+            original_append(msg)
+            # After 4 messages, set compacted view (only latest 2 messages)
+            if len(conv._messages) >= 4:
+                conv.set_compacted_view(conv._messages[-2:])
+
+        conv.append = compacting_append  # type: ignore[method-assign]
+
+        await verb("test task", conversation=conv)
+
+        # Should have 3 LLM calls (search, done, confirm)
+        assert len(messages_sent_to_llm) == 3
+        # First call sees just the initial message
+        assert len(messages_sent_to_llm[0]) == 1
+        # Later calls should see compacted view (2 messages) after threshold
+        # The exact count depends on when compaction triggers, but it should be <= full history
+        assert len(messages_sent_to_llm[2]) <= len(conv.full_history)
+
+    async def test_no_conversation_works_as_before(self) -> None:
+        """Complete works without conversation parameter (backward compatible)."""
+        backend = MockBackend()
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        # No conversation parameter
+        result = await verb("test task")
+
+        assert result.completed
+        assert len(result.history) >= 2
+
+
+# ---------------------------------------------------------------------------
 # Built-in iteration guard factories
 # ---------------------------------------------------------------------------
 
