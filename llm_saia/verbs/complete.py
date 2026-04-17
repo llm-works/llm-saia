@@ -159,10 +159,7 @@ class Complete(Verb):
         )
         # Sync initial message to external conversation if provided
         if conversation is not None:
-            if isinstance(conversation, AsyncConversationLike):
-                await conversation.append_async(initial_msg)
-            else:
-                conversation.append(initial_msg)
+            await self._append_msg(conversation, initial_msg)
         return ctx
 
     async def _run_loop(
@@ -386,10 +383,7 @@ class Complete(Verb):
         if ctx.conv is None:
             return
         for msg in ctx.messages[pre_len:]:
-            if isinstance(ctx.conv, AsyncConversationLike):
-                await ctx.conv.append_async(msg)
-            else:
-                ctx.conv.append(msg)
+            await self._append_msg(ctx.conv, msg)
 
     def _filter_tool_calls(
         self, tool_calls: list[ToolCall], tool_ids: list[str] | None

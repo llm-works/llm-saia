@@ -3,6 +3,7 @@
 import pytest
 
 from llm_saia.core.conversation import (
+    AsyncConversationLike,
     ConversationLike,
     ListConversation,
     Message,
@@ -89,3 +90,62 @@ class TestCustomConversation:
 
         assert conv.append_count == 2
         assert len(conv.as_messages()) == 2
+
+
+class TestAsyncConversationLike:
+    """Tests for the AsyncConversationLike protocol."""
+
+    def test_sync_conversation_not_async(self) -> None:
+        """ListConversation should NOT be detected as AsyncConversationLike."""
+        conv = ListConversation()
+        assert isinstance(conv, ConversationLike)
+        assert not isinstance(conv, AsyncConversationLike)
+
+    def test_async_conversation_detected(self) -> None:
+        """Custom async conversation should be detected as AsyncConversationLike."""
+
+        class AsyncConversation:
+            def __init__(self) -> None:
+                self._messages: list[Message] = []
+
+            def append(self, msg: Message) -> None:
+                self._messages.append(msg)
+
+            async def append_async(self, msg: Message) -> None:
+                self._messages.append(msg)
+
+            def as_messages(self) -> list[Message]:
+                return self._messages
+
+        conv = AsyncConversation()
+        assert isinstance(conv, ConversationLike)
+        assert isinstance(conv, AsyncConversationLike)
+
+    async def test_append_async_called(self) -> None:
+        """Verify append_async is actually called for async conversations."""
+
+        class TrackingAsyncConversation:
+            def __init__(self) -> None:
+                self._messages: list[Message] = []
+                self.sync_count = 0
+                self.async_count = 0
+
+            def append(self, msg: Message) -> None:
+                self._messages.append(msg)
+                self.sync_count += 1
+
+            async def append_async(self, msg: Message) -> None:
+                self._messages.append(msg)
+                self.async_count += 1
+
+            def as_messages(self) -> list[Message]:
+                return self._messages
+
+        conv = TrackingAsyncConversation()
+        msg = Message(role="user", content="test")
+
+        # Directly test the async method
+        await conv.append_async(msg)
+        assert conv.async_count == 1
+        assert conv.sync_count == 0
+        assert len(conv.as_messages()) == 1
