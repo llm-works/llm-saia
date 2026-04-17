@@ -53,7 +53,7 @@ class _LoopCtx:
 
     def llm_messages(self) -> list[Message]:
         """Messages for LLM calls - uses conv (possibly compacted) if available."""
-        return self.conv.as_messages() if self.conv else self.messages
+        return self.conv.as_messages() if self.conv is not None else self.messages
 
     def append(self, msg: Message) -> None:
         """Append to internal history and external conv (if present)."""
@@ -363,7 +363,9 @@ class Complete(Verb):
         ctx.append(self._to_message(response))
         if response.tool_calls:
             calls = self._filter_tool_calls(response.tool_calls, action.tool_ids_to_execute)
-            self._ack_skipped_tools(response.tool_calls, action.tool_ids_to_execute, ctx)
+            self._ack_skipped_tools(
+                response.tool_calls, action.tool_ids_to_execute, ctx, confirmation_pending=True
+            )
             await self._execute_tools(calls, ctx)  # ctx satisfies MessageAppendable
 
     def _filter_tool_calls(
@@ -379,31 +381,35 @@ class Complete(Verb):
         all_calls: list[ToolCall],
         execute_ids: list[str] | None,
         ctx: _LoopCtx,
+        *,
+        confirmation_pending: bool = False,
     ) -> None:
         """Add synthetic tool results for tool calls that won't be executed.
 
         LLM APIs require every tool_call in an assistant message to have a
         matching tool result. When we skip executing a tool (e.g., the terminal
         tool during confirmation), we still need to provide a result.
+
+        Args:
+            confirmation_pending: If True, use "Awaiting confirmation." message
+                (for terminal tool confirmation flow). Otherwise use neutral
+                "Acknowledged." (for COMPLETE/FAIL/INSTRUCT/SKIP paths).
         """
         if execute_ids is None:
             return
+        content = (
+            "Acknowledged. Awaiting confirmation." if confirmation_pending else "Acknowledged."
+        )
         skip_ids = {c.id for c in all_calls} - set(execute_ids)
         for call in all_calls:
             if call.id in skip_ids:
-                ctx.append(
-                    Message(
-                        role=Role.TOOL,
-                        content="Acknowledged. Awaiting confirmation.",
-                        tool_call_id=call.id,
-                    )
-                )
+                ctx.append(Message(role=Role.TOOL, content=content, tool_call_id=call.id))
 
     def _ack_response_tools(self, response: AgentResponse, ctx: _LoopCtx) -> None:
         """Acknowledge all tool_calls in a response that won't be executed.
 
-        Must be called after _add_response_if_needed for INSTRUCT/SKIP paths
-        where the assistant message contains tool_calls but no tools are executed.
+        Must be called after _add_response_if_needed for INSTRUCT/SKIP/COMPLETE/FAIL
+        paths where the assistant message contains tool_calls but no tools are executed.
         """
         if response.tool_calls:
             self._ack_skipped_tools(response.tool_calls, [], ctx)
