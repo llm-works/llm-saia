@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypedDict, TypeVar
 
 from .backend import AgentResponse
 from .config import DEFAULT_CALL, CallOptions, Config
@@ -31,6 +31,13 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 _SENTINEL: Any = object()  # default marker for _chat(tools=...)
+
+
+class _ParseRetryState(TypedDict):
+    """State for parse retry loop (avoids many parameters)."""
+
+    error: StructuredOutputError | None
+    feedback: str | None
 
 
 class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
@@ -624,36 +631,125 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
     ) -> T:
-        """Complete structured with output guards applied after parsing."""
+        """Complete structured with iteration guards (for parse retry) and output guards."""
         trace = _trace if _trace is not None else self._init_verb_trace()
-        # max_attempts=1 (no retry): parse retry was removed as a built-in behavior.
-        # The retry infrastructure is preserved for potential future guard-based retry.
-        max_attempts = 1
-        last_error: StructuredOutputError | None = None
+        config = self._get_call_options(run)
+        # Guards with parse_max_retries > 0 participate in parse retry
+        parse_retry_guards = tuple(g for g in config.iteration_guards if g.parse_max_retries > 0)
+        max_attempts = 1 + sum(g.parse_max_retries for g in parse_retry_guards)
+        state: _ParseRetryState = {"error": None, "feedback": None}
 
         for attempt in range(max_attempts):
-            phase = "attempt" if attempt == 0 else "parse_retry"
             try:
-                result = await self._structured_attempt_cycle(
-                    prompt, schema, run, conversation, last_error, attempt, phase, trace
+                return await self._structured_attempt_with_guards(
+                    prompt, schema, run, conversation, state, attempt, trace, _trace
                 )
-                result = await self._apply_guards(
-                    prompt, result, schema, run, conversation=conversation, _trace=trace
-                )
-                if _trace is None:
-                    self._emit_verb_trace(trace)
-                return result
             except StructuredOutputError as e:
-                last_error = e
-                self._mark_last_step_parse_failure(trace, e)
-                if attempt < max_attempts - 1:
-                    self._log_parse_retry(schema.__name__, attempt + 1, max_attempts, e)
+                should_retry = self._handle_parse_error(
+                    e, parse_retry_guards, attempt, max_attempts, trace, state
+                )
+                if should_retry:
                     continue
-                if _trace is None:
-                    self._emit_verb_trace(trace)
+                self._emit_verb_trace_if_root(trace, _trace)
                 raise
 
-        raise last_error  # type: ignore[misc]
+        raise state["error"]  # type: ignore[misc]
+
+    async def _structured_attempt_with_guards(
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+        state: _ParseRetryState,
+        attempt: int,
+        trace: VerbTrace,
+        parent_trace: VerbTrace | None,
+    ) -> T:
+        """Single structured attempt with output guards applied."""
+        phase = "attempt" if attempt == 0 else "parse_retry"
+        result = await self._structured_attempt_cycle(
+            prompt,
+            schema,
+            run,
+            conversation,
+            state["error"],
+            state["feedback"],
+            attempt,
+            phase,
+            trace,
+        )
+        result = await self._apply_guards(
+            prompt, result, schema, run, conversation=conversation, _trace=trace
+        )
+        self._emit_verb_trace_if_root(trace, parent_trace)
+        return result
+
+    def _emit_verb_trace_if_root(self, trace: VerbTrace, parent: VerbTrace | None) -> None:
+        """Emit verb trace only if this is the root trace (not nested)."""
+        if parent is None:
+            self._emit_verb_trace(trace)
+
+    def _handle_parse_error(
+        self,
+        error: StructuredOutputError,
+        guards: tuple[IterationGuard, ...],
+        attempt: int,
+        max_attempts: int,
+        trace: VerbTrace,
+        state: _ParseRetryState,
+    ) -> bool:
+        """Handle parse error: mark trace, evaluate guards, update state. Returns True to retry."""
+        self._mark_last_step_parse_failure(trace, error)
+        # Create a minimal response for the context
+        response = AgentResponse(content=error.raw_content or "", tool_calls=[])
+        feedback = self._eval_parse_retry_guards(
+            guards, response, error, attempt, max_attempts, trace
+        )
+        state["error"] = error
+        state["feedback"] = feedback
+        if feedback and attempt < max_attempts - 1:
+            schema_name = error.schema_name or "unknown"
+            self._log_parse_retry(schema_name, attempt + 1, max_attempts, error)
+            return True
+        return False
+
+    def _eval_parse_retry_guards(
+        self,
+        guards: tuple[IterationGuard, ...],
+        response: AgentResponse,
+        error: StructuredOutputError,
+        attempt: int,
+        max_attempts: int,
+        trace: VerbTrace,
+    ) -> str | None:
+        """Evaluate iteration guards in parse retry context.
+
+        Like tool loop guards, evaluates all guards and combines feedback.
+        Uses _eval_single_guard for consistent exception handling.
+        """
+        if not guards:
+            return None
+        ctx = IterationContext(
+            response=response,
+            iteration=attempt,
+            max_iterations=max_attempts,
+            parse_error=error,
+        )
+        feedback_parts: list[str] = []
+        for guard in guards:
+            feedback = self._eval_single_guard(guard, ctx)
+            if feedback is not None:
+                self._log_parse_guard_trigger(guard.name, attempt, feedback)
+                feedback_parts.append(feedback)
+        return "\n\n".join(feedback_parts) if feedback_parts else None
+
+    def _log_parse_guard_trigger(self, name: str | None, attempt: int, feedback: str) -> None:
+        """Log when a parse guard triggers a retry."""
+        self._lg.debug(
+            "parse guard triggered retry",
+            extra={"guard": name or "guard", "attempt": attempt, "feedback": feedback[:100]},
+        )
 
     async def _structured_attempt_cycle(
         self,
@@ -662,12 +758,15 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         run: CallOptions | None,
         conversation: ConversationLike | None,
         last_error: StructuredOutputError | None,
+        last_feedback: str | None,
         attempt: int,
         phase: str,
         trace: VerbTrace,
     ) -> T:
         """Run one parse attempt: build prompt, fork conv, call backend."""
-        use_prompt = self._retry_prompt_or_original(prompt, schema, last_error, attempt)
+        use_prompt = self._retry_prompt_or_original(
+            prompt, schema, last_error, last_feedback, attempt
+        )
         attempt_conv = self._fork_conversation(conversation)
         result = await self._complete_structured_attempt(
             use_prompt, schema, run, conversation=attempt_conv, _trace=trace, _phase=phase
@@ -712,22 +811,38 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         )
         conv.append(self._to_message(response))
         self._record_step(response, phase=_phase, _trace=_trace)
+        return self._parse_structured_response(response.content, schema)
+
+    def _parse_structured_response(self, content: str, schema: type[T]) -> T:
+        """Parse JSON response into schema, raising StructuredOutputError on failure."""
         try:
-            data = json.loads(response.content)
+            data = json.loads(content)
         except json.JSONDecodeError as e:
-            raise self._structured_output_error(e, response.content, schema.__name__) from e
-        return parse_json_to_dataclass(data, schema)
+            raise self._structured_output_error(e, content, schema.__name__) from e
+        try:
+            return parse_json_to_dataclass(data, schema)
+        except (TypeError, ValueError) as e:
+            raise StructuredOutputError(
+                f"Response does not match {schema.__name__}: {e}",
+                raw_content=content,
+                schema_name=schema.__name__,
+                parse_error=str(e),
+            ) from e
 
     def _retry_prompt_or_original(
         self,
         prompt: str,
         schema: type[T],
         last_error: StructuredOutputError | None,
+        last_feedback: str | None,
         attempt: int,
     ) -> str:
         """Return original prompt on first attempt, retry prompt on subsequent ones."""
         if attempt == 0:
             return prompt
+        # Use guard feedback if provided, otherwise build from error
+        if last_feedback:
+            return self._build_parse_retry_prompt_with_feedback(prompt, last_error, last_feedback)
         return self._build_parse_retry_prompt(
             prompt,
             schema,
@@ -753,6 +868,18 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         parts.append(
             f"\n\nPlease provide a valid JSON response matching the {schema.__name__} schema."
         )
+        return "".join(parts)
+
+    def _build_parse_retry_prompt_with_feedback(
+        self, original_prompt: str, error: StructuredOutputError | None, feedback: str
+    ) -> str:
+        """Build a retry prompt using guard-provided feedback."""
+        parts = [original_prompt, "\n\n---\n\n", feedback]
+        if error and error.raw_content:
+            raw = error.raw_content
+            if len(raw) > 500:
+                raw = raw[:500] + "... (truncated)"
+            parts.append(f"\n\nYour response was:\n```\n{raw}\n```")
         return "".join(parts)
 
     def _log_parse_retry(

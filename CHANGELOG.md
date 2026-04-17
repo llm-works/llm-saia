@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `terminal_status(tool, status_field, failure_values)` - reject terminal calls with failure status
   - `terminal_schema(tools, terminal_tool)` - validate terminal args against JSON schema
   - `contradiction(terminal_tool)` - detect hedging language when terminal tool is called
+- `IterationContext.parse_error` field for detecting parse retry context. When set, the guard is
+  running in parse retry mode (structured output failed to parse).
+- `IterationGuard.parse_max_retries` field. Guards with `parse_max_retries > 0` participate in
+  parse retry (retrying when structured output JSON parsing fails). When multiple guards have
+  `parse_max_retries > 0`, their retry budgets are summed (e.g., two guards with 2 retries each
+  allow up to 5 attempts). All participating guards are evaluated on each attempt; their feedback
+  is combined.
+- Built-in `schema_retry(max_retries=2)` guard - retry with escalating feedback when JSON
+  parsing fails. Migration from `with_parse_retries(n)`: use `.with_guard(schema_retry(n))`
 - **Trace-level observability** for debugging stuck loops and agent behavior. Enable trace logging
   to see detailed execution flow:
   - Tool results returned to LLM (truncated preview for large results)
@@ -40,8 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **BREAKING**: `retries()` / `with_retries()` removed. Terminal failure retry behavior
   should be implemented via `IterationGuard` instead.
-- **BREAKING**: `parse_retries()` / `with_parse_retries()` removed. Structured output parse
-  retry behavior should be implemented via guards instead.
+- **BREAKING**: `parse_retries()` / `with_parse_retries()` removed. Use the built-in
+  `schema_retry()` guard instead: `.with_guard(schema_retry(2))`
 - **BREAKING**: `CallOptions.max_retries`, `CallOptions.retry_escalation`,
   `CallOptions.parse_retries` removed.
 - Controller no longer handles terminal failure retries or confirmation contradiction
