@@ -594,6 +594,23 @@ class TestAsyncConversationLikeSupport:
         assert result.completed
         assert len(conv.full_history) >= 2
 
+    async def test_non_complete_verb_uses_async_append(self) -> None:
+        """Non-Complete verbs (Ask, etc.) use append_async when conversation supports it."""
+        backend = MockBackend()
+        backend.queue_response(_tool_response("The answer is 42."))
+
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
+        verb = Ask(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("some artifact", "what is the answer?", conversation=conv)
+
+        assert result.value == "The answer is 42."
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        assert len(conv.full_history) == conv.async_append_count
+
 
 # ---------------------------------------------------------------------------
 # Built-in iteration guard factories

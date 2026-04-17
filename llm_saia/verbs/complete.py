@@ -16,7 +16,7 @@ from ..core.controller import (
     LoopController,
     Observation,
 )
-from ..core.conversation import AsyncConversationLike, ConversationLike, Message, Role, ToolCall
+from ..core.conversation import ConversationLike, Message, Role, ToolCall
 from ..core.guard import IterationGuard
 from ..core.trace import GuardOutcome, LLMCall, Step, ToolOutcome, Tracer, VerbTrace
 from ..core.types import DecisionReason, LoopScore, TaskResult
@@ -63,10 +63,7 @@ class _LoopCtx:
         """
         self.messages.append(msg)
         if self.conv is not None:
-            if isinstance(self.conv, AsyncConversationLike):
-                await self.conv.append_async(msg)
-            else:
-                self.conv.append(msg)
+            await Verb._append_msg(self.conv, msg)
 
 
 class Complete(Verb):
