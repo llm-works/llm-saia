@@ -45,8 +45,10 @@ class _ParseRetryState(TypedDict):
 class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     """Base class for all verbs. Subclass this to create custom verbs."""
 
-    # Truncation limit for log previews
+    # Truncation limit for log previews (debug level)
     _PREVIEW_LIMIT = 100
+    # Truncation limit for trace logs (high ceiling to prevent pathological cases)
+    _TRACE_LIMIT = 50_000
 
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
@@ -302,7 +304,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 "guard feedback injected into conversation",
                 extra={
                     "feedback_len": len(feedback),
-                    "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+                    "feedback": self._truncate(feedback, self._TRACE_LIMIT),
                     "acked_tools": [tc.name for tc in (response.tool_calls or [])],
                 },
             )
@@ -395,7 +397,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 "iteration guards triggered feedback",
                 extra={
                     "guards_fired": [o.name for o in outcomes if not o.passed],
-                    "feedback_preview": combined[:300] if len(combined) > 300 else combined,
+                    "feedback": self._truncate(combined, self._TRACE_LIMIT),
                 },
             )
             return combined, outcomes
@@ -501,21 +503,15 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         )
 
     def _log_tool_success(self, tc: ToolCall, result: Any) -> None:
-        """Log successful tool execution with result preview."""
+        """Log successful tool execution with result."""
         result_str = str(result)
-        # Truncate large results but show enough context for debugging
-        result_preview = (
-            result_str
-            if len(result_str) <= 1000
-            else f"{result_str[:1000]}... ({len(result_str)} chars)"
-        )
         self._lg.trace(
             "tool result returned to llm",
             extra={
                 "tool": tc.name,
                 "id": tc.id,
                 "result_len": len(result_str),
-                "result": result_preview,
+                "result": self._truncate(result_str, self._TRACE_LIMIT),
             },
         )
 
