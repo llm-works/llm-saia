@@ -22,7 +22,8 @@ class VerbLoggingMixin:
     Expects the host class to provide:
       - ``_lg`` property -> Logger | None
       - ``_config`` -> Config
-      - ``_PREVIEW_LIMIT`` class attribute
+      - ``_PREVIEW_LIMIT`` class attribute (debug-level truncation)
+      - ``_TRACE_LIMIT`` class attribute (trace-level truncation)
     """
 
     # Stubs for attributes/methods provided by the host class (Verb).
@@ -30,6 +31,7 @@ class VerbLoggingMixin:
     _config: Config
     _lg: Logger
     _PREVIEW_LIMIT: int
+    _TRACE_LIMIT: int
 
     def _has_tools(self) -> bool:
         raise NotImplementedError
@@ -155,18 +157,18 @@ class VerbLoggingMixin:
         return counts
 
     def _find_last_user_msg(self, messages: list[Any]) -> str | None:
-        """Find the last user message content."""
+        """Find the last user message content (truncated for trace logging)."""
         for msg in reversed(messages):
             if hasattr(msg, "role") and msg.role == "user":
-                return str(msg.content)
+                return self._truncate(str(msg.content), self._TRACE_LIMIT)
         return None
 
     def _find_recent_tool_results(self, messages: list[Any]) -> list[str]:
-        """Find recent tool results (last 2 from last 5 messages)."""
+        """Find recent tool results (last 2 from last 5 messages, truncated for trace logging)."""
         results = []
         for msg in reversed(messages[-5:]):
             if hasattr(msg, "role") and msg.role == "tool":
-                results.append(msg.content)
+                results.append(self._truncate(msg.content, self._TRACE_LIMIT))
             if len(results) >= 2:
                 break
         results.reverse()

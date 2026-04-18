@@ -551,10 +551,10 @@ loops, understanding why the LLM repeated an action, or verifying that guards fi
 | `"verb started"` | Verb name, trace_id |
 | `"verb completed"` | Duration, step count |
 | `"sending messages to llm"` | Message count by role, last user message preview, recent tool results |
-| `"tool result returned to llm"` | Tool name, result length, full result |
+| `"tool result returned to llm"` | Tool name, result length, result (up to 50KB) |
 | `"running iteration guards"` | List of guard names being checked |
-| `"iteration guards triggered feedback"` | Which guards fired, full feedback |
-| `"guard feedback injected into conversation"` | Full feedback content, acknowledged tool names |
+| `"iteration guards triggered feedback"` | Which guards fired, feedback (up to 50KB) |
+| `"guard feedback injected into conversation"` | Feedback content (up to 50KB), acknowledged tool names |
 | `"controller decision details"` | Action, reason, terminal_tool, terminal_data |
 | `"checking guard"` / `"guard passed"` | Output guard validation progress |
 
