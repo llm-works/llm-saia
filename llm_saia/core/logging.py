@@ -129,13 +129,10 @@ class VerbLoggingMixin:
 
     # -- Message assembly logging (for debugging stuck loops) --
 
-    # Max chars for tool result preview in trace logs
-    _TOOL_RESULT_PREVIEW = 500
-
     def _log_message_assembly(self, call_id: str, messages: list[Any]) -> None:
         """Log the messages being sent to LLM (critical for debugging stuck loops)."""
         role_counts = self._count_roles(messages)
-        last_user = self._find_last_user_preview(messages)
+        last_user = self._find_last_user_msg(messages)
         tool_results = self._find_recent_tool_results(messages)
 
         self._lg.trace(
@@ -157,11 +154,11 @@ class VerbLoggingMixin:
             counts[role] = counts.get(role, 0) + 1
         return counts
 
-    def _find_last_user_preview(self, messages: list[Any]) -> str | None:
-        """Find and preview the last user message."""
+    def _find_last_user_msg(self, messages: list[Any]) -> str | None:
+        """Find the last user message content."""
         for msg in reversed(messages):
             if hasattr(msg, "role") and msg.role == "user":
-                return self._truncate(msg.content, self._PREVIEW_LIMIT)
+                return str(msg.content)
         return None
 
     def _find_recent_tool_results(self, messages: list[Any]) -> list[str]:
@@ -169,7 +166,7 @@ class VerbLoggingMixin:
         results = []
         for msg in reversed(messages[-5:]):
             if hasattr(msg, "role") and msg.role == "tool":
-                results.append(self._truncate(msg.content, self._TOOL_RESULT_PREVIEW))
+                results.append(msg.content)
             if len(results) >= 2:
                 break
         results.reverse()
