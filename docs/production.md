@@ -551,10 +551,10 @@ loops, understanding why the LLM repeated an action, or verifying that guards fi
 | `"verb started"` | Verb name, trace_id |
 | `"verb completed"` | Duration, step count |
 | `"sending messages to llm"` | Message count by role, last user message preview, recent tool results |
-| `"tool result returned to llm"` | Tool name, result length, result (up to 50KB) |
+| `"tool result returned to llm"` | Tool name, result length, result (up to 50k chars) |
 | `"running iteration guards"` | List of guard names being checked |
-| `"iteration guards triggered feedback"` | Which guards fired, feedback (up to 50KB) |
-| `"guard feedback injected into conversation"` | Feedback content (up to 50KB), acknowledged tool names |
+| `"iteration guards triggered feedback"` | Which guards fired, feedback (up to 50k chars) |
+| `"guard feedback injected into conversation"` | Feedback content (up to 50k chars), acknowledged tool names |
 | `"controller decision details"` | Action, reason, terminal_tool, terminal_data |
 | `"checking guard"` / `"guard passed"` | Output guard validation progress |
 
@@ -577,7 +577,7 @@ When a loop gets stuck (LLM repeats the same action), trace logs answer:
 TRACE sending messages to llm {"call_id": "abc123", "msg_count": 8, "by_role": {"user": 3, "assistant": 3, "tool": 2}, "last_user_msg": "You reported status='stuck' but the task is not complete..."}
 TRACE tool result returned to llm {"tool": "read_file", "result_len": 2500, "result": "def process_data(x):..."}
 TRACE iteration guards triggered feedback {"guards_fired": ["terminal_status"], "feedback": "You reported status='stuck' but the task is not complete. Try a different approach."}
-TRACE guard feedback injected into conversation {"feedback_len": 85, "acked_tools": ["complete_task"]}
+TRACE guard feedback injected into conversation {"feedback_len": 85, "feedback": "You reported status='stuck' but the task is not complete. Try a different approach.", "acked_tools": ["complete_task"]}
 ```
 
 ## Monitoring Checklist

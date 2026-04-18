@@ -168,7 +168,7 @@ class VerbLoggingMixin:
         results = []
         for msg in reversed(messages[-5:]):
             if hasattr(msg, "role") and msg.role == "tool":
-                results.append(self._truncate(msg.content, self._TRACE_LIMIT))
+                results.append(self._truncate(str(msg.content), self._TRACE_LIMIT))
             if len(results) >= 2:
                 break
         results.reverse()

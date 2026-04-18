@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parsing fails. Migration from `with_parse_retries(n)`: use `.with_guard(schema_retry(n))`
 - **Trace-level observability** for debugging stuck loops and agent behavior. Enable trace logging
   to see detailed execution flow:
-  - Tool results returned to LLM (up to 50KB per item)
+  - Tool results returned to LLM (up to 50k chars per item)
   - Guard triggers with feedback content injected into conversation
   - Message assembly showing what's sent to LLM each iteration (counts by role, last user
     message, recent tool results)
