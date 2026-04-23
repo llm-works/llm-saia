@@ -43,12 +43,12 @@ class TestPythonTypeToJsonSchema:
 
     def test_optional_type(self) -> None:
         # Optional[str] should unwrap to string
-        schema = python_type_to_json_schema(Optional[str])  # noqa: UP007 - testing Optional syntax
+        schema = python_type_to_json_schema(Optional[str])  # noqa: UP045 - testing Optional syntax
         assert schema["type"] == "string"
 
     def test_optional_list(self) -> None:
         # Optional[list[int]] should unwrap to array of integers
-        schema = python_type_to_json_schema(Optional[list[int]])  # noqa: UP007 - testing Optional
+        schema = python_type_to_json_schema(Optional[list[int]])  # noqa: UP045 - testing Optional
         assert schema["type"] == "array"
         assert schema["items"]["type"] == "integer"
 
