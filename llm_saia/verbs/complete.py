@@ -205,13 +205,39 @@ class Complete(Verb):
         feedback, outcomes = self._run_iteration_guards(
             ctx.iteration_guards, response, iteration, ctx.call_options.max_iterations
         )
-        if feedback is not None:
-            await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
+
+        # Split feedback by blocking mode
+        blocking_fb, advisory_fb = self._split_guard_feedback(outcomes)
+
+        # Blocking guards fire → skip tool execution, inject feedback
+        if blocking_fb:
+            await self._apply_guard_nudge(ctx, response, blocking_fb, outcomes, iteration, tokens)
             return None, tokens, response.content
 
+        # No blocking guards, process iteration (may execute tools)
         action, result = await self._process_iteration(ctx, response, iteration, outcomes)
         self._score_action(ctx.acc, action, tokens)
+
+        # Advisory guards → inject feedback after tool execution
+        if advisory_fb:
+            await ctx.append(Message(role=Role.USER, content=advisory_fb))
+            self._log_advisory_feedback(iteration, outcomes, advisory_fb)
+
         return result, tokens, response.content
+
+    def _log_advisory_feedback(
+        self, iteration: int, outcomes: list[GuardOutcome], feedback: str
+    ) -> None:
+        """Log advisory guard feedback injection."""
+        self._lg.trace(
+            "advisory guard feedback injected after tool execution",
+            extra={
+                "iteration": iteration,
+                "guards_fired": [o.name for o in outcomes if not o.passed and not o.blocking],
+                "feedback_len": len(feedback),
+                "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+            },
+        )
 
     async def _apply_guard_nudge(
         self,
