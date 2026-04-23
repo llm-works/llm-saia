@@ -201,10 +201,10 @@ def build_step_from_response(
     trace_id: str = "",
     verb: str = "",
 ) -> Step:
-    """Build a Step from an AgentResponse (non-Complete verbs).
+    """Build a Step from an ChatResponse (non-Complete verbs).
 
     Args:
-        response: AgentResponse from backend.chat().
+        response: ChatResponse from backend.chat().
         phase: Step phase (attempt, parse_retry, guard_retry, iteration, finalize).
         trace_id: Trace ID for correlation.
         verb: Verb class name.

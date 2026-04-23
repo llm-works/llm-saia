@@ -4,7 +4,7 @@ SAIA defines what it needs from an LLM backend - implementations live elsewhere
 (e.g., llm-infer/client). This keeps SAIA as a pure language layer.
 
 Usage:
-    from llm_saia.core.backend import Backend, ToolDef, AgentResponse
+    from llm_saia.core.backend import Backend, ToolDef, ChatResponse
 
     class MyBackend(Backend):
         async def chat(self, messages, system=None, tools=None, ...):
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from .conversation import Message, ToolCall
 
 __all__ = [
-    "AgentResponse",
     "Backend",
+    "ChatResponse",
     "ToolDef",
 ]
 
@@ -37,8 +37,13 @@ class ToolDef:
 
 
 @dataclass
-class AgentResponse:
-    """Response from LLM that may include tool calls."""
+class ChatResponse:
+    """Response from Backend.chat().
+
+    `raw` holds the unmodified backend-native response. Reading from it couples
+    the caller to a specific backend; SAIA makes no stability guarantees about
+    its shape.
+    """
 
     content: str
     tool_calls: list[ToolCall]
@@ -46,6 +51,8 @@ class AgentResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     call_id: str = ""  # Set by SAIA per chat() call for tracing
+    model: str | None = None  # Resolved model name returned by the backend
+    raw: Any = None  # Backend-native response object; consumers reading it accept coupling
 
 
 class Backend(ABC):
@@ -67,7 +74,7 @@ class Backend(ABC):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         """Send a chat completion request.
 
         Args:
@@ -79,6 +86,6 @@ class Backend(ABC):
             temperature: Sampling temperature (None = backend default).
 
         Returns:
-            AgentResponse with content, tool calls, and token usage.
+            ChatResponse with content, tool calls, and token usage.
         """
         ...

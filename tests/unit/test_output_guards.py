@@ -9,7 +9,7 @@ from typing import Annotated, Any
 import pytest
 
 from llm_saia import Guarded, OutputGuard, OutputGuardError
-from llm_saia.core.backend import AgentResponse
+from llm_saia.core.backend import ChatResponse
 from llm_saia.core.config import Config
 from llm_saia.core.conversation import Message
 from llm_saia.core.logger import NullLogger
@@ -53,7 +53,7 @@ class SequencedMockBackend(MockBackend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         """Return queued responses before falling back to normal behavior."""
         self.last_messages = messages
         self.last_system = system

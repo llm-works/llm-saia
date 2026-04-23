@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from llm_saia.core.types import AgentResponse, ToolCall, ToolDef
+from llm_saia.core.types import ChatResponse, ToolCall, ToolDef
 from tests.unit.conftest import MockBackend, make_saia
 
 pytestmark = pytest.mark.unit
@@ -108,7 +108,7 @@ class TestWithTools:
 
         # Queue a tool call response, then a final text response
         backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="calc", arguments={"x": 1})],
                 finish_reason="tool_use",

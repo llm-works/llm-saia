@@ -66,7 +66,7 @@ async def __call__(self, task: str) -> str:
     return content
 ```
 
-### `_chat(messages, max_tokens) -> AgentResponse`
+### `_chat(messages, max_tokens) -> ChatResponse`
 
 Single LLM call. Use when you need fine-grained control.
 

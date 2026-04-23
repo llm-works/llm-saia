@@ -13,7 +13,7 @@ from llm_saia.core.backend import Backend
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.logger import Logger, NullLogger
 from llm_saia.core.types import (
-    AgentResponse,
+    ChatResponse,
     Message,
     ToolDef,
 )
@@ -59,7 +59,7 @@ class MockBackend(Backend):
         self.last_response_schema: dict[str, Any] | None = None
         self.last_temperature: float | None = None
         self._response_content: str = "mock response"
-        self._queued_responses: list[AgentResponse] = []
+        self._queued_responses: list[ChatResponse] = []
         self._structured_responses: dict[str, dict[str, Any]] = _default_structured_responses()
         self._queued_structured: dict[str, list[dict[str, Any]]] = {}
 
@@ -121,18 +121,18 @@ class MockBackend(Backend):
             self._queued_structured[schema_name] = []
         self._queued_structured[schema_name].append(response_dict)
 
-    def queue_response(self, response: AgentResponse) -> None:
+    def queue_response(self, response: ChatResponse) -> None:
         """Queue a response for the next chat() call."""
         self._queued_responses.append(response)
 
     # Backwards compatibility alias
-    def queue_tool_response(self, response: AgentResponse) -> None:
+    def queue_tool_response(self, response: ChatResponse) -> None:
         """Queue a response for the next chat() call (alias for queue_response)."""
         self._queued_responses.append(response)
 
-    def _make_response(self, content: str) -> AgentResponse:
-        """Create a simple AgentResponse with given content."""
-        return AgentResponse(content=content, tool_calls=[], finish_reason="end_turn")
+    def _make_response(self, content: str) -> ChatResponse:
+        """Create a simple ChatResponse with given content."""
+        return ChatResponse(content=content, tool_calls=[], finish_reason="end_turn")
 
     async def chat(
         self,
@@ -142,7 +142,7 @@ class MockBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         """Return predetermined response."""
         self.last_messages = messages
         self.last_system = system

@@ -11,7 +11,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .backend import AgentResponse
+    from .backend import ChatResponse
     from .config import CallOptions, Config
     from .logger import Logger
 
@@ -50,7 +50,7 @@ class VerbLoggingMixin:
             },
         )
 
-    def _log_response(self, response: AgentResponse, iteration: int, total_tokens: int) -> None:
+    def _log_response(self, response: ChatResponse, iteration: int, total_tokens: int) -> None:
         """Log LLM response."""
         self._lg.debug(
             "llm response received",
@@ -194,14 +194,14 @@ class VerbLoggingMixin:
     # Minimum expected input tokens per tool definition (conservative estimate)
     _MIN_TOKENS_PER_TOOL = 50
 
-    def _check_tool_support(self, response: AgentResponse) -> None:
+    def _check_tool_support(self, response: ChatResponse) -> None:
         """Check for signs that the model may not natively support function calling."""
         if not self._config.warn_tool_support or not self._has_tools():
             return
         self._warn_low_input_tokens(response)
         self._warn_tool_json_in_text(response)
 
-    def _warn_low_input_tokens(self, response: AgentResponse) -> None:
+    def _warn_low_input_tokens(self, response: ChatResponse) -> None:
         """Warn if input tokens suggest server ignored tool definitions."""
         if response.tool_calls:  # Tools working, no warning needed
             return
@@ -217,7 +217,7 @@ class VerbLoggingMixin:
                 },
             )
 
-    def _warn_tool_json_in_text(self, response: AgentResponse) -> None:
+    def _warn_tool_json_in_text(self, response: ChatResponse) -> None:
         """Warn if LLM outputs tool-call JSON as text instead of using tool_calls."""
         if response.tool_calls or not response.content:
             return

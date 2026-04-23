@@ -1,7 +1,7 @@
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
 from .builder import SAIABuilder
-from .core.backend import AgentResponse, Backend, ToolDef
+from .core.backend import Backend, ChatResponse, ToolDef
 from .core.config import CallOptions, Config, TerminalConfig
 from .core.conversation import Message, Role, ToolCall
 from .core.errors import (
@@ -83,7 +83,7 @@ __all__ = [
     "VerifyResult",
     "VerbResult",
     # Task types
-    "AgentResponse",
+    "ChatResponse",
     "DecisionReason",
     "LoopScore",
     "Message",

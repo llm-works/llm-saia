@@ -92,7 +92,7 @@ class IterationContext:
         parse_error: If set, indicates this is a parse retry context.
     """
 
-    response: Any  # AgentResponse, but Any to avoid circular import
+    response: Any  # ChatResponse, but Any to avoid circular import
     iteration: int
     max_iterations: int
     parse_error: Any = None  # StructuredOutputError, but Any to avoid circular import

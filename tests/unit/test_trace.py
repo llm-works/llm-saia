@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_saia.core.backend import AgentResponse, ToolDef
+from llm_saia.core.backend import ChatResponse, ToolDef
 from llm_saia.core.conversation import ToolCall
 from llm_saia.core.trace import (
     GuardOutcome,
@@ -225,7 +225,7 @@ class TestBuildStepFromResponse:
 
     def test_builds_from_text_response(self) -> None:
         """Builds a Step from a plain text response."""
-        response = AgentResponse(
+        response = ChatResponse(
             content="hello",
             tool_calls=[],
             input_tokens=50,
@@ -245,7 +245,7 @@ class TestBuildStepFromResponse:
 
     def test_builds_from_tool_response(self) -> None:
         """Builds a Step from a response with tool calls."""
-        response = AgentResponse(
+        response = ChatResponse(
             content="",
             tool_calls=[
                 ToolCall(id="tc1", name="search", arguments={"q": "test"}),

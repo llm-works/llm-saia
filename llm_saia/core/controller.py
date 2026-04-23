@@ -19,7 +19,7 @@ from .classifier import LLMTaskStateClassifier, TaskState
 from .types import DecisionReason
 
 if TYPE_CHECKING:
-    from .backend import AgentResponse
+    from .backend import ChatResponse
     from .config import Config, TerminalConfig
     from .conversation import Message, ToolCall
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class Observation:
     """What the controller observes at each iteration."""
 
-    response: AgentResponse
+    response: ChatResponse
     messages: list[Message]
     iteration: int
     task: str
@@ -325,7 +325,7 @@ class DefaultController:
     )
 
     @staticmethod
-    def _is_empty_response(response: AgentResponse) -> bool:
+    def _is_empty_response(response: ChatResponse) -> bool:
         """Check if the LLM produced an empty response (no content and no tool calls)."""
         return not response.content and not response.tool_calls
 
