@@ -342,6 +342,8 @@ class OpenAIBackend(Backend):
             finish_reason=choice.get("finish_reason"),
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
+            model=data.get("model"),
+            raw=data,
         )
 
     async def chat(

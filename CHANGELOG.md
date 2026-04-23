@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChatResponse.model` — resolved model name returned by the backend. Populated when a backend
   resolves a placeholder like `"auto"` to a concrete model; closes the cost-attribution gap where
   downstream consumers had no way to know which model actually ran.
+- `LLMCall.model` — resolved model name propagated from `ChatResponse.model` into each trace
+  step, so cost attribution can be computed from `VerbTrace` alone without holding onto the
+  raw response.
 - `ChatResponse.raw` — escape hatch carrying the unmodified backend-native response object.
   Consumers reading from it accept coupling to a specific backend in exchange for access to
   vendor-specific fields (cache tokens, thinking/reasoning blocks, adapter metadata, etc.) that
@@ -58,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Renamed `AgentResponse` → `ChatResponse` to match the `Backend.chat()` method
   name and align with `LLMCall` already used in `trace.py`. The old name is removed; update
   imports and type hints to `ChatResponse`.
+  Migration: `s/AgentResponse/ChatResponse/g` on imports and type hints (e.g.,
+  `from llm_saia.core.backend import AgentResponse` → `ChatResponse`).
 - **BREAKING**: `IterationGuard.validator` signature changed from `Callable[[ChatResponse], str | None]`
   to `Callable[[IterationContext], str | None]`. Access response via `ctx.response`.
 - **BREAKING**: `lg: Logger` is now the first field in `Config` (was after `backend`). This

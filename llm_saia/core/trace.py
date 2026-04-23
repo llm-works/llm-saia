@@ -55,6 +55,7 @@ class LLMCall:
     output_tokens: int = 0
     finish_reason: str | None = None
     duration_ms: int = 0
+    model: str | None = None
 
 
 @dataclass
@@ -201,7 +202,7 @@ def build_step_from_response(
     trace_id: str = "",
     verb: str = "",
 ) -> Step:
-    """Build a Step from an ChatResponse (non-Complete verbs).
+    """Build a Step from a ChatResponse (non-Complete verbs).
 
     Args:
         response: ChatResponse from backend.chat().
@@ -222,6 +223,7 @@ def build_step_from_response(
             output_tokens=getattr(response, "output_tokens", 0),
             finish_reason=getattr(response, "finish_reason", None),
             duration_ms=call_duration,
+            model=getattr(response, "model", None),
         ),
         tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
     )
