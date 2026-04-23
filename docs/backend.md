@@ -174,6 +174,8 @@ class OpenAIBackend(Backend):
             finish_reason=choice.get("finish_reason"),
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
+            model=data.get("model") or self._model,
+            raw=data,
         )
 
     def _convert_message(self, msg: Message) -> dict:
