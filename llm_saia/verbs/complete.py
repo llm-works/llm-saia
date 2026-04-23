@@ -218,8 +218,8 @@ class Complete(Verb):
         action, result = await self._process_iteration(ctx, response, iteration, outcomes)
         self._score_action(ctx.acc, action, tokens)
 
-        # Advisory guards → inject feedback after tool execution
-        if advisory_fb:
+        # Advisory guards → inject feedback after tool execution (skip if task completed)
+        if advisory_fb and result is None:
             await ctx.append(Message(role=Role.USER, content=advisory_fb))
             self._log_advisory_feedback(iteration, outcomes, advisory_fb)
 
@@ -235,7 +235,7 @@ class Complete(Verb):
                 "iteration": iteration,
                 "guards_fired": [o.name for o in outcomes if not o.passed and not o.blocking],
                 "feedback_len": len(feedback),
-                "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+                "feedback": self._truncate(feedback, self._TRACE_LIMIT),
             },
         )
 
@@ -261,7 +261,7 @@ class Complete(Verb):
                 "iteration": iteration,
                 "guards_fired": [o.name for o in outcomes if not o.passed],
                 "feedback_len": len(feedback),
-                "feedback": feedback[:500] if len(feedback) > 500 else feedback,
+                "feedback": self._truncate(feedback, self._TRACE_LIMIT),
                 "acked_tools": [tc.name for tc in (response.tool_calls or [])],
             },
         )
