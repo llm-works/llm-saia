@@ -137,9 +137,14 @@ class IterationGuard:
         parse_max_retries: Retry budget for parse retry context. Guards with
             ``parse_max_retries > 0`` participate when structured output parsing
             fails. Default 0 (tool loop only, no parse retry).
+        blocking: If ``True`` (default), tool calls are skipped when the guard
+            fires - use for guards that reject bad tool calls (e.g., terminal
+            tool with invalid status). If ``False``, tools execute first and
+            feedback is injected afterward - use for advisory guards that want
+            to shape behavior without blocking progress (e.g., narrative guards).
 
     Example:
-        >>> # Tool loop guard - require explanation with tool calls
+        >>> # Tool loop guard - require explanation with tool calls (advisory)
         >>> guard = IterationGuard(
         ...     validator=lambda ctx: (
         ...         "Explain what you're doing."
@@ -147,6 +152,7 @@ class IterationGuard:
         ...         else None
         ...     ),
         ...     name="narrative",
+        ...     blocking=False,  # Advisory: tools run, then feedback injected
         ... )
 
         >>> # Parse retry guard - retry on JSON errors
@@ -157,6 +163,7 @@ class IterationGuard:
     validator: Callable[[IterationContext], str | None]
     name: str | None = None
     parse_max_retries: int = 0  # >0 enables parse retry participation
+    blocking: bool = True  # False = execute tools, then inject feedback (advisory mode)
 
     def __post_init__(self) -> None:
         """Validate parse_max_retries is non-negative."""

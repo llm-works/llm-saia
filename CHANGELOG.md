@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `IterationGuard.blocking` parameter (default `True`). Controls whether a guard blocks tool
+  execution or allows it to proceed:
+  - `blocking=True` (default): Tool calls are acknowledged but not executed; feedback is injected
+    and the loop retries. Use for guards that reject invalid tool calls (e.g., terminal tool with
+    bad status).
+  - `blocking=False`: Tools execute first, then feedback is injected. Use for advisory guards that
+    shape behavior without blocking progress (e.g., requiring narrative explanation alongside tool
+    calls).
+- `GuardOutcome.blocking` field in trace records, reflecting the guard's blocking mode.
 - `ChatResponse.model` — resolved model name returned by the backend. Populated when a backend
   resolves a placeholder like `"auto"` to a concrete model; closes the cost-attribution gap where
   downstream consumers had no way to know which model actually ran.

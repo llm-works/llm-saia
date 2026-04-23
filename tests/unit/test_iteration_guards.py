@@ -924,3 +924,161 @@ class TestOrdinalHelper:
         assert _ordinal(21) == "21st"
         assert _ordinal(22) == "22nd"
         assert _ordinal(23) == "23rd"
+
+
+# ---------------------------------------------------------------------------
+# Non-blocking (advisory) guards
+# ---------------------------------------------------------------------------
+
+
+class TestNonBlockingGuards:
+    """Tests for non-blocking (advisory) iteration guards."""
+
+    async def test_advisory_guard_executes_tools_then_injects_feedback(self) -> None:
+        """Non-blocking guard allows tool execution, then injects feedback."""
+        backend = MockBackend()
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"result for {name}"
+
+        # First: tool call without explanation
+        backend.queue_response(_tool_response("", [_make_tool_call("search", {"q": "test"})]))
+        # Second: final response (after tool result + advisory feedback)
+        backend.queue_response(_tool_response("Done with results"))
+
+        guard = IterationGuard(
+            validator=lambda ctx: "Explain what you're doing." if ctx.response.tool_calls else None,
+            name="narrative",
+            blocking=False,  # Advisory mode
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = Config(
+            lg=NullLogger(),
+            backend=backend,
+            tools=[SEARCH_TOOL],
+            executor=tracking_executor,
+            call=call,
+        )
+        verb = Instruct(config)
+        result = await verb("do something")
+
+        # Tool was executed despite guard firing
+        assert "search" in executed_tools
+        assert result.value == "Done with results"
+
+        # Verify message ordering: tool result comes before advisory feedback
+        messages = backend.last_messages
+        tool_msg_idx = next(i for i, m in enumerate(messages) if m.role == "tool")
+        feedback_idx = next(
+            i for i, m in enumerate(messages) if m.role == "user" and "Explain" in m.content
+        )
+        assert tool_msg_idx < feedback_idx, "Tool result must precede advisory feedback"
+
+    async def test_blocking_guard_takes_precedence(self) -> None:
+        """When both blocking and advisory guards fire, blocking wins."""
+        backend = MockBackend()
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"result for {name}"
+
+        # First: tool call → blocking guard fires → no execution
+        backend.queue_response(_tool_response("", [_make_tool_call("search", {"q": "test"})]))
+        # Second: retry with explanation → guards pass
+        backend.queue_response(
+            _tool_response("Searching now", [_make_tool_call("search", {"q": "test2"})])
+        )
+        # Third: final response
+        backend.queue_response(_tool_response("Done"))
+
+        blocking_guard = IterationGuard(
+            validator=lambda ctx: (
+                "STOP: Explain first." if not (ctx.response.content or "").strip() else None
+            ),
+            name="require_content",
+            blocking=True,
+        )
+        advisory_guard = IterationGuard(
+            validator=lambda ctx: "Also be verbose." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(blocking_guard, advisory_guard), max_iterations=10)
+        config = Config(
+            lg=NullLogger(),
+            backend=backend,
+            tools=[SEARCH_TOOL],
+            executor=tracking_executor,
+            call=call,
+        )
+        verb = Instruct(config)
+        result = await verb("do something")
+
+        # First tool call was blocked (no execution), second one succeeded
+        assert executed_tools == ["search"]
+        assert result.value == "Done"
+
+    async def test_advisory_guard_outcome_records_blocking_false(self) -> None:
+        """Guard outcome records blocking=False for advisory guards."""
+        backend = MockBackend()
+        backend.queue_response(_tool_response("", [_make_tool_call("search")]))
+        backend.queue_response(_tool_response("Done"))
+
+        guard = IterationGuard(
+            validator=lambda ctx: "Be verbose." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = _make_config_with_tools(backend, call=call)
+        verb = Instruct(config)
+        result = await verb("do something")
+
+        trace = result.trace
+        assert trace is not None
+        first_step = trace.steps[0]
+        assert len(first_step.guards) > 0
+        assert first_step.guards[0].blocking is False
+
+    async def test_advisory_feedback_skipped_on_task_completion(self) -> None:
+        """Advisory feedback is NOT injected when task completes in same iteration."""
+        backend = MockBackend()
+
+        # First: initial done call → controller asks for confirmation
+        done1 = ToolCall(id="tc_done1", name="done", arguments={"output": "result", "status": "ok"})
+        backend.queue_response(_tool_response("Here's my answer", [done1]))
+        # Second: confirmation → task completes (advisory guard fires but shouldn't inject)
+        done2 = ToolCall(id="tc_done2", name="done", arguments={"output": "result", "status": "ok"})
+        backend.queue_response(_tool_response("Confirming", [done2]))
+
+        # Advisory guard that fires when there are tool calls
+        guard = IterationGuard(
+            validator=lambda ctx: "Explain more." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = _make_config_with_tools(backend, call=call, terminal_tool="done")
+        verb = Complete(config)
+        result = await verb("do something")
+
+        # Task completed
+        assert result.completed
+        assert result.output == "result"
+
+        # Verify advisory feedback was NOT injected after completion.
+        # The final messages should be: assistant (confirm) -> tool (ack)
+        # NOT: assistant (confirm) -> tool (ack) -> user (Explain more.)
+        last_msg = result.history[-1]
+        assert last_msg.role.value == "tool", (
+            "Last message should be tool ack, not advisory feedback"
+        )
+        second_last = result.history[-2]
+        assert second_last.role.value == "assistant", "Second-to-last should be assistant confirm"

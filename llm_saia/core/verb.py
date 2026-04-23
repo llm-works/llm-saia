@@ -289,30 +289,69 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         _trace: VerbTrace | None,
     ) -> bool:
         """Check iteration guards and execute tools. Returns True if loop should continue."""
-        feedback, _outcomes = self._run_iteration_guards(
+        _feedback, outcomes = self._run_iteration_guards(
             iter_guards, response, iteration, max_iterations, _trace
         )
-        if feedback is not None:
-            # Acknowledge any pending tool calls so the conversation stays valid
-            for tc in response.tool_calls or []:
-                await self._append_msg(
-                    conv, Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id)
-                )
-            await self._append_msg(conv, Message(role=Role.USER, content=feedback))
-            # Log the guard feedback being injected (critical for debugging stuck loops)
-            self._lg.trace(
-                "guard feedback injected into conversation",
-                extra={
-                    "feedback_len": len(feedback),
-                    "feedback": self._truncate(feedback, self._TRACE_LIMIT),
-                    "acked_tools": [tc.name for tc in (response.tool_calls or [])],
-                },
-            )
+        blocking_fb, advisory_fb = self._split_guard_feedback(outcomes)
+
+        if blocking_fb:
+            await self._apply_blocking_feedback(response, conv, blocking_fb)
             return True
+
         if response.tool_calls:
             await self._execute_tools(response.tool_calls, conv)
+
+        if advisory_fb:
+            await self._apply_advisory_feedback(conv, advisory_fb)
             return True
-        return False
+
+        return bool(response.tool_calls)
+
+    async def _apply_blocking_feedback(
+        self, response: ChatResponse, conv: ConversationLike, feedback: str
+    ) -> None:
+        """ACK tool calls and inject blocking guard feedback."""
+        for tc in response.tool_calls or []:
+            await self._append_msg(
+                conv, Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id)
+            )
+        await self._append_msg(conv, Message(role=Role.USER, content=feedback))
+        self._lg.trace(
+            "blocking guard feedback injected",
+            extra={
+                "feedback_len": len(feedback),
+                "feedback": self._truncate(feedback, self._TRACE_LIMIT),
+                "acked_tools": [tc.name for tc in (response.tool_calls or [])],
+            },
+        )
+
+    async def _apply_advisory_feedback(self, conv: ConversationLike, feedback: str) -> None:
+        """Inject advisory guard feedback after tool execution."""
+        await self._append_msg(conv, Message(role=Role.USER, content=feedback))
+        self._lg.trace(
+            "advisory guard feedback injected",
+            extra={
+                "feedback_len": len(feedback),
+                "feedback": self._truncate(feedback, self._TRACE_LIMIT),
+            },
+        )
+
+    @staticmethod
+    def _split_guard_feedback(
+        outcomes: list[GuardOutcome],
+    ) -> tuple[str | None, str | None]:
+        """Split guard outcomes into blocking and advisory feedback strings."""
+        blocking_parts: list[str] = []
+        advisory_parts: list[str] = []
+        for o in outcomes:
+            if not o.passed and o.error:
+                if o.blocking:
+                    blocking_parts.append(o.error)
+                else:
+                    advisory_parts.append(o.error)
+        blocking = "\n\n".join(blocking_parts) if blocking_parts else None
+        advisory = "\n\n".join(advisory_parts) if advisory_parts else None
+        return blocking, advisory
 
     def _should_stop(
         self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
@@ -366,7 +405,12 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             result = self._eval_single_guard(guard, ctx)
             passed = result is None
             outcomes.append(
-                outcome_cls(name=guard.name, passed=passed, error=result if not passed else None)
+                outcome_cls(
+                    name=guard.name,
+                    passed=passed,
+                    error=result if not passed else None,
+                    blocking=guard.blocking,
+                )
             )
             if not passed:
                 self._log_iteration_guard_fired(guard.name, result)

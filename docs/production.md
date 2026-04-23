@@ -328,6 +328,32 @@ When a guard fires:
 2. The feedback string is injected as a user message
 3. The loop continues — no retry, just a course correction
 
+#### Blocking vs Advisory Guards
+
+By default, guards **block** tool execution when they fire — tools are acknowledged but not run.
+This is correct for guards that reject invalid tool calls:
+
+```python
+# Blocking (default): reject terminal tool with bad status
+guard = IterationGuard(validator=check_status, blocking=True)
+```
+
+For guards that want to shape behavior without blocking progress, use `blocking=False`. Tools
+execute first, then feedback is injected:
+
+```python
+# Advisory: execute tools, then ask for explanation
+def require_narrative(ctx: IterationContext) -> str | None:
+    if ctx.response.tool_calls and not (ctx.response.content or "").strip():
+        return "Explain what you're doing and why."
+    return None
+
+guard = IterationGuard(require_narrative, name="narrative", blocking=False)
+```
+
+With `blocking=False`, the LLM gets tool results AND the feedback in the same iteration,
+preventing deadlocks where it can't explain without seeing results.
+
 Guard outcomes are recorded in trace steps (`Step.guards`) for observability. If a validator
 raises an exception, the error message becomes the feedback string.
 

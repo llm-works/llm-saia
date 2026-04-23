@@ -66,6 +66,7 @@ class GuardOutcome:
     passed: bool = True
     attempts: int = 1
     error: str | None = None
+    blocking: bool = True  # Whether the guard blocks tool execution when it fires
 
 
 @dataclass
