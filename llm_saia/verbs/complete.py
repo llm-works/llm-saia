@@ -259,7 +259,7 @@ class Complete(Verb):
             "guard feedback injected into conversation",
             extra={
                 "iteration": iteration,
-                "guards_fired": [o.name for o in outcomes if not o.passed],
+                "guards_fired": [o.name for o in outcomes if not o.passed and o.blocking],
                 "feedback_len": len(feedback),
                 "feedback": self._truncate(feedback, self._TRACE_LIMIT),
                 "acked_tools": [tc.name for tc in (response.tool_calls or [])],

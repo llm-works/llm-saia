@@ -969,6 +969,14 @@ class TestNonBlockingGuards:
         assert "search" in executed_tools
         assert result.value == "Done with results"
 
+        # Verify message ordering: tool result comes before advisory feedback
+        messages = backend.last_messages
+        tool_msg_idx = next(i for i, m in enumerate(messages) if m.role == "tool")
+        feedback_idx = next(
+            i for i, m in enumerate(messages) if m.role == "user" and "Explain" in m.content
+        )
+        assert tool_msg_idx < feedback_idx, "Tool result must precede advisory feedback"
+
     async def test_blocking_guard_takes_precedence(self) -> None:
         """When both blocking and advisory guards fire, blocking wins."""
         backend = MockBackend()
@@ -1037,3 +1045,40 @@ class TestNonBlockingGuards:
         first_step = trace.steps[0]
         assert len(first_step.guards) > 0
         assert first_step.guards[0].blocking is False
+
+    async def test_advisory_feedback_skipped_on_task_completion(self) -> None:
+        """Advisory feedback is NOT injected when task completes in same iteration."""
+        backend = MockBackend()
+
+        # First: initial done call → controller asks for confirmation
+        done1 = ToolCall(id="tc_done1", name="done", arguments={"output": "result", "status": "ok"})
+        backend.queue_response(_tool_response("Here's my answer", [done1]))
+        # Second: confirmation → task completes (advisory guard fires but shouldn't inject)
+        done2 = ToolCall(id="tc_done2", name="done", arguments={"output": "result", "status": "ok"})
+        backend.queue_response(_tool_response("Confirming", [done2]))
+
+        # Advisory guard that fires when there are tool calls
+        guard = IterationGuard(
+            validator=lambda ctx: "Explain more." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = _make_config_with_tools(backend, call=call, terminal_tool="done")
+        verb = Complete(config)
+        result = await verb("do something")
+
+        # Task completed
+        assert result.completed
+        assert result.output == "result"
+
+        # Verify advisory feedback was NOT injected after completion.
+        # The final messages should be: assistant (confirm) -> tool (ack)
+        # NOT: assistant (confirm) -> tool (ack) -> user (Explain more.)
+        last_msg = result.history[-1]
+        assert last_msg.role.value == "tool", (
+            "Last message should be tool ack, not advisory feedback"
+        )
+        second_last = result.history[-2]
+        assert second_last.role.value == "assistant", "Second-to-last should be assistant confirm"

@@ -144,7 +144,7 @@ class IterationGuard:
             to shape behavior without blocking progress (e.g., narrative guards).
 
     Example:
-        >>> # Tool loop guard - require explanation with tool calls
+        >>> # Tool loop guard - require explanation with tool calls (advisory)
         >>> guard = IterationGuard(
         ...     validator=lambda ctx: (
         ...         "Explain what you're doing."
@@ -152,6 +152,7 @@ class IterationGuard:
         ...         else None
         ...     ),
         ...     name="narrative",
+        ...     blocking=False,  # Advisory: tools run, then feedback injected
         ... )
 
         >>> # Parse retry guard - retry on JSON errors
