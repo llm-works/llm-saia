@@ -8,7 +8,7 @@ import time
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Self, TypedDict, TypeVar
 
-from .backend import AgentResponse
+from .backend import ChatResponse
 from .config import DEFAULT_CALL, CallOptions, Config
 from .configurable import Configurable
 from .conversation import (
@@ -141,7 +141,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
     def _record_step(
         self,
-        response: AgentResponse,
+        response: ChatResponse,
         *,
         phase: str,
         _trace: VerbTrace | None = None,
@@ -197,7 +197,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         *,
         response_schema: dict[str, Any] | None = None,
         tools: list[Any] | None = _SENTINEL,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         """Execute a single chat call.
 
         Args:
@@ -282,7 +282,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     async def _apply_iteration_guards_or_tools(
         self,
         iter_guards: tuple[IterationGuard, ...],
-        response: AgentResponse,
+        response: ChatResponse,
         conv: ConversationLike,
         iteration: int,
         max_iterations: int,
@@ -329,7 +329,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     def _run_iteration_guards(
         self,
         guards: tuple[IterationGuard, ...],
-        response: AgentResponse,
+        response: ChatResponse,
         iteration: int,
         max_iterations: int,
         _trace: VerbTrace | None = None,
@@ -411,8 +411,8 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             extra={"guard": name, "feedback": feedback},
         )
 
-    def _to_message(self, response: AgentResponse) -> Message:
-        """Convert AgentResponse to Message."""
+    def _to_message(self, response: ChatResponse) -> Message:
+        """Convert ChatResponse to Message."""
         return Message(
             role=Role.ASSISTANT,
             content=response.content,
@@ -718,7 +718,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         """Handle parse error: mark trace, evaluate guards, update state. Returns True to retry."""
         self._mark_last_step_parse_failure(trace, error)
         # Create a minimal response for the context
-        response = AgentResponse(content=error.raw_content or "", tool_calls=[])
+        response = ChatResponse(content=error.raw_content or "", tool_calls=[])
         feedback = self._eval_parse_retry_guards(
             guards, response, error, attempt, max_attempts, trace
         )
@@ -733,7 +733,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     def _eval_parse_retry_guards(
         self,
         guards: tuple[IterationGuard, ...],
-        response: AgentResponse,
+        response: ChatResponse,
         error: StructuredOutputError,
         attempt: int,
         max_attempts: int,

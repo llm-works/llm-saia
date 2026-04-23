@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from llm_saia import IterationContext, IterationGuard, OutputGuard
-from llm_saia.core.backend import AgentResponse
+from llm_saia.core.backend import ChatResponse
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.conversation import Message, ToolCall
 from llm_saia.core.logger import NullLogger
@@ -25,9 +25,9 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _tool_response(content: str = "", tool_calls: list[ToolCall] | None = None) -> AgentResponse:
-    """Create an AgentResponse with optional tool calls."""
-    return AgentResponse(
+def _tool_response(content: str = "", tool_calls: list[ToolCall] | None = None) -> ChatResponse:
+    """Create an ChatResponse with optional tool calls."""
+    return ChatResponse(
         content=content,
         tool_calls=tool_calls or [],
         finish_reason="tool_use" if tool_calls else "end_turn",
@@ -170,7 +170,7 @@ class TestIterationGuardInLoop:
 
         original_chat = backend.chat
 
-        async def tracking_chat(messages: list[Message], **kwargs: Any) -> AgentResponse:
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> ChatResponse:
             nonlocal call_count
             call_count += 1
             captured_messages.append(list(messages))
@@ -303,7 +303,7 @@ class TestIterationGuardInComplete:
 
         original_chat = backend.chat
 
-        async def tracking_chat(messages: list[Message], **kwargs: Any) -> AgentResponse:
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> ChatResponse:
             nonlocal call_count
             call_count += 1
             return await original_chat(messages, **kwargs)
@@ -467,7 +467,7 @@ class TestCompleteConversationSupport:
 
         original_chat = backend.chat
 
-        async def tracking_chat(messages: list[Message], **kwargs: Any) -> AgentResponse:
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> ChatResponse:
             messages_sent_to_llm.append(list(messages))
             return await original_chat(messages, **kwargs)
 
@@ -649,9 +649,9 @@ class TestAsyncConversationLikeSupport:
 def _make_response(
     content: str = "",
     tool_calls: list[ToolCall] | None = None,
-) -> AgentResponse:
-    """Create a minimal AgentResponse for testing."""
-    return AgentResponse(
+) -> ChatResponse:
+    """Create a minimal ChatResponse for testing."""
+    return ChatResponse(
         content=content,
         tool_calls=tool_calls,
         input_tokens=10,
@@ -662,11 +662,11 @@ def _make_response(
 
 
 def _make_ctx(
-    response: AgentResponse,
+    response: ChatResponse,
     iteration: int = 0,
     max_iterations: int = 10,
 ) -> IterationContext:
-    """Wrap AgentResponse in IterationContext for guard testing."""
+    """Wrap ChatResponse in IterationContext for guard testing."""
     return IterationContext(response=response, iteration=iteration, max_iterations=max_iterations)
 
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from llm_saia.core.backend import AgentResponse
+from llm_saia.core.backend import ChatResponse
 from llm_saia.core.config import CallOptions, Config
 from llm_saia.core.conversation import ListConversation, Message, Role
 from llm_saia.core.logger import NullLogger
@@ -162,7 +162,7 @@ class SequencedMockBackend(MockBackend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         self.last_messages = messages
         self.last_system = system
         self.last_tools = tools
@@ -198,7 +198,7 @@ class TestGuardRetryConversation:
                 response_schema: dict[str, Any] | None = None,
                 max_tokens: int | None = None,
                 temperature: float | None = None,
-            ) -> AgentResponse:
+            ) -> ChatResponse:
                 nonlocal call_count
                 self.last_messages = messages
                 call_count += 1
@@ -245,7 +245,7 @@ class TestGuardRetryConversation:
                 response_schema: dict[str, Any] | None = None,
                 max_tokens: int | None = None,
                 temperature: float | None = None,
-            ) -> AgentResponse:
+            ) -> ChatResponse:
                 seen_messages.append(list(messages))
                 self.last_messages = messages
                 if len(seen_messages) == 1:

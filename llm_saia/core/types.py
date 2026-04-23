@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Generic, TypeVar
 
 # Re-export backend types for convenience
-from .backend import AgentResponse, ToolDef
+from .backend import ChatResponse, ToolDef
 
 # Re-export config types for convenience
 from .config import CallOptions, Config
@@ -28,7 +28,7 @@ _T = TypeVar("_T")
 
 __all__ = [
     # Backend types (re-exported)
-    "AgentResponse",
+    "ChatResponse",
     "ToolDef",
     # Conversation types (re-exported)
     "AsyncConversationLike",

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from llm_saia import Logger, NullLogger
-from llm_saia.core.types import AgentResponse, ClassifyResult, ToolCall, ToolDef
+from llm_saia.core.types import ChatResponse, ClassifyResult, ToolCall, ToolDef
 from tests.unit.conftest import MockBackend, make_saia
 
 pytestmark = pytest.mark.unit
@@ -107,14 +107,14 @@ class TestLoggerIntegration:
 
         # Queue a tool call followed by completion
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="calling tool",
                 tool_calls=[ToolCall(id="1", name="test_tool", arguments={})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_response(
-            AgentResponse(content="done", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="done", tool_calls=[], finish_reason="end_turn")
         )
 
         await saia.instruct("do something")
@@ -138,7 +138,7 @@ class TestLoggerIntegration:
         # Queue multiple tool calls that exceed max_iterations
         for _ in range(5):
             mock_backend.queue_response(
-                AgentResponse(
+                ChatResponse(
                     content="calling tool",
                     tool_calls=[ToolCall(id="1", name="test_tool", arguments={})],
                     finish_reason="tool_use",
@@ -167,14 +167,14 @@ class TestLoggerIntegration:
         saia = make_saia(mock_backend, tools=tools, executor=executor, lg=logger)
 
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="calling tool",
                 tool_calls=[ToolCall(id="1", name="failing_tool", arguments={})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_response(
-            AgentResponse(content="done", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="done", tool_calls=[], finish_reason="end_turn")
         )
 
         await saia.instruct("do something")
@@ -200,7 +200,7 @@ class TestLoggerIntegration:
         # Queue tool calls that exceed max_iterations (Complete has its own loop)
         for _ in range(5):
             mock_backend.queue_response(
-                AgentResponse(
+                ChatResponse(
                     content="calling tool",
                     tool_calls=[ToolCall(id="1", name="test_tool", arguments={})],
                     finish_reason="tool_use",
@@ -234,14 +234,14 @@ class TestLoggerIntegration:
 
         # Queue: tool call -> completion response -> classifier says completed
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="calling tool",
                 tool_calls=[ToolCall(id="1", name="test_tool", arguments={})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_response(
-            AgentResponse(content="task done", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="task done", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
@@ -271,7 +271,7 @@ class TestLoggerIntegration:
         # LLM returns tool-call-like JSON in content instead of using tool_calls
         fake_tool_json = '{"name": "search", "arguments": {"query": "test"}}'
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content=f"I will search for that. {fake_tool_json}",
                 tool_calls=[],
                 finish_reason="end_turn",
@@ -298,14 +298,14 @@ class TestLoggerIntegration:
 
         # LLM properly uses tool_calls
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="Searching...",
                 tool_calls=[ToolCall(id="1", name="search", arguments={"query": "test"})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_response(
-            AgentResponse(content="Found results", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Found results", tool_calls=[], finish_reason="end_turn")
         )
 
         await saia.instruct("search for something")
@@ -329,7 +329,7 @@ class TestLoggerIntegration:
 
         # Very low input tokens (10) vs expected minimum (50 per tool)
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="I don't have tools",
                 tool_calls=[],
                 finish_reason="end_turn",
@@ -357,7 +357,7 @@ class TestLoggerIntegration:
 
         # Low input tokens but tools are working (tool_calls present)
         mock_backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="1", name="search", arguments={"query": "test"})],
                 finish_reason="tool_use",
@@ -365,7 +365,7 @@ class TestLoggerIntegration:
             )
         )
         mock_backend.queue_response(
-            AgentResponse(content="Found results", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Found results", tool_calls=[], finish_reason="end_turn")
         )
 
         await saia.instruct("search for something")

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from llm_saia import IterationContext, IterationGuard, StructuredOutputError
-from llm_saia.core.backend import AgentResponse
+from llm_saia.core.backend import ChatResponse
 from llm_saia.core.config import Config
 from llm_saia.core.conversation import Message
 from llm_saia.core.logger import NullLogger
@@ -45,13 +45,13 @@ class SequencedMockBackend(MockBackend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         """Return next queued response."""
         if self._sequence_index >= len(self._response_sequence):
             raise RuntimeError("No more responses queued")
         content = self._response_sequence[self._sequence_index]
         self._sequence_index += 1
-        return AgentResponse(content=content, tool_calls=[])
+        return ChatResponse(content=content, tool_calls=[])
 
 
 @dataclass
@@ -83,7 +83,7 @@ class TestIterationContextForParse:
             schema_name="Person",
             parse_error="Unterminated string",
         )
-        response = AgentResponse(content='{"name": "test"', tool_calls=[])
+        response = ChatResponse(content='{"name": "test"', tool_calls=[])
         ctx = IterationContext(
             response=response,
             iteration=1,
@@ -100,7 +100,7 @@ class TestIterationContextForParse:
         """IterationContext.remaining returns UNLIMITED when max_iterations=0."""
         from llm_saia.core.guard import UNLIMITED
 
-        response = AgentResponse(content="test", tool_calls=[])
+        response = ChatResponse(content="test", tool_calls=[])
         ctx = IterationContext(
             response=response,
             iteration=5,
@@ -132,7 +132,7 @@ class TestSchemaRetryGuard:
     def test_schema_retry_returns_none_without_parse_error(self) -> None:
         """schema_retry does nothing in tool loop context (no parse_error)."""
         guard = schema_retry()
-        response = AgentResponse(content="some text", tool_calls=[])
+        response = ChatResponse(content="some text", tool_calls=[])
         ctx = IterationContext(
             response=response,
             iteration=0,
@@ -148,7 +148,7 @@ class TestSchemaRetryGuard:
         error = StructuredOutputError(
             "Invalid JSON", raw_content="not json", parse_error="Syntax error"
         )
-        response = AgentResponse(content="not json", tool_calls=[])
+        response = ChatResponse(content="not json", tool_calls=[])
         ctx = IterationContext(
             response=response,
             iteration=0,
@@ -166,7 +166,7 @@ class TestSchemaRetryGuard:
         error = StructuredOutputError(
             "Invalid JSON", raw_content="not json", parse_error="Invalid JSON"
         )
-        response = AgentResponse(content="not json", tool_calls=[])
+        response = ChatResponse(content="not json", tool_calls=[])
 
         # First attempt - polite
         ctx1 = IterationContext(response=response, iteration=0, max_iterations=3, parse_error=error)
@@ -186,7 +186,7 @@ class TestSchemaRetryGuard:
         """schema_retry returns feedback on any attempt (caller handles bounds)."""
         guard = schema_retry()
         error = StructuredOutputError("Invalid JSON", raw_content="not json")
-        response = AgentResponse(content="not json", tool_calls=[])
+        response = ChatResponse(content="not json", tool_calls=[])
         # Even on last attempt, guard returns feedback - caller decides whether to use it
         ctx = IterationContext(
             response=response,

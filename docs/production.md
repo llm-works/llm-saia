@@ -299,7 +299,7 @@ result = await (
 ```
 
 `IterationContext` provides:
-- `response` — the current `AgentResponse`
+- `response` — the current `ChatResponse`
 - `iteration` — current iteration number (0-indexed)
 - `max_iterations` — maximum iterations configured
 - `remaining` — iterations remaining (including current)

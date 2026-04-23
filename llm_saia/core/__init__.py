@@ -1,6 +1,6 @@
 """Core types and protocols for SAIA."""
 
-from .backend import AgentResponse, Backend, ToolDef
+from .backend import Backend, ChatResponse, ToolDef
 from .config import CallOptions, Config
 from .configurable import Configurable
 from .conversation import Message, ToolCall
@@ -9,9 +9,9 @@ from .types import Critique, Evidence, VerbResult, VerifyResult
 from .verb import Verb
 
 __all__ = [
-    "AgentResponse",
     "Backend",
     "CallOptions",
+    "ChatResponse",
     "Config",
     "Configurable",
     "Critique",

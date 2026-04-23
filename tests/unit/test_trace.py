@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_saia.core.backend import AgentResponse, ToolDef
+from llm_saia.core.backend import ChatResponse, ToolDef
 from llm_saia.core.conversation import ToolCall
 from llm_saia.core.trace import (
     GuardOutcome,
@@ -225,7 +225,7 @@ class TestBuildStepFromResponse:
 
     def test_builds_from_text_response(self) -> None:
         """Builds a Step from a plain text response."""
-        response = AgentResponse(
+        response = ChatResponse(
             content="hello",
             tool_calls=[],
             input_tokens=50,
@@ -243,9 +243,26 @@ class TestBuildStepFromResponse:
         assert step.llm_call.finish_reason == "end_turn"
         assert step.tools == []
 
+    def test_propagates_model_into_llm_call(self) -> None:
+        """ChatResponse.model flows into LLMCall.model for cost attribution."""
+        response = ChatResponse(
+            content="hi",
+            tool_calls=[],
+            call_id="c1",
+            model="claude-haiku-4-5-20251001",
+        )
+        step = build_step_from_response(response, phase="attempt", trace_id="t1", verb="Ask")
+        assert step.llm_call.model == "claude-haiku-4-5-20251001"
+
+    def test_model_defaults_to_none_when_backend_omits_it(self) -> None:
+        """Backends that don't set model leave LLMCall.model as None."""
+        response = ChatResponse(content="hi", tool_calls=[], call_id="c1")
+        step = build_step_from_response(response, phase="attempt", trace_id="t1", verb="Ask")
+        assert step.llm_call.model is None
+
     def test_builds_from_tool_response(self) -> None:
         """Builds a Step from a response with tool calls."""
-        response = AgentResponse(
+        response = ChatResponse(
             content="",
             tool_calls=[
                 ToolCall(id="tc1", name="search", arguments={"q": "test"}),

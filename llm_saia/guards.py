@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from .core.guard import IterationContext, IterationGuard, OutputGuard
 
 if TYPE_CHECKING:
-    from .core.backend import AgentResponse
+    from .core.backend import ChatResponse
     from .core.types import ToolDef
 
 __all__ = [
@@ -584,7 +584,7 @@ class _GuardState:
 
 
 def _find_failure_status(
-    response: AgentResponse, tool: str, field: str, failures: frozenset[str]
+    response: ChatResponse, tool: str, field: str, failures: frozenset[str]
 ) -> str | None:
     """Find failure status in terminal tool call, or None."""
     for tc in response.tool_calls or []:
@@ -613,7 +613,7 @@ def _find_tool_schema(tools: list[ToolDef], name: str) -> dict[str, Any] | None:
     return None
 
 
-def _find_schema_errors(response: AgentResponse, tool: str, schema: dict[str, Any]) -> list[str]:
+def _find_schema_errors(response: ChatResponse, tool: str, schema: dict[str, Any]) -> list[str]:
     """Find schema errors in terminal tool call."""
     for tc in response.tool_calls or []:
         if tc.name == tool:
@@ -635,7 +635,7 @@ def _schema_feedback(count: int, *, tool: str, errors: list[str]) -> tuple[str, 
     return base, forceful
 
 
-def _find_contradiction(response: AgentResponse, tool: str) -> str | None:
+def _find_contradiction(response: ChatResponse, tool: str) -> str | None:
     """Find contradiction signal when terminal tool is called."""
     has_terminal = any(tc.name == tool for tc in (response.tool_calls or []))
     if not has_terminal:

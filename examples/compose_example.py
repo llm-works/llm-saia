@@ -32,7 +32,7 @@ Example output:
 from typing import Any
 
 from llm_saia import SAIA
-from llm_saia.core.backend import AgentResponse, Backend
+from llm_saia.core.backend import Backend, ChatResponse
 from llm_saia.core.conversation import Message
 
 
@@ -47,7 +47,7 @@ class DemoBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         """Placeholder chat method."""
         pass
 

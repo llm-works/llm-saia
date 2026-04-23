@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ChatResponse.model` — resolved model name returned by the backend. Populated when a backend
+  resolves a placeholder like `"auto"` to a concrete model; closes the cost-attribution gap where
+  downstream consumers had no way to know which model actually ran.
+- `LLMCall.model` — resolved model name propagated from `ChatResponse.model` into each trace
+  step, so cost attribution can be computed from `VerbTrace` alone without holding onto the
+  raw response.
+- `ChatResponse.raw` — escape hatch carrying the unmodified backend-native response object.
+  Consumers reading from it accept coupling to a specific backend in exchange for access to
+  vendor-specific fields (cache tokens, thinking/reasoning blocks, adapter metadata, etc.) that
+  SAIA intentionally does not surface at the language-layer level.
 - `AsyncConversationLike` protocol for non-blocking conversation append. Extends `ConversationLike`
   with `append_async()` method. All verbs use `append_async()` when the conversation supports it,
   allowing compaction strategies that involve I/O (e.g., LLM-based summarization) to run without
@@ -48,7 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Controller decisions with terminal tool data
 
 ### Changed
-- **BREAKING**: `IterationGuard.validator` signature changed from `Callable[[AgentResponse], str | None]`
+- **BREAKING**: Renamed `AgentResponse` → `ChatResponse` to match the `Backend.chat()` method
+  name and align with `LLMCall` already used in `trace.py`. The old name is removed; update
+  imports and type hints to `ChatResponse`.
+  Migration: `s/AgentResponse/ChatResponse/g` on imports and type hints (e.g.,
+  `from llm_saia.core.backend import AgentResponse` → `ChatResponse`).
+- **BREAKING**: `IterationGuard.validator` signature changed from `Callable[[ChatResponse], str | None]`
   to `Callable[[IterationContext], str | None]`. Access response via `ctx.response`.
 - **BREAKING**: `lg: Logger` is now the first field in `Config` (was after `backend`). This
   follows the project convention that logger is always the first parameter.

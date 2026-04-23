@@ -6,7 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from ..core.backend import AgentResponse
+from ..core.backend import ChatResponse
 from ..core.config import CallOptions
 from ..core.controller import (
     Action,
@@ -42,7 +42,7 @@ class _LoopCtx:
     trace_id: str
     ctrl: LoopController
     tracer: Tracer | None
-    on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None
+    on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None
     call_options: CallOptions
     messages: list[Message]  # Complete internal history
     tool_names: list[str]
@@ -72,7 +72,7 @@ class Complete(Verb):
     async def __call__(
         self,
         task: str,
-        on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
         controller: LoopController | None = None,
         conversation: ConversationLike | None = None,
     ) -> TaskResult:
@@ -134,7 +134,7 @@ class Complete(Verb):
         trace_id: str,
         ctrl: LoopController,
         tracer: Tracer | None,
-        on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
         verb_trace: VerbTrace | None,
         conversation: ConversationLike | None,
     ) -> _LoopCtx:
@@ -165,7 +165,7 @@ class Complete(Verb):
         trace_id: str,
         ctrl: LoopController,
         tracer: Tracer | None,
-        on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
         verb_trace: VerbTrace | None = None,
         conversation: ConversationLike | None = None,
     ) -> TaskResult:
@@ -216,7 +216,7 @@ class Complete(Verb):
     async def _apply_guard_nudge(
         self,
         ctx: _LoopCtx,
-        response: AgentResponse,
+        response: ChatResponse,
         feedback: str,
         outcomes: list[GuardOutcome],
         iteration: int,
@@ -254,7 +254,7 @@ class Complete(Verb):
     async def _process_iteration(
         self,
         ctx: _LoopCtx,
-        response: AgentResponse,
+        response: ChatResponse,
         iteration: int,
         guard_outcomes: list[GuardOutcome] | None = None,
     ) -> tuple[Action, TaskResult | None]:
@@ -315,7 +315,7 @@ class Complete(Verb):
 
     async def _run_iteration(
         self, messages: list[Message], config: CallOptions
-    ) -> tuple[AgentResponse, int]:
+    ) -> tuple[ChatResponse, int]:
         """Run one LLM iteration and return response with token count."""
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         temperature = self._resolve_temperature(config)
@@ -325,7 +325,7 @@ class Complete(Verb):
     async def _execute_action(
         self,
         action: Action,
-        response: AgentResponse,
+        response: ChatResponse,
         ctx: _LoopCtx,
         iteration: int,
     ) -> TaskResult | None:
@@ -361,7 +361,7 @@ class Complete(Verb):
         return None
 
     async def _execute_tool_action(
-        self, action: Action, response: AgentResponse, ctx: _LoopCtx
+        self, action: Action, response: ChatResponse, ctx: _LoopCtx
     ) -> None:
         """Handle EXECUTE_TOOLS action: add response, ack skipped, execute."""
         await ctx.append(self._to_message(response))
@@ -419,7 +419,7 @@ class Complete(Verb):
             if call.id in skip_ids:
                 await ctx.append(Message(role=Role.TOOL, content=content, tool_call_id=call.id))
 
-    async def _ack_response_tools(self, response: AgentResponse, ctx: _LoopCtx) -> None:
+    async def _ack_response_tools(self, response: ChatResponse, ctx: _LoopCtx) -> None:
         """Acknowledge all tool_calls in a response that won't be executed.
 
         Must be called after _add_response_if_needed for INSTRUCT/SKIP/COMPLETE/FAIL
@@ -428,7 +428,7 @@ class Complete(Verb):
         if response.tool_calls:
             await self._ack_skipped_tools(response.tool_calls, [], ctx)
 
-    async def _add_response_if_needed(self, ctx: _LoopCtx, response: AgentResponse) -> None:
+    async def _add_response_if_needed(self, ctx: _LoopCtx, response: ChatResponse) -> None:
         """Add response to messages if not already added."""
         if ctx.messages:
             last = ctx.messages[-1]
@@ -444,7 +444,7 @@ class Complete(Verb):
         self,
         completed: bool,
         action: Action,
-        response: AgentResponse,
+        response: ChatResponse,
         messages: list[Message],
         iteration: int,
     ) -> TaskResult:
@@ -490,7 +490,7 @@ class Complete(Verb):
         self,
         obs: Observation,
         action: Action,
-        response: AgentResponse,
+        response: ChatResponse,
         ctrl: LoopController,
         trace_id: str,
     ) -> Step:
@@ -505,6 +505,7 @@ class Complete(Verb):
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
                 finish_reason=response.finish_reason,
+                model=response.model,
             ),
             tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
             action=action.kind.value,
@@ -517,7 +518,7 @@ class Complete(Verb):
         return step
 
     @staticmethod
-    def _build_guard_nudge_step(response: AgentResponse, trace_id: str, feedback: str) -> Step:
+    def _build_guard_nudge_step(response: ChatResponse, trace_id: str, feedback: str) -> Step:
         """Build a Step for an iteration guard nudge."""
         return Step(
             phase="iteration",
@@ -529,6 +530,7 @@ class Complete(Verb):
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
                 finish_reason=response.finish_reason,
+                model=response.model,
             ),
             tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
             action=ActionType.INSTRUCT.value,
