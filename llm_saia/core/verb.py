@@ -49,6 +49,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     _PREVIEW_LIMIT = 100
     # Truncation limit for trace logs (high ceiling to prevent pathological cases)
     _TRACE_LIMIT = 50_000
+    # Patterns indicating truncated JSON response
+    _TRUNCATION_INDICATORS = (
+        "Unterminated string",
+        "Unexpected end of JSON",
+        "Expecting value",
+        "Expecting ',' delimiter",
+        "Expecting ':' delimiter",
+    )
 
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
@@ -83,18 +91,12 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     ) -> StructuredOutputError:
         """Create appropriate error for structured output parse failure."""
         error_msg = str(error)
-        # Detect truncation patterns
-        truncation_indicators = (
-            "Unterminated string",
-            "Unexpected end of JSON",
-            "Expecting value",
-            "Expecting ',' delimiter",
-            "Expecting ':' delimiter",
-        )
-        # Only apply truncation heuristic when parser provides a position (e.g., JSONDecodeError)
+        # Only apply truncation heuristic when parser provides a valid int position
         pos = getattr(error, "pos", None)
+        if not isinstance(pos, int) or pos < 0 or pos > len(content):
+            pos = None
         is_truncated = pos is not None and any(
-            indicator in error_msg for indicator in truncation_indicators
+            ind in error_msg for ind in self._TRUNCATION_INDICATORS
         )
         if is_truncated and content[pos:].strip():
             is_truncated = False
