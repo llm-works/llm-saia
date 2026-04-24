@@ -79,7 +79,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         return override or self._call
 
     def _structured_output_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
+        self, error: Exception, content: str, schema_name: str
     ) -> StructuredOutputError:
         """Create appropriate error for structured output parse failure."""
         error_msg = str(error)
@@ -587,18 +587,17 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 tools=[],
             )
             self._record_step(response, phase="finalize", _trace=_trace)
+            parser = self._config.json_parser or json.loads
             try:
-                data = json.loads(response.content)
-            except json.JSONDecodeError as e:
+                data = parser(response.content)
+            except Exception as e:
                 self._log_finalize_parse_error(e, response.content, schema.__name__)
                 raise self._structured_output_error(e, response.content, schema.__name__) from e
             result = parse_json_to_dataclass(data, schema)
             return content, result
         return content, None
 
-    def _log_finalize_parse_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
-    ) -> None:
+    def _log_finalize_parse_error(self, error: Exception, content: str, schema_name: str) -> None:
         """Log a JSON parse error during finalize phase."""
         self._lg.warning(
             "json parse error in finalize",
@@ -878,7 +877,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         parser = self._config.json_parser or json.loads
         try:
             data = parser(content)
-        except json.JSONDecodeError as e:
+        except Exception as e:
             raise self._structured_output_error(e, content, schema.__name__) from e
         try:
             return parse_json_to_dataclass(data, schema)

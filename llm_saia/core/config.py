@@ -30,8 +30,8 @@ class JsonParser(Protocol):
     or to use alternative parsers (orjson, json-repair, etc.).
     """
 
-    def __call__(self, content: str) -> dict[str, Any]:
-        """Parse JSON string to dict."""
+    def __call__(self, content: str) -> Any:
+        """Parse JSON string to Python object."""
         ...
 
 
