@@ -49,6 +49,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     _PREVIEW_LIMIT = 100
     # Truncation limit for trace logs (high ceiling to prevent pathological cases)
     _TRACE_LIMIT = 50_000
+    # Patterns indicating truncated JSON response
+    _TRUNCATION_INDICATORS = (
+        "Unterminated string",
+        "Unexpected end of JSON",
+        "Expecting value",
+        "Expecting ',' delimiter",
+        "Expecting ':' delimiter",
+    )
 
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
@@ -79,23 +87,18 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
         return override or self._call
 
     def _structured_output_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
+        self, error: Exception, content: str, schema_name: str
     ) -> StructuredOutputError:
         """Create appropriate error for structured output parse failure."""
         error_msg = str(error)
-        # Detect truncation patterns
-        truncation_indicators = (
-            "Unterminated string",
-            "Unexpected end of JSON",
-            "Expecting value",
-            "Expecting ',' delimiter",
-            "Expecting ':' delimiter",
-        )
-        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
-
-        # Verify truncation: error position should be at/near EOF (only whitespace after)
+        # Only apply truncation heuristic when parser provides a valid int position
         pos = getattr(error, "pos", None)
-        if is_truncated and pos is not None and content[pos:].strip():
+        if not isinstance(pos, int) or pos < 0 or pos > len(content):
+            pos = None
+        is_truncated = pos is not None and any(
+            ind in error_msg for ind in self._TRUNCATION_INDICATORS
+        )
+        if is_truncated and content[pos:].strip():
             is_truncated = False
 
         if is_truncated:
@@ -587,18 +590,25 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
                 tools=[],
             )
             self._record_step(response, phase="finalize", _trace=_trace)
+            parser = self._config.json_parser or json.loads
             try:
-                data = json.loads(response.content)
-            except json.JSONDecodeError as e:
+                data = parser(response.content)
+            except Exception as e:
                 self._log_finalize_parse_error(e, response.content, schema.__name__)
                 raise self._structured_output_error(e, response.content, schema.__name__) from e
-            result = parse_json_to_dataclass(data, schema)
+            try:
+                result = parse_json_to_dataclass(data, schema)
+            except (TypeError, ValueError) as e:
+                raise StructuredOutputError(
+                    f"Response does not match {schema.__name__}: {e}",
+                    raw_content=response.content,
+                    schema_name=schema.__name__,
+                    parse_error=str(e),
+                ) from e
             return content, result
         return content, None
 
-    def _log_finalize_parse_error(
-        self, error: json.JSONDecodeError, content: str, schema_name: str
-    ) -> None:
+    def _log_finalize_parse_error(self, error: Exception, content: str, schema_name: str) -> None:
         """Log a JSON parse error during finalize phase."""
         self._lg.warning(
             "json parse error in finalize",
@@ -875,9 +885,10 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
     def _parse_structured_response(self, content: str, schema: type[T]) -> T:
         """Parse JSON response into schema, raising StructuredOutputError on failure."""
+        parser = self._config.json_parser or json.loads
         try:
-            data = json.loads(content)
-        except json.JSONDecodeError as e:
+            data = parser(content)
+        except Exception as e:
             raise self._structured_output_error(e, content, schema.__name__) from e
         try:
             return parse_json_to_dataclass(data, schema)

@@ -246,6 +246,25 @@ The schema is a JSON Schema dict. How you request this depends on your LLM:
 
 SAIA parses the JSON response and validates it against the schema.
 
+### Custom JSON Parser
+
+Default is `json.loads`. Override to handle malformed JSON from some backends or to use
+alternative parsers (orjson, json-repair, etc.):
+
+```python
+import json
+
+def my_json_parser(content: str) -> dict:
+    """Custom parser that fixes newlines then parses."""
+    return json.loads(content.replace("\n", "\\n"))
+
+# Via builder
+saia = SAIA.builder().backend(backend).json_parser(my_json_parser).build()
+
+# Via fluent API (per-call override)
+result = await saia.with_json_parser(my_json_parser).extract(Schema, text)
+```
+
 ## Tool Calling
 
 When `tools` is passed, the backend should register them with the LLM for function calling. The

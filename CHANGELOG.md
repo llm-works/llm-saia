@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `JsonParser` protocol and `json_parser` config option for custom JSON parsing in structured
+  output. Default is `json.loads`. Override to handle malformed JSON from some backends or to
+  use alternative parsers (orjson, json-repair, etc.). Set via `SAIA.builder().json_parser(fn)`
+  or `saia.with_json_parser(fn)`.
 - `IterationGuard.blocking` parameter (default `True`). Controls whether a guard blocks tool
   execution or allows it to proceed:
   - `blocking=True` (default): Tool calls are acknowledged but not executed; feedback is injected

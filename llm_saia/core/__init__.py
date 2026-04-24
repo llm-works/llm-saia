@@ -1,7 +1,7 @@
 """Core types and protocols for SAIA."""
 
 from .backend import Backend, ChatResponse, ToolDef
-from .config import CallOptions, Config
+from .config import CallOptions, Config, JsonParser
 from .configurable import Configurable
 from .conversation import Message, ToolCall
 from .logger import Logger, NullLogger
@@ -16,6 +16,7 @@ __all__ = [
     "Configurable",
     "Critique",
     "Evidence",
+    "JsonParser",
     "Logger",
     "Message",
     "NullLogger",

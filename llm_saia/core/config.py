@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .logger import Logger
 
@@ -16,10 +16,23 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CallOptions",
-    "TerminalConfig",
     "Config",
     "DEFAULT_CALL",
+    "JsonParser",
+    "TerminalConfig",
 ]
+
+
+class JsonParser(Protocol):
+    """Protocol for custom JSON parsers.
+
+    Default is json.loads. Override to handle malformed JSON from some backends
+    or to use alternative parsers (orjson, json-repair, etc.).
+    """
+
+    def __call__(self, content: str) -> Any:
+        """Parse JSON string to Python object."""
+        ...
 
 
 @dataclass
@@ -88,6 +101,7 @@ class Config:
     terminal: TerminalConfig | None = None  # Terminal tool configuration
     tracer: Tracer | None = None  # Default tracer for iteration tracing
     warn_tool_support: bool = True
+    json_parser: JsonParser | None = None
 
 
 # Default call options
