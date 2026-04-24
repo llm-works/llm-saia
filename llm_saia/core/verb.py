@@ -599,7 +599,12 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             try:
                 result = parse_json_to_dataclass(data, schema)
             except (TypeError, ValueError) as e:
-                raise self._structured_output_error(e, response.content, schema.__name__) from e
+                raise StructuredOutputError(
+                    f"Response does not match {schema.__name__}: {e}",
+                    raw_content=response.content,
+                    schema_name=schema.__name__,
+                    parse_error=str(e),
+                ) from e
             return content, result
         return content, None
 
