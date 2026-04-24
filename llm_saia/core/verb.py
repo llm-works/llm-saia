@@ -875,8 +875,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
 
     def _parse_structured_response(self, content: str, schema: type[T]) -> T:
         """Parse JSON response into schema, raising StructuredOutputError on failure."""
+        parser = self._config.json_parser or json.loads
         try:
-            data = json.loads(content)
+            data = parser(content)
         except json.JSONDecodeError as e:
             raise self._structured_output_error(e, content, schema.__name__) from e
         try:

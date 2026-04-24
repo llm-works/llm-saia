@@ -62,6 +62,7 @@ class MockBackend(Backend):
         self._queued_responses: list[ChatResponse] = []
         self._structured_responses: dict[str, dict[str, Any]] = _default_structured_responses()
         self._queued_structured: dict[str, list[dict[str, Any]]] = {}
+        self._queued_raw_structured: list[str] = []
 
     @property
     def last_prompt(self) -> str:
@@ -125,6 +126,10 @@ class MockBackend(Backend):
         """Queue a response for the next chat() call."""
         self._queued_responses.append(response)
 
+    def queue_raw_structured(self, raw_json: str) -> None:
+        """Queue raw JSON string for next structured output call (for testing malformed JSON)."""
+        self._queued_raw_structured.append(raw_json)
+
     # Backwards compatibility alias
     def queue_tool_response(self, response: ChatResponse) -> None:
         """Queue a response for the next chat() call (alias for queue_response)."""
@@ -152,8 +157,11 @@ class MockBackend(Backend):
 
         # Check structured output first (these calls have response_schema set)
         if response_schema:
+            # Check raw structured responses first (for testing malformed JSON)
+            if self._queued_raw_structured:
+                return self._make_response(self._queued_raw_structured.pop(0))
             schema_name = response_schema.get("name", "")
-            # Check queued structured responses first
+            # Check queued structured responses
             if schema_name in self._queued_structured and self._queued_structured[schema_name]:
                 response_dict = self._queued_structured[schema_name].pop(0)
                 return self._make_response(json.dumps(response_dict))

@@ -2,7 +2,7 @@
 
 from .builder import SAIABuilder
 from .core.backend import Backend, ChatResponse, ToolDef
-from .core.config import CallOptions, Config, TerminalConfig
+from .core.config import CallOptions, Config, JsonParser, TerminalConfig
 from .core.conversation import Message, Role, ToolCall
 from .core.errors import (
     BackendError,
@@ -57,6 +57,7 @@ __all__ = [
     # Custom verbs
     "Verb",
     "Config",
+    "JsonParser",
     # Errors
     "Error",
     "BackendError",

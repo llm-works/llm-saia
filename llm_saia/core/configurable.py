@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .backend import ToolDef
-    from .config import CallOptions, Config
+    from .config import CallOptions, Config, JsonParser
     from .guard import IterationGuard, OutputGuard
     from .trace import Tracer
 
@@ -181,3 +181,14 @@ class Configurable(ABC):
             else:
                 new_output = new_output + (g,)
         return self._with_call(output_guards=new_output, iteration_guards=new_iter)
+
+    def with_json_parser(self, parser: JsonParser) -> Self:
+        """Return new instance with custom JSON parser for structured output.
+
+        Default is json.loads. Override to handle malformed JSON from some
+        backends or to use alternative parsers (orjson, json-repair, etc.).
+
+        Args:
+            parser: Function that takes JSON string and returns parsed dict.
+        """
+        return self._with_config(json_parser=parser)

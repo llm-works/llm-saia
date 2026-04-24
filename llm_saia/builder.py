@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from .core import trace
 from .core.backend import Backend, ToolDef
-from .core.config import DEFAULT_CALL, CallOptions, Config, TerminalConfig
+from .core.config import DEFAULT_CALL, CallOptions, Config, JsonParser, TerminalConfig
 from .core.logger import Logger, NullLogger
 
 if TYPE_CHECKING:
@@ -43,6 +43,8 @@ class SAIABuilder:
         self._max_total_tokens: int = DEFAULT_CALL.max_total_tokens
         self._timeout_secs: float = DEFAULT_CALL.timeout_secs
         self._request_id: str | None = DEFAULT_CALL.request_id
+        # Config-level options
+        self._json_parser: JsonParser | None = None
 
     def backend(self, backend: Backend) -> SAIABuilder:
         """Set the LLM backend (required)."""
@@ -157,6 +159,11 @@ class SAIABuilder:
         self._temperature = temp
         return self
 
+    def json_parser(self, parser: JsonParser) -> SAIABuilder:
+        """Set custom JSON parser for structured output."""
+        self._json_parser = parser
+        return self
+
     def build(self) -> SAIA:
         """Build the SAIA instance.
 
@@ -186,5 +193,6 @@ class SAIABuilder:
             terminal=self._terminal,
             tracer=self._tracer,
             warn_tool_support=self._warn_tool_support,
+            json_parser=self._json_parser,
         )
         return SAIA(config)

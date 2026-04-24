@@ -110,6 +110,17 @@ class TestSAIABuilder:
 
         assert saia.call_options.timeout_secs == 30.0
 
+    def test_build_with_json_parser(self, mock_backend: MockBackend) -> None:
+        """Build with json_parser."""
+        import json
+
+        def parser(content: str) -> dict:
+            return json.loads(content)
+
+        saia = SAIA.builder().backend(mock_backend).json_parser(parser).build()
+
+        assert saia._config.json_parser is parser
+
     def test_fluent_chaining(self, mock_backend: MockBackend) -> None:
         """All methods return self for chaining."""
         tools = [ToolDef(name="test", description="test", parameters={})]
