@@ -189,6 +189,6 @@ class Configurable(ABC):
         backends or to use alternative parsers (orjson, json-repair, etc.).
 
         Args:
-            parser: Function that takes JSON string and returns parsed dict.
+            parser: Function that takes JSON string and returns parsed value.
         """
         return self._with_config(json_parser=parser)

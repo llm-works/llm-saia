@@ -91,11 +91,12 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             "Expecting ',' delimiter",
             "Expecting ':' delimiter",
         )
-        is_truncated = any(indicator in error_msg for indicator in truncation_indicators)
-
-        # Verify truncation: error position should be at/near EOF (only whitespace after)
+        # Only apply truncation heuristic when parser provides a position (e.g., JSONDecodeError)
         pos = getattr(error, "pos", None)
-        if is_truncated and pos is not None and content[pos:].strip():
+        is_truncated = pos is not None and any(
+            indicator in error_msg for indicator in truncation_indicators
+        )
+        if is_truncated and content[pos:].strip():
             is_truncated = False
 
         if is_truncated:
@@ -593,7 +594,10 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             except Exception as e:
                 self._log_finalize_parse_error(e, response.content, schema.__name__)
                 raise self._structured_output_error(e, response.content, schema.__name__) from e
-            result = parse_json_to_dataclass(data, schema)
+            try:
+                result = parse_json_to_dataclass(data, schema)
+            except (TypeError, ValueError) as e:
+                raise self._structured_output_error(e, response.content, schema.__name__) from e
             return content, result
         return content, None
 
