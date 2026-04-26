@@ -225,6 +225,7 @@ class Verb(OutputGuardMixin, Configurable):
             max_tokens=max_tokens,
             temperature=temperature,
             response_schema=response_schema,
+            context=self._call.context,
         )
         response.call_id = call_id
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]

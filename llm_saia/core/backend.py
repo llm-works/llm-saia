@@ -84,6 +84,7 @@ class Backend(ABC):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ChatResponse:
         """Send a chat completion request.
 
@@ -94,6 +95,7 @@ class Backend(ABC):
             response_schema: Optional JSON schema for structured output.
             max_tokens: Maximum tokens to generate.
             temperature: Sampling temperature (None = backend default).
+            context: Optional context dict passed to backend callbacks.
 
         Returns:
             ChatResponse with content, tool calls, and token usage.

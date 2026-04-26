@@ -354,6 +354,7 @@ class OpenAIBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ChatResponse:
         """Send a chat completion request to OpenAI."""
         api_messages = self._build_api_messages(messages, system)

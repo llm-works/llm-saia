@@ -47,6 +47,7 @@ class DemoBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ChatResponse:
         """Placeholder chat method."""
         pass
