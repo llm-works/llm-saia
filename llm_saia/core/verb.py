@@ -23,7 +23,6 @@ from .conversation import (
 from .errors import StructuredOutputError, TruncatedResponseError
 from .guard import IterationContext, IterationGuard
 from .guards import OutputGuardMixin
-from .logging import VerbLoggingMixin
 from .schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
@@ -42,7 +41,7 @@ class _ParseRetryState(TypedDict):
     feedback: str | None
 
 
-class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
+class Verb(OutputGuardMixin, Configurable):
     """Base class for all verbs. Subclass this to create custom verbs."""
 
     # Truncation limit for log previews (debug level)

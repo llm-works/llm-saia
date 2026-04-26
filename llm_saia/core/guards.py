@@ -17,18 +17,21 @@ from typing import (
 )
 
 from .guard import Guarded, OutputGuard, OutputGuardError
+from .logging import VerbLoggingMixin
 
 if TYPE_CHECKING:
     from .config import CallOptions
     from .conversation import ConversationLike
     from .logger import Logger
-    from .trace import Step, VerbTrace
+    from .trace import VerbTrace
 
 T = TypeVar("T")
 
 
-class OutputGuardMixin:
+class OutputGuardMixin(VerbLoggingMixin):
     """Mixin providing output guard application and retry logic.
+
+    Inherits from VerbLoggingMixin to access logging methods directly.
 
     Expects the host class to provide:
       - ``_get_call_options(run)`` -> CallOptions
@@ -68,19 +71,6 @@ class OutputGuardMixin:
         _trace: VerbTrace | None = None,
     ) -> str:
         raise NotImplementedError
-
-    # Type stub only - implementation provided by VerbLoggingMixin (sibling in Verb MRO)
-    if TYPE_CHECKING:
-
-        def _log_structured_attempt(
-            self,
-            step: Step,
-            step_num: int,
-            *,
-            error: str | None = None,
-            guard: str | None = None,
-            raw_content: str | None = None,
-        ) -> None: ...
 
     # -- Structured output guards --
 
@@ -250,18 +240,6 @@ class OutputGuardMixin:
         except Exception as e:
             return f"Validator raised {type(e).__name__}: {e}"
 
-    def _log_guard_retry_outcome(
-        self,
-        step_num: int | None,
-        trace: VerbTrace | None,
-        guard_name: str,
-        error: str | None = None,
-    ) -> None:
-        """Log the outcome of a guard retry step."""
-        if step_num is not None and trace and trace.steps:
-            step = trace.steps[step_num - 1]
-            self._log_structured_attempt(step, step_num, error=error, guard=guard_name)
-
     def _build_field_guard_retry_prompt(
         self,
         original_prompt: str,
@@ -384,12 +362,14 @@ class OutputGuardMixin:
     ) -> str:
         """Apply one guard to text with retries."""
         self._lg.trace("checking text guard", extra={"guard": guard.name})
+        last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
             error = self._run_validator(guard, text)
             if error is None:
                 self._lg.trace("text guard passed", extra={"guard": guard.name, "attempt": attempt})
-                return text  # Passed
-
+                self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard")
+                return text
+            self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard", error=error)
             if attempt < guard.max_retries:
                 self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error, attempt)
@@ -400,9 +380,9 @@ class OutputGuardMixin:
                     conversation=conversation,
                     _trace=_trace,
                 )
+                last_step_num = len(_trace.steps) if _trace else None
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
-
         return text  # Unreachable, satisfies type checker
 
     # -- Shared helpers --

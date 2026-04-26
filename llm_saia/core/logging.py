@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .backend import ChatResponse
     from .config import CallOptions, Config
     from .logger import Logger
-    from .trace import Step
+    from .trace import Step, VerbTrace
 
 
 class VerbLoggingMixin:
@@ -166,6 +166,18 @@ class VerbLoggingMixin:
                         "raw": self._truncate(raw_content, self._TRACE_LIMIT),
                     },
                 )
+
+    def _log_guard_retry_outcome(
+        self,
+        step_num: int | None,
+        trace: VerbTrace | None,
+        guard_name: str,
+        error: str | None = None,
+    ) -> None:
+        """Log the outcome of a guard retry step."""
+        if step_num is not None and trace and trace.steps:
+            step = trace.steps[step_num - 1]
+            self._log_structured_attempt(step, step_num, error=error, guard=guard_name)
 
     # -- Limit type detection (used by _log_limit_reached) --
 
