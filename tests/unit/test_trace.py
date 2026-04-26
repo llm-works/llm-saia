@@ -449,3 +449,22 @@ class TestWithRequestId:
         mock_backend.set_complete_response("done")
         result = await tagged.complete("do something")
         assert result.trace.request_id == "ext-123"
+
+
+class TestWithContext:
+    """Tests for SAIA.with_context() builder method."""
+
+    async def test_with_context_creates_new_saia(self, mock_backend: MockBackend) -> None:
+        """with_context returns a new SAIA instance with context set."""
+        saia = make_saia(mock_backend)
+        ctx = {"user_id": "u123", "cost_center": "eng"}
+        tagged = saia.with_context(ctx)
+        assert tagged is not saia
+        assert tagged.config.call.context == ctx
+        assert saia.config.call.context is None
+
+    async def test_with_context_none_clears(self, mock_backend: MockBackend) -> None:
+        """with_context(None) clears the context."""
+        saia = make_saia(mock_backend).with_context({"key": "val"})
+        cleared = saia.with_context(None)
+        assert cleared.config.call.context is None

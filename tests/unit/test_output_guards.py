@@ -53,6 +53,7 @@ class SequencedMockBackend(MockBackend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ChatResponse:
         """Return queued responses before falling back to normal behavior."""
         self.last_messages = messages
@@ -66,7 +67,9 @@ class SequencedMockBackend(MockBackend):
             self._sequence_index += 1
             return self._make_response(content)
 
-        return await super().chat(messages, system, tools, response_schema, max_tokens, temperature)
+        return await super().chat(
+            messages, system, tools, response_schema, max_tokens, temperature, context
+        )
 
 
 def make_config(backend: MockBackend) -> Config:

@@ -162,6 +162,7 @@ class SequencedMockBackend(MockBackend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ChatResponse:
         self.last_messages = messages
         self.last_system = system
@@ -174,7 +175,9 @@ class SequencedMockBackend(MockBackend):
             self._sequence_index += 1
             return self._make_response(content)
 
-        return await super().chat(messages, system, tools, response_schema, max_tokens, temperature)
+        return await super().chat(
+            messages, system, tools, response_schema, max_tokens, temperature, context
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +201,7 @@ class TestGuardRetryConversation:
                 response_schema: dict[str, Any] | None = None,
                 max_tokens: int | None = None,
                 temperature: float | None = None,
+                context: dict[str, Any] | None = None,
             ) -> ChatResponse:
                 nonlocal call_count
                 self.last_messages = messages
@@ -245,6 +249,7 @@ class TestGuardRetryConversation:
                 response_schema: dict[str, Any] | None = None,
                 max_tokens: int | None = None,
                 temperature: float | None = None,
+                context: dict[str, Any] | None = None,
             ) -> ChatResponse:
                 seen_messages.append(list(messages))
                 self.last_messages = messages

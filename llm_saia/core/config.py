@@ -63,6 +63,7 @@ class CallOptions:
 
     # Tracing
     request_id: str | None = None  # User-provided correlation ID
+    context: dict[str, Any] | None = None  # Passed to backend for callbacks
 
 
 @dataclass

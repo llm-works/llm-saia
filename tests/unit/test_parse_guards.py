@@ -45,6 +45,7 @@ class SequencedMockBackend(MockBackend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        context: dict[str, Any] | None = None,
     ) -> ChatResponse:
         """Return next queued response."""
         if self._sequence_index >= len(self._response_sequence):

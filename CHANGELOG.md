@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `CallOptions.context` — optional dict passed through to backend for callback tracking (e.g., cost
+  tracking, request correlation). Requires backend support (llm-infer 0.x+).
 - Per-step logging for structured output retries: TRACE logs all steps, DEBUG logs errors only.
 - `JsonParser` protocol and `json_parser` config option for custom JSON parsing in structured
   output. Default is `json.loads`. Override to handle malformed JSON from some backends or to
@@ -70,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     message, recent tool results)
   - Verb lifecycle (start, completion with duration and step count)
   - Controller decisions with terminal tool data
+
+### Fixed
+- Per-invocation `CallOptions` overrides for `system` and `context` now work correctly. Previously,
+  `run=CallOptions(system="...", context=...)` was ignored; `_chat()` always used instance defaults.
 
 ### Changed
 - **BREAKING**: Renamed `AgentResponse` → `ChatResponse` to match the `Backend.chat()` method
