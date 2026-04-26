@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Verb lifecycle (start, completion with duration and step count)
   - Controller decisions with terminal tool data
 
+### Fixed
+- Per-invocation `CallOptions` overrides for `system` and `context` now work correctly. Previously,
+  `run=CallOptions(system="...", context=...)` was ignored; `_chat()` always used instance defaults.
+
 ### Changed
 - **BREAKING**: Renamed `AgentResponse` → `ChatResponse` to match the `Backend.chat()` method
   name and align with `LLMCall` already used in `trace.py`. The old name is removed; update

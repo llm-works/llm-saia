@@ -197,6 +197,7 @@ class Verb(OutputGuardMixin, Configurable):
         max_tokens: int | None,
         temperature: float | None = None,
         *,
+        call: CallOptions | None = None,
         response_schema: dict[str, Any] | None = None,
         tools: list[Any] | None = _SENTINEL,
     ) -> ChatResponse:
@@ -206,6 +207,7 @@ class Verb(OutputGuardMixin, Configurable):
             messages: Conversation messages.
             max_tokens: Token limit (None = unlimited).
             temperature: Sampling temperature.
+            call: Per-invocation CallOptions override.
             response_schema: JSON schema for structured output.
             tools: Tool definitions. Default (sentinel) uses config tools;
                 pass ``None`` or ``[]`` to suppress tools.
@@ -217,15 +219,16 @@ class Verb(OutputGuardMixin, Configurable):
             if tools is _SENTINEL
             else (tools or None)
         )
+        call_opts = self._get_call_options(call)
         t0 = time.monotonic()
         response = await self._backend.chat(
             messages,
-            system=self._call.system,
+            system=call_opts.system,
             tools=resolved_tools,
             max_tokens=max_tokens,
             temperature=temperature,
             response_schema=response_schema,
-            context=self._call.context,
+            context=call_opts.context,
         )
         response.call_id = call_id
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
@@ -259,7 +262,7 @@ class Verb(OutputGuardMixin, Configurable):
         trace_id = trace_id or self._generate_id()
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(conv.as_messages(), max_tokens, temperature)
+            response = await self._chat(conv.as_messages(), max_tokens, temperature, call=config)
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
             await self._append_msg(conv, self._to_message(response))
@@ -274,12 +277,12 @@ class Verb(OutputGuardMixin, Configurable):
                 continue
             self._log_loop_complete(iteration, start_time, total_tokens, response.content)
             return await self._finalize(
-                prompt, response.content, schema, trace_id, temperature, _trace=_trace
+                prompt, response.content, schema, trace_id, temperature, run=config, _trace=_trace
             )
 
         self._log_limit_reached(config, iteration, start_time, total_tokens)
         return await self._finalize(
-            prompt, last_content, schema, trace_id, temperature, _trace=_trace
+            prompt, last_content, schema, trace_id, temperature, run=config, _trace=_trace
         )
 
     async def _apply_iteration_guards_or_tools(
@@ -576,6 +579,7 @@ class Verb(OutputGuardMixin, Configurable):
         schema: type[T] | None,
         trace_id: str = "",
         temperature: float | None = None,
+        run: CallOptions | None = None,
         _trace: VerbTrace | None = None,
     ) -> tuple[str, T | None]:
         """Finalize result, optionally parsing structured output."""
@@ -586,6 +590,7 @@ class Verb(OutputGuardMixin, Configurable):
                 [Message(role=Role.USER, content=structured_prompt)],
                 max_tokens=None,
                 temperature=temperature,
+                call=run,
                 response_schema=json_schema,
                 tools=[],
             )
@@ -659,6 +664,7 @@ class Verb(OutputGuardMixin, Configurable):
             conv.as_messages(),
             max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
+            call=config,
             tools=[],
         )
         await self._append_msg(conv, self._to_message(response))
@@ -687,6 +693,7 @@ class Verb(OutputGuardMixin, Configurable):
             conv.as_messages(),
             max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
+            call=config,
             tools=[],
         )
         await self._append_msg(conv, self._to_message(response))
@@ -883,11 +890,12 @@ class Verb(OutputGuardMixin, Configurable):
         conv = conversation if conversation is not None else ListConversation()
         await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         json_schema = dataclass_to_json_schema(schema)
-        max_tokens = self._max_tokens(self._get_call_options(run))
+        config = self._get_call_options(run)
         response = await self._chat(
             conv.as_messages(),
-            max_tokens=max_tokens,
+            max_tokens=self._max_tokens(config),
             temperature=self._resolve_temperature(run),
+            call=config,
             response_schema=json_schema,
             tools=[],
         )

@@ -1077,8 +1077,8 @@ class TestNonBlockingGuards:
         # The final messages should be: assistant (confirm) -> tool (ack)
         # NOT: assistant (confirm) -> tool (ack) -> user (Explain more.)
         last_msg = result.history[-1]
-        assert last_msg.role.value == "tool", (
-            "Last message should be tool ack, not advisory feedback"
-        )
+        assert (
+            last_msg.role.value == "tool"
+        ), "Last message should be tool ack, not advisory feedback"
         second_last = result.history[-2]
         assert second_last.role.value == "assistant", "Second-to-last should be assistant confirm"
