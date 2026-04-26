@@ -738,6 +738,7 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     ) -> T:
         """Single structured attempt with output guards applied."""
         phase = "attempt" if attempt == 0 else "parse_retry"
+        step_num_before = len(trace.steps)
         result = await self._structured_attempt_cycle(
             prompt,
             schema,
@@ -749,6 +750,9 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
             phase,
             trace,
         )
+        # Log successful parse attempt (step was just added)
+        if trace.steps and len(trace.steps) > step_num_before:
+            self._log_structured_attempt(trace.steps[-1], len(trace.steps))
         result = await self._apply_guards(
             prompt, result, schema, run, conversation=conversation, _trace=trace
         )
@@ -771,6 +775,14 @@ class Verb(OutputGuardMixin, VerbLoggingMixin, Configurable):
     ) -> bool:
         """Handle parse error: mark trace, evaluate guards, update state. Returns True to retry."""
         self._mark_last_step_parse_failure(trace, error)
+        # Log the failed attempt with error details
+        if trace.steps:
+            self._log_structured_attempt(
+                trace.steps[-1],
+                len(trace.steps),
+                error=error.parse_error,
+                raw_content=error.raw_content,
+            )
         # Create a minimal response for the context
         response = ChatResponse(content=error.raw_content or "", tool_calls=[])
         feedback = self._eval_parse_retry_guards(

@@ -429,7 +429,7 @@ async def get_backend(model: str | None = None) -> AsyncGenerator[Backend, None]
 
         lg = AppLogger("saia-examples")
         factory = Factory(lg)
-        async with factory.anthropic(model=model or DEFAULT_ANTHROPIC_MODEL) as client:
+        async with factory.anthropic(default_model=model or DEFAULT_ANTHROPIC_MODEL) as client:
             yield SAIAAdapter(client)
     else:
         # Default: OpenAI-compatible backend

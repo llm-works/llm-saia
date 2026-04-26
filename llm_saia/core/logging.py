@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .backend import ChatResponse
     from .config import CallOptions, Config
     from .logger import Logger
+    from .trace import Step
 
 
 class VerbLoggingMixin:
@@ -110,6 +111,61 @@ class VerbLoggingMixin:
                 "preview": self._truncate(content, self._PREVIEW_LIMIT),
             },
         )
+
+    # -- Structured output attempt logging --
+
+    def _log_structured_attempt(
+        self,
+        step: Step,
+        step_num: int,
+        *,
+        error: str | None = None,
+        guard: str | None = None,
+        raw_content: str | None = None,
+    ) -> None:
+        """Log a structured output attempt with timing and outcome.
+
+        Logging levels:
+        - TRACE: Always logs "structured output step" (for deep debugging)
+        - DEBUG: Only logs "structured output error" when error present
+
+        Args:
+            step: The Step from the trace containing timing and token data.
+            step_num: 1-indexed step number within this structured output operation.
+            error: Error description if this attempt failed.
+            guard: Guard name if this is a guard_retry phase.
+            raw_content: Raw LLM output for TRACE-level logging on failures.
+        """
+        extra: dict[str, Any] = {
+            "step": step_num,
+            "phase": step.phase,
+            "elapsed_ms": step.duration_ms,
+            "tokens": {
+                "in": step.llm_call.input_tokens,
+                "out": step.llm_call.output_tokens,
+            },
+        }
+        if guard:
+            extra["guard"] = guard
+
+        # Always log at TRACE
+        trace_extra = {**extra, "outcome": "ok" if error is None else "error"}
+        if error:
+            trace_extra["error"] = error
+        self._lg.trace("structured output step", extra=trace_extra)
+
+        # Log at DEBUG only on errors
+        if error:
+            extra["error"] = error
+            self._lg.debug("structured output error", extra=extra)
+            if raw_content:
+                self._lg.trace(
+                    "structured output raw",
+                    extra={
+                        "step": step_num,
+                        "raw": self._truncate(raw_content, self._TRACE_LIMIT),
+                    },
+                )
 
     # -- Limit type detection (used by _log_limit_reached) --
 
