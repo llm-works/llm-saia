@@ -101,7 +101,7 @@ async def get_smart_backend() -> AsyncGenerator[Backend, None]:
 
         lg = Logger("build-multi")
         factory = Factory(lg)
-        async with factory.anthropic(model=model or DEFAULT_ANTHROPIC_MODEL) as client:
+        async with factory.anthropic(default_model=model or DEFAULT_ANTHROPIC_MODEL) as client:
             yield SAIAAdapter(client)
     else:
         url = os.environ.get("SMART_URL", "http://localhost:8000/v1")

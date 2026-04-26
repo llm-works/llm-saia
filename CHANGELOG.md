@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Per-step logging for structured output retries: TRACE logs all steps, DEBUG logs errors only.
 - `JsonParser` protocol and `json_parser` config option for custom JSON parsing in structured
   output. Default is `json.loads`. Override to handle malformed JSON from some backends or to
   use alternative parsers (orjson, json-repair, etc.). Set via `SAIA.builder().json_parser(fn)`
