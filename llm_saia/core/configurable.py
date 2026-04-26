@@ -114,6 +114,10 @@ class Configurable(ABC):
         """Return new instance with a user-provided correlation ID (None to clear)."""
         return self._with_call(request_id=request_id)
 
+    def with_context(self, context: dict[str, Any] | None) -> Self:
+        """Return new instance with context dict for backend callbacks (None to clear)."""
+        return self._with_call(context=context)
+
     def with_system(self, system: str | None) -> Self:
         """Return new instance with different system prompt (None to clear)."""
         return self._with_call(system=system)

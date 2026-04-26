@@ -67,7 +67,9 @@ class SequencedMockBackend(MockBackend):
             self._sequence_index += 1
             return self._make_response(content)
 
-        return await super().chat(messages, system, tools, response_schema, max_tokens, temperature)
+        return await super().chat(
+            messages, system, tools, response_schema, max_tokens, temperature, context
+        )
 
 
 def make_config(backend: MockBackend) -> Config:
