@@ -56,7 +56,8 @@ class VerbLoggingMixin:
             },
         )
         if has_abort_signal:
-            self._lg.trace("abort signal attached", extra={"trace_id": trace_id})
+            extra = {"trace_id": trace_id} if trace_id else {}
+            self._lg.trace("abort signal attached", extra=extra)
 
     def _log_response(self, response: ChatResponse, iteration: int, total_tokens: int) -> None:
         """Log LLM response."""

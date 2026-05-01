@@ -138,12 +138,8 @@ class Complete(Verb):
 
     @staticmethod
     def _result_reason(result: TaskResult) -> str:
-        """Derive completion reason from TaskResult."""
-        if result.paused:
-            return "paused"
-        if result.completed:
-            return "completed"
-        return "limit_reached"
+        """Get completion reason from TaskResult."""
+        return result.reason
 
     @staticmethod
     def _score_action(acc: list[int], action: Action, tokens: int) -> None:
@@ -223,10 +219,34 @@ class Complete(Verb):
             output=content,
             iterations=iteration,
             history=ctx.messages,
+            reason="paused" if paused else "limit_reached",
             paused=paused,
         )
         result.score = self._build_score(iteration, total_tokens, ctx.acc)
         return result
+
+    def _handle_pause(
+        self, ctx: _LoopCtx, iteration: int, total_tokens: int, last_content: str
+    ) -> TaskResult:
+        """Handle PauseRequested exception and return paused result.
+
+        Note: if pause occurs mid-iteration, total_tokens may exclude that iteration's
+        tokens (minor scoring inaccuracy). last_content is correct since we only append
+        the response after on_iteration succeeds.
+        """
+        return self._make_incomplete_result(ctx, iteration, total_tokens, last_content, True)
+
+    def _finalize_successful_result(
+        self,
+        result: TaskResult,
+        iteration: int,
+        start_time: float,
+        total_tokens: int,
+        ctx: _LoopCtx,
+    ) -> None:
+        """Log and score a successful task result."""
+        self._log_loop_complete(iteration, start_time, total_tokens, result.output or "")
+        result.score = self._build_score(iteration + 1, total_tokens, ctx.acc)
 
     async def _run_loop(
         self,
@@ -262,13 +282,13 @@ class Complete(Verb):
                 result, tokens, last_content = await self._run_one_iteration(ctx, iteration)
                 total_tokens += tokens
                 if result:
-                    out = result.output or ""
-                    self._log_loop_complete(iteration, start_time, total_tokens, out)
-                    result.score = self._build_score(iteration + 1, total_tokens, ctx.acc)
+                    self._finalize_successful_result(
+                        result, iteration, start_time, total_tokens, ctx
+                    )
                     return result
                 iteration += 1
         except PauseRequested:
-            return self._make_incomplete_result(ctx, iteration, total_tokens, last_content, True)
+            return self._handle_pause(ctx, iteration, total_tokens, last_content)
 
         self._log_limit_reached(ctx.call_options, iteration, start_time, total_tokens)
         return self._make_incomplete_result(ctx, iteration, total_tokens, last_content, False)
@@ -570,6 +590,7 @@ class Complete(Verb):
             output=action.output or response.content,
             iterations=iteration + 1,
             history=messages,
+            reason="completed" if completed else "failed",
             terminal_data=action.terminal_data,
             terminal_tool=action.terminal_tool,
         )

@@ -52,12 +52,12 @@ class ToolCall:
     arguments: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict for persistence."""
+        """Serialize to dict for persistence. Does not copy arguments."""
         return {"id": self.id, "name": self.name, "arguments": self.arguments}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolCall:
-        """Deserialize from dict."""
+        """Deserialize from dict. Does not copy arguments."""
         return cls(id=data["id"], name=data["name"], arguments=data["arguments"])
 
 

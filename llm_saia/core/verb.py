@@ -255,7 +255,12 @@ class Verb(OutputGuardMixin, Configurable):
             conversation: External conversation (required when resuming).
             resume: If True, skip adding initial user message and continue from
                 existing conversation state.
+
+        Raises:
+            ValueError: If resume=True but conversation is None.
         """
+        if resume and conversation is None:
+            raise ValueError("conversation is required when resume=True")
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
         if not resume:
@@ -277,13 +282,16 @@ class Verb(OutputGuardMixin, Configurable):
         response = await self._chat(
             conv.as_messages(), max_tokens, temperature, call=config, abort_signal=abort_signal
         )
-        await self._append_msg(conv, self._to_message(response))
         self._log_response(response, iteration, response.input_tokens + response.output_tokens)
         self._check_tool_support(response)
-        self._record_step(response, phase="iteration", _trace=_trace)
 
+        # Call on_iteration BEFORE appending to conv - if PauseRequested is raised,
+        # nothing is persisted and resume will re-issue the same request cleanly.
         if on_iteration is not None:
             await on_iteration(iteration, response)
+
+        await self._append_msg(conv, self._to_message(response))
+        self._record_step(response, phase="iteration", _trace=_trace)
 
         should_continue = await self._apply_iteration_guards_or_tools(
             config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
