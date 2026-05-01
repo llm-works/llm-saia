@@ -13,6 +13,7 @@ Environment variables:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -355,6 +356,7 @@ class OpenAIBackend(Backend):
         max_tokens: int | None = None,
         temperature: float | None = None,
         context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Send a chat completion request to OpenAI."""
         api_messages = self._build_api_messages(messages, system)

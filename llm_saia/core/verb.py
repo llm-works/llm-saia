@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import time
@@ -164,19 +165,19 @@ class Verb(OutputGuardMixin, Configurable):
         if tracer:
             tracer.write(step)
 
-    def _emit_verb_trace(self, trace: VerbTrace) -> None:
+    def _emit_verb_trace(self, trace: VerbTrace, reason: str | None = None) -> None:
         """Finalize timing and write the full VerbTrace to the configured tracer."""
         mono_start = getattr(trace, "_mono_start", 0.0)
         trace.duration_ms = int((time.monotonic() - mono_start) * 1000) if mono_start else 0
-        self._lg.trace(
-            "verb completed",
-            extra={
-                "verb": trace.verb,
-                "trace_id": trace.trace_id,
-                "duration_ms": trace.duration_ms,
-                "steps": len(trace.steps),
-            },
-        )
+        extra: dict[str, Any] = {
+            "verb": trace.verb,
+            "trace_id": trace.trace_id,
+            "duration_ms": trace.duration_ms,
+            "steps": len(trace.steps),
+        }
+        if reason:
+            extra["reason"] = reason
+        self._lg.trace("verb completed", extra=extra)
         tracer = self._config.tracer
         if tracer:
             tracer.write(trace)
@@ -201,6 +202,7 @@ class Verb(OutputGuardMixin, Configurable):
         call: CallOptions | None = None,
         response_schema: dict[str, Any] | None = None,
         tools: list[Any] | None = _SENTINEL,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Execute a single chat call.
 
@@ -212,6 +214,8 @@ class Verb(OutputGuardMixin, Configurable):
             response_schema: JSON schema for structured output.
             tools: Tool definitions. Default (sentinel) uses config tools;
                 pass ``None`` or ``[]`` to suppress tools.
+            abort_signal: Event that signals abort request. Backend may use
+                streaming to enable fast abort between chunks.
         """
         call_id = self._generate_id()
         self._log_message_assembly(call_id, messages)
@@ -230,6 +234,7 @@ class Verb(OutputGuardMixin, Configurable):
             temperature=temperature,
             response_schema=response_schema,
             context=call_opts.context,
+            abort_signal=abort_signal,
         )
         response.call_id = call_id
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
@@ -820,10 +825,12 @@ class Verb(OutputGuardMixin, Configurable):
         self._emit_verb_trace_if_root(trace, parent_trace)
         return result
 
-    def _emit_verb_trace_if_root(self, trace: VerbTrace, parent: VerbTrace | None) -> None:
+    def _emit_verb_trace_if_root(
+        self, trace: VerbTrace, parent: VerbTrace | None, reason: str | None = None
+    ) -> None:
         """Emit verb trace only if this is the root trace (not nested)."""
         if parent is None:
-            self._emit_verb_trace(trace)
+            self._emit_verb_trace(trace, reason)
 
     def _handle_parse_error(
         self,

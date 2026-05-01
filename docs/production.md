@@ -566,15 +566,40 @@ When `pause_check` returns `True`:
 
 ### Pause Latency
 
-Pause is cooperative — it cannot interrupt a running LLM call or tool execution:
+Pause is cooperative — it cannot interrupt a running tool execution:
 
 | Signal Location | What Happens |
 |-----------------|--------------|
-| During LLM call | Wait for LLM to finish, then check `on_iteration` |
+| During LLM call | With `abort_signal`: abort within ~100ms. Without: wait for full response |
 | Between tools in batch | Check `pause_check`, pause if True |
 | During tool execution | Wait for tool to finish, then check `pause_check` |
 
-Worst-case latency = LLM response time + longest tool execution time.
+Without `abort_signal`, worst-case latency = LLM response time + longest tool execution time.
+
+### Fast Abort with Streaming
+
+For sub-second pause latency during LLM calls, pass an `abort_signal`:
+
+```python
+abort_event = asyncio.Event()
+
+result = await saia.complete(
+    task,
+    pause_check=lambda: abort_event.is_set(),
+    abort_signal=abort_event,  # Enables fast abort during streaming
+)
+
+# From another task (e.g., API handler):
+abort_event.set()  # Triggers abort within ~100ms
+```
+
+When `abort_signal` is set during an LLM call:
+- Backends that support streaming (SAIAAdapter with llm-infer 0.x+) check between chunks
+- The partial response is discarded (not added to conversation)
+- `PauseRequested` is raised, loop exits with `result.paused = True`
+- On resume, the same prompt is re-sent to the LLM
+
+This requires backend support. Backends that don't support streaming ignore `abort_signal`.
 
 ### Serializing Conversation State
 

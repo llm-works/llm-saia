@@ -29,6 +29,7 @@ Example output:
     Explain quantum computing
 """
 
+import asyncio
 from typing import Any
 
 from llm_saia import SAIA
@@ -48,6 +49,7 @@ class DemoBackend(Backend):
         max_tokens: int | None = None,
         temperature: float | None = None,
         context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Placeholder chat method."""
         pass

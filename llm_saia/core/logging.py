@@ -39,7 +39,12 @@ class VerbLoggingMixin:
 
     # -- Loop lifecycle logging --
 
-    def _log_loop_start(self, config: CallOptions) -> None:
+    def _log_loop_start(
+        self,
+        config: CallOptions,
+        has_abort_signal: bool = False,
+        trace_id: str | None = None,
+    ) -> None:
         """Log verb loop start."""
         self._lg.debug(
             "verb loop started",
@@ -50,6 +55,8 @@ class VerbLoggingMixin:
                 "max_total_tokens": config.max_total_tokens,
             },
         )
+        if has_abort_signal:
+            self._lg.trace("abort signal attached", extra={"trace_id": trace_id})
 
     def _log_response(self, response: ChatResponse, iteration: int, total_tokens: int) -> None:
         """Log LLM response."""

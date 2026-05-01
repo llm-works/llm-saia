@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -85,6 +86,7 @@ class Backend(ABC):
         max_tokens: int | None = None,
         temperature: float | None = None,
         context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Send a chat completion request.
 
@@ -96,6 +98,11 @@ class Backend(ABC):
             max_tokens: Maximum tokens to generate.
             temperature: Sampling temperature (None = backend default).
             context: Optional context dict passed to backend callbacks.
+            abort_signal: Optional event that, when set, signals the backend to
+                abort the request as soon as possible. Backends that support
+                streaming can check between chunks for fast abort (~100ms).
+                On abort, raises ``PauseRequested``. Backends may ignore this
+                parameter if they don't support streaming abort.
 
         Returns:
             ChatResponse with content, tool calls, and token usage.

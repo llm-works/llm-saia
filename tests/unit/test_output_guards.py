@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -54,6 +55,7 @@ class SequencedMockBackend(MockBackend):
         max_tokens: int | None = None,
         temperature: float | None = None,
         context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Return queued responses before falling back to normal behavior."""
         self.last_messages = messages
@@ -68,7 +70,14 @@ class SequencedMockBackend(MockBackend):
             return self._make_response(content)
 
         return await super().chat(
-            messages, system, tools, response_schema, max_tokens, temperature, context
+            messages,
+            system,
+            tools,
+            response_schema,
+            max_tokens,
+            temperature,
+            context,
+            abort_signal,
         )
 
 
