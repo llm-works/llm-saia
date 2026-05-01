@@ -22,7 +22,7 @@ from .conversation import (
     Role,
     ToolCall,
 )
-from .errors import StructuredOutputError, TruncatedResponseError
+from .errors import PauseRequested, StructuredOutputError, TruncatedResponseError
 from .guard import IterationContext, IterationGuard
 from .guards import OutputGuardMixin
 from .schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -260,7 +260,6 @@ class Verb(OutputGuardMixin, Configurable):
         conv = conversation if conversation is not None else ListConversation()
         if not resume:
             await self._append_msg(conv, Message(role=Role.USER, content=prompt))
-        self._log_loop_start(config)
         return config, conv, self._max_tokens(config), self._resolve_temperature(run)
 
     async def _loop_iteration(
@@ -272,9 +271,12 @@ class Verb(OutputGuardMixin, Configurable):
         iteration: int,
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
         _trace: VerbTrace | None,
+        abort_signal: asyncio.Event | None = None,
     ) -> tuple[ChatResponse, bool]:
         """Execute one loop iteration. Returns (response, should_continue)."""
-        response = await self._chat(conv.as_messages(), max_tokens, temperature, call=config)
+        response = await self._chat(
+            conv.as_messages(), max_tokens, temperature, call=config, abort_signal=abort_signal
+        )
         await self._append_msg(conv, self._to_message(response))
         self._log_response(response, iteration, response.input_tokens + response.output_tokens)
         self._check_tool_support(response)
@@ -298,6 +300,7 @@ class Verb(OutputGuardMixin, Configurable):
         _trace: VerbTrace | None = None,
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
         resume: bool = False,
+        abort_signal: asyncio.Event | None = None,
     ) -> tuple[str, T | None]:
         """Execute prompt with tool-calling loop.
 
@@ -311,23 +314,27 @@ class Verb(OutputGuardMixin, Configurable):
             on_iteration: Optional callback invoked each iteration. May raise
                 ``PauseRequested`` to exit the loop early.
             resume: If True, continue from existing conversation state.
+            abort_signal: Optional event for fast abort during LLM streaming.
+                When set, backends that support streaming can abort within ~100ms.
 
         Returns:
             Tuple of (content, structured_result).
 
         Raises:
-            PauseRequested: If on_iteration callback requests pause. The
-                conversation is in a consistent state for later resumption.
+            PauseRequested: If on_iteration callback requests pause or abort_signal
+                is set during an LLM call. The conversation is in a consistent
+                state for later resumption.
         """
         config, conv, max_tokens, temperature = await self._init_loop(
             prompt, run, conversation, resume=resume
         )
+        self._log_loop_start(config, abort_signal is not None, trace_id)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
             response, should_continue = await self._loop_iteration(
-                conv, config, max_tokens, temperature, iteration, on_iteration, _trace
+                conv, config, max_tokens, temperature, iteration, on_iteration, _trace, abort_signal
             )
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
@@ -574,12 +581,20 @@ class Verb(OutputGuardMixin, Configurable):
         for msg in source.as_messages()[base_len:]:
             await Verb._append_msg(target, msg)
 
-    async def _execute_tools(self, tool_calls: list[ToolCall], messages: MessageAppendable) -> None:
+    async def _execute_tools(
+        self,
+        tool_calls: list[ToolCall],
+        messages: MessageAppendable,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
         """Execute tool calls and append results.
 
         Args:
             tool_calls: Tool calls to execute.
             messages: Object supporting append() - list[Message] or ConversationLike.
+            pause_check: Optional async callback checked between tool calls.
+                If it returns True, remaining tools are acknowledged as "Paused."
+                and ``PauseRequested`` is raised.
         """
         if not self._config.executor:
             self._lg.warning(
@@ -587,11 +602,23 @@ class Verb(OutputGuardMixin, Configurable):
                 extra={"tool_count": len(tool_calls)},
             )
             return
-        for tc in tool_calls:
+        for i, tc in enumerate(tool_calls):
             result = await self._execute_single_tool(tc)
             await self._append_msg(
                 messages, Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id)
             )
+            # Check for pause after each tool (except the last one)
+            if pause_check is not None and i < len(tool_calls) - 1:
+                if await pause_check():
+                    remaining = tool_calls[i + 1 :]
+                    for rem_tc in remaining:
+                        msg = Message(role=Role.TOOL, content="Paused.", tool_call_id=rem_tc.id)
+                        await self._append_msg(messages, msg)
+                    self._lg.debug(
+                        "pause requested between tool calls",
+                        extra={"executed": i + 1, "remaining": len(remaining)},
+                    )
+                    raise PauseRequested()
 
     async def _execute_single_tool(self, tc: ToolCall) -> str:
         """Execute a single tool call with logging."""

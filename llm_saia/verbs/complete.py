@@ -486,40 +486,10 @@ class Complete(Verb):
             )
             # Execute tools with pause check between calls
             pre_len = len(ctx.messages)
-            await self._execute_tools_interruptible(calls, ctx)
-            await self._sync_tool_results_to_conv(ctx, pre_len)
-
-    async def _execute_tools_interruptible(self, tool_calls: list[ToolCall], ctx: _LoopCtx) -> None:
-        """Execute tool calls with pause check between each call.
-
-        If pause_check returns True after a tool completes, remaining tools
-        are acknowledged and PauseRequested is raised.
-        """
-        if not self._config.executor:
-            self._lg.warning(
-                "tool calls received but no executor configured",
-                extra={"tool_count": len(tool_calls)},
-            )
-            return
-
-        for i, tc in enumerate(tool_calls):
-            result = await self._execute_single_tool(tc)
-            ctx.messages.append(Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id))
-
-            # Check for pause after each tool (except the last one)
-            if ctx.pause_check is not None and i < len(tool_calls) - 1:
-                if await ctx.pause_check():
-                    # ACK remaining tools and raise pause
-                    remaining = tool_calls[i + 1 :]
-                    for rem_tc in remaining:
-                        ctx.messages.append(
-                            Message(role=Role.TOOL, content="Paused.", tool_call_id=rem_tc.id)
-                        )
-                    self._lg.debug(
-                        "pause requested between tool calls",
-                        extra={"executed": i + 1, "remaining": len(remaining)},
-                    )
-                    raise PauseRequested()
+            try:
+                await self._execute_tools(calls, ctx.messages, pause_check=ctx.pause_check)
+            finally:
+                await self._sync_tool_results_to_conv(ctx, pre_len)
 
     async def _sync_tool_results_to_conv(self, ctx: _LoopCtx, pre_len: int) -> None:
         """Sync tool results from internal list to external conversation."""
