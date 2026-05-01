@@ -521,6 +521,139 @@ For simple operations without tool loops:
 result = await saia.with_single_call().verify(code, predicate)
 ```
 
+## Pause and Resume
+
+For long-running tool loops, you may want to pause execution and resume later — for example, when a
+user requests to stop, or to serialize state for later continuation.
+
+### Pausing a Loop
+
+Use the `on_iteration` callback to pause at iteration boundaries (after LLM call, before tools):
+
+```python
+from llm_saia import PauseRequested
+
+should_pause = asyncio.Event()
+
+async def on_iteration(iteration: int, response: ChatResponse) -> None:
+    if should_pause.is_set():
+        raise PauseRequested()
+
+result = await saia.complete(task, on_iteration=on_iteration)
+
+if result.paused:
+    # Loop was paused — save state for later
+    save_conversation(result.history)
+```
+
+For finer-grained control, use `pause_check` to pause between tool calls in a multi-tool batch:
+
+```python
+async def check_pause() -> bool:
+    return should_pause.is_set()
+
+result = await saia.complete(
+    task,
+    on_iteration=on_iteration,  # Checked per iteration
+    pause_check=check_pause,     # Checked between tools in a batch
+)
+```
+
+When `pause_check` returns `True`:
+- The current tool completes (we don't interrupt external calls)
+- Remaining tools in the batch are acknowledged as "Paused." but not executed
+- The loop exits with `result.paused = True`
+
+### Pause Latency
+
+Pause is cooperative — it cannot interrupt a running LLM call or tool execution:
+
+| Signal Location | What Happens |
+|-----------------|--------------|
+| During LLM call | Wait for LLM to finish, then check `on_iteration` |
+| Between tools in batch | Check `pause_check`, pause if True |
+| During tool execution | Wait for tool to finish, then check `pause_check` |
+
+Worst-case latency = LLM response time + longest tool execution time.
+
+### Serializing Conversation State
+
+`Message` and `ToolCall` provide `to_dict()` / `from_dict()` for serialization:
+
+```python
+import json
+
+# Serialize
+history_data = [msg.to_dict() for msg in result.history]
+json.dump(history_data, open("conversation.json", "w"))
+
+# Deserialize
+history_data = json.load(open("conversation.json"))
+messages = [Message.from_dict(d) for d in history_data]
+```
+
+The `to_dict()` methods omit `None` fields, producing clean JSON compatible with LLM APIs.
+
+### Resuming a Loop
+
+To resume, pass the restored conversation with `resume=True`:
+
+```python
+from llm_saia import ListConversation, Message
+
+# Restore conversation from storage
+history_data = load_conversation()
+conv = ListConversation()
+for d in history_data:
+    conv.append(Message.from_dict(d))
+
+# Resume — task is ignored, history has the original context
+result = await saia.complete(
+    task="",  # Ignored when resuming
+    conversation=conv,
+    resume=True,
+)
+```
+
+When `resume=True`:
+- No new user message is added (the conversation already has the original task)
+- The LLM sees the full history and continues naturally
+- `max_iterations` counts from zero (fresh budget for the resumed run)
+
+### Example: User-Controlled Pause
+
+```python
+import asyncio
+import signal
+
+pause_event = asyncio.Event()
+
+def handle_signal(signum, frame):
+    pause_event.set()
+
+async def main():
+    signal.signal(signal.SIGINT, handle_signal)
+
+    async def on_iteration(iteration: int, response: ChatResponse) -> None:
+        if pause_event.is_set():
+            raise PauseRequested()
+
+    async def pause_check() -> bool:
+        return pause_event.is_set()
+
+    result = await saia.complete(
+        task="Research and summarize topic X",
+        on_iteration=on_iteration,
+        pause_check=pause_check,
+    )
+
+    if result.paused:
+        print("Paused. Saving state...")
+        save_state(result.history)
+    else:
+        print(f"Completed: {result.output}")
+```
+
 ## Logging
 
 SAIA accepts any logger implementing the `Logger` protocol:

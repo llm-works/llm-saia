@@ -51,6 +51,15 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for persistence."""
+        return {"id": self.id, "name": self.name, "arguments": self.arguments}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ToolCall:
+        """Deserialize from dict."""
+        return cls(id=data["id"], name=data["name"], arguments=data["arguments"])
+
 
 @dataclass
 class Message:
@@ -68,6 +77,28 @@ class Message:
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for persistence. Omits None fields."""
+        d: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls is not None:
+            d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+        if self.tool_call_id is not None:
+            d["tool_call_id"] = self.tool_call_id
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Message:
+        """Deserialize from dict."""
+        tool_calls = None
+        if "tool_calls" in data and data["tool_calls"] is not None:
+            tool_calls = [ToolCall.from_dict(tc) for tc in data["tool_calls"]]
+        return cls(
+            role=data["role"],
+            content=data["content"],
+            tool_calls=tool_calls,
+            tool_call_id=data.get("tool_call_id"),
+        )
 
 
 @runtime_checkable

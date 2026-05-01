@@ -134,3 +134,25 @@ class BackendError(Error):
         self.status_code = status_code
         self.response_body = response_body
         self.cause = cause
+
+
+# --- Loop Control ---
+
+
+class PauseRequested(Error):
+    """Raised by on_iteration callback to request loop pause.
+
+    When raised, the loop exits early and returns with ``paused=True``.
+    The conversation state is preserved for later resumption.
+
+    Example::
+
+        async def on_iteration(iteration: int, response: ChatResponse) -> None:
+            if should_pause():
+                raise PauseRequested()
+
+        result = await saia.complete(task, on_iteration=on_iteration)
+        if result.paused:
+            # Save result.history for later resumption
+            save_state(result)
+    """

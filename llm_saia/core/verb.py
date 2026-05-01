@@ -6,6 +6,7 @@ import inspect
 import json
 import time
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Self, TypedDict, TypeVar
 
 from .backend import ChatResponse
@@ -239,13 +240,48 @@ class Verb(OutputGuardMixin, Configurable):
         prompt: str,
         run: CallOptions | None,
         conversation: ConversationLike | None,
+        resume: bool = False,
     ) -> tuple[CallOptions, ConversationLike, int | None, float | None]:
-        """Initialize loop state and return (config, conversation, max_tokens, temperature)."""
+        """Initialize loop state and return (config, conversation, max_tokens, temperature).
+
+        Args:
+            prompt: Task prompt (ignored when resuming).
+            run: Call options override.
+            conversation: External conversation (required when resuming).
+            resume: If True, skip adding initial user message and continue from
+                existing conversation state.
+        """
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
-        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
+        if not resume:
+            await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         self._log_loop_start(config)
         return config, conv, self._max_tokens(config), self._resolve_temperature(run)
+
+    async def _loop_iteration(
+        self,
+        conv: ConversationLike,
+        config: CallOptions,
+        max_tokens: int | None,
+        temperature: float | None,
+        iteration: int,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
+        _trace: VerbTrace | None,
+    ) -> tuple[ChatResponse, bool]:
+        """Execute one loop iteration. Returns (response, should_continue)."""
+        response = await self._chat(conv.as_messages(), max_tokens, temperature, call=config)
+        await self._append_msg(conv, self._to_message(response))
+        self._log_response(response, iteration, response.input_tokens + response.output_tokens)
+        self._check_tool_support(response)
+        self._record_step(response, phase="iteration", _trace=_trace)
+
+        if on_iteration is not None:
+            await on_iteration(iteration, response)
+
+        should_continue = await self._apply_iteration_guards_or_tools(
+            config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
+        )
+        return response, should_continue
 
     async def _loop(
         self,
@@ -255,24 +291,42 @@ class Verb(OutputGuardMixin, Configurable):
         trace_id: str = "",
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        resume: bool = False,
     ) -> tuple[str, T | None]:
-        """Execute prompt with tool-calling loop."""
-        config, conv, max_tokens, temperature = await self._init_loop(prompt, run, conversation)
+        """Execute prompt with tool-calling loop.
+
+        Args:
+            prompt: Task prompt (ignored when resuming).
+            run: Call options override.
+            schema: Optional schema for structured finalization.
+            trace_id: Trace correlation ID.
+            conversation: External conversation for message management.
+            _trace: Parent verb trace.
+            on_iteration: Optional callback invoked each iteration. May raise
+                ``PauseRequested`` to exit the loop early.
+            resume: If True, continue from existing conversation state.
+
+        Returns:
+            Tuple of (content, structured_result).
+
+        Raises:
+            PauseRequested: If on_iteration callback requests pause. The
+                conversation is in a consistent state for later resumption.
+        """
+        config, conv, max_tokens, temperature = await self._init_loop(
+            prompt, run, conversation, resume=resume
+        )
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(conv.as_messages(), max_tokens, temperature, call=config)
+            response, should_continue = await self._loop_iteration(
+                conv, config, max_tokens, temperature, iteration, on_iteration, _trace
+            )
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
-            await self._append_msg(conv, self._to_message(response))
-            self._log_response(response, iteration, total_tokens)
-            self._check_tool_support(response)
-            self._record_step(response, phase="iteration", _trace=_trace)
-
-            if await self._apply_iteration_guards_or_tools(
-                config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
-            ):
+            if should_continue:
                 iteration += 1
                 continue
             self._log_loop_complete(iteration, start_time, total_tokens, response.content)

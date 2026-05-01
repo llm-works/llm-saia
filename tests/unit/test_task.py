@@ -5,6 +5,8 @@ from typing import Any
 import pytest
 
 from llm_saia.core.config import CallOptions, Config
+from llm_saia.core.conversation import ListConversation, Message
+from llm_saia.core.errors import PauseRequested
 from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import (
     ChatResponse,
@@ -1198,3 +1200,220 @@ class TestLoopScore:
             wasted_tokens=100,
         )
         assert repr(score) == "quality=0.83 token_eff=0.90"
+
+
+class TestPauseResume:
+    """Tests for pause/resume functionality."""
+
+    async def test_pause_returns_paused_result(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """PauseRequested from on_iteration returns result with paused=True."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Let me search",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "test"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        pause_at_iteration = 0
+
+        async def pause_callback(iteration: int, response: ChatResponse) -> None:
+            if iteration == pause_at_iteration:
+                raise PauseRequested()
+
+        result = await saia.complete(task="Do something", on_iteration=pause_callback)
+
+        assert result.paused is True
+        assert result.completed is False
+        assert result.iterations == 0
+        assert len(result.history) >= 1
+
+    async def test_pause_preserves_conversation_state(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Paused result history contains state at pause point."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching...",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "x"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        async def pause_immediately(iteration: int, response: ChatResponse) -> None:
+            raise PauseRequested()
+
+        result = await saia.complete(task="Search for x", on_iteration=pause_immediately)
+
+        assert result.paused is True
+        # Pause happens before response is added to history
+        # History should have at least the initial user message
+        assert len(result.history) >= 1
+        assert result.history[0].role == "user"
+        # Messages can be serialized
+        for msg in result.history:
+            d = msg.to_dict()
+            restored = Message.from_dict(d)
+            assert restored == msg
+
+    async def test_resume_continues_from_conversation(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Resume with conversation continues without adding new user message."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        # Pre-populate conversation as if paused after tool call
+        conv = ListConversation()
+        conv.append(Message(role="user", content="Original task"))
+        conv.append(
+            Message(
+                role="assistant",
+                content="Searching...",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"q": "test"})],
+            )
+        )
+        conv.append(Message(role="tool", content="Search results", tool_call_id="c1"))
+
+        # Queue completion response
+        mock_backend.queue_tool_response(
+            ChatResponse(content="All done!", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        result = await saia.complete(task="ignored", conversation=conv, resume=True)
+
+        assert result.completed is True
+        # Should NOT have added another user message
+        user_messages = [m for m in result.history if m.role == "user"]
+        assert len(user_messages) == 1  # Only the original one
+
+    async def test_resume_requires_conversation(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """resume=True without conversation raises ValueError."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        with pytest.raises(ValueError, match="conversation is required"):
+            await saia.complete(task="task", resume=True)
+
+    async def test_pause_after_tool_execution(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Pause after iteration 1 includes tool results in history."""
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Result of {name}"
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        # First iteration: tool call
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+        # Second iteration: another tool (we'll pause here)
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Reading file",
+                tool_calls=[ToolCall(id="c2", name="read_file", arguments={"path": "/x"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        async def pause_at_one(iteration: int, response: ChatResponse) -> None:
+            if iteration == 1:
+                raise PauseRequested()
+
+        result = await saia.complete(task="Do work", on_iteration=pause_at_one)
+
+        assert result.paused is True
+        assert result.iterations == 1
+        assert "search" in executed_tools  # First tool executed
+        # History should include tool result
+        tool_messages = [m for m in result.history if m.role == "tool"]
+        assert len(tool_messages) >= 1
+
+    async def test_pause_check_between_tool_calls(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """pause_check is called between tool calls in a batch."""
+        executed_tools: list[str] = []
+        pause_after_first = True
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Result of {name}"
+
+        async def check_pause() -> bool:
+            # Pause after first tool in batch
+            return pause_after_first and len(executed_tools) >= 1
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        # LLM requests multiple tools at once
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Let me do both",
+                tool_calls=[
+                    ToolCall(id="c1", name="search", arguments={"query": "q"}),
+                    ToolCall(id="c2", name="read_file", arguments={"path": "/x"}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do multiple things", pause_check=check_pause)
+
+        assert result.paused is True
+        assert executed_tools == ["search"]  # Only first tool executed
+        # Second tool should be acknowledged as "Paused."
+        tool_messages = [m for m in result.history if m.role == "tool"]
+        assert len(tool_messages) == 2
+        assert tool_messages[0].content == "Result of search"
+        assert tool_messages[1].content == "Paused."
+
+    async def test_pause_check_not_called_for_single_tool(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """pause_check is not called when there's only one tool in the batch."""
+        check_count = 0
+
+        async def count_checks() -> bool:
+            nonlocal check_count
+            check_count += 1
+            return False  # Don't pause
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        # Single tool call
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+        mock_backend.queue_tool_response(
+            ChatResponse(content="Done!", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        result = await saia.complete(task="Search", pause_check=count_checks)
+
+        assert result.completed is True
+        assert check_count == 0  # No check between single-tool batches
