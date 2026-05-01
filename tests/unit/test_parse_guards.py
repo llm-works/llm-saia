@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,7 @@ class SequencedMockBackend(MockBackend):
         max_tokens: int | None = None,
         temperature: float | None = None,
         context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Return next queued response."""
         if self._sequence_index >= len(self._response_sequence):

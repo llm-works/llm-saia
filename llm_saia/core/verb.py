@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import time
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Self, TypedDict, TypeVar
 
 from .backend import ChatResponse
@@ -20,7 +22,7 @@ from .conversation import (
     Role,
     ToolCall,
 )
-from .errors import StructuredOutputError, TruncatedResponseError
+from .errors import PauseRequested, StructuredOutputError, TruncatedResponseError
 from .guard import IterationContext, IterationGuard
 from .guards import OutputGuardMixin
 from .schema import dataclass_to_json_schema, parse_json_to_dataclass
@@ -163,19 +165,19 @@ class Verb(OutputGuardMixin, Configurable):
         if tracer:
             tracer.write(step)
 
-    def _emit_verb_trace(self, trace: VerbTrace) -> None:
+    def _emit_verb_trace(self, trace: VerbTrace, reason: str | None = None) -> None:
         """Finalize timing and write the full VerbTrace to the configured tracer."""
         mono_start = getattr(trace, "_mono_start", 0.0)
         trace.duration_ms = int((time.monotonic() - mono_start) * 1000) if mono_start else 0
-        self._lg.trace(
-            "verb completed",
-            extra={
-                "verb": trace.verb,
-                "trace_id": trace.trace_id,
-                "duration_ms": trace.duration_ms,
-                "steps": len(trace.steps),
-            },
-        )
+        extra: dict[str, Any] = {
+            "verb": trace.verb,
+            "trace_id": trace.trace_id,
+            "duration_ms": trace.duration_ms,
+            "steps": len(trace.steps),
+        }
+        if reason:
+            extra["reason"] = reason
+        self._lg.trace("verb completed", extra=extra)
         tracer = self._config.tracer
         if tracer:
             tracer.write(trace)
@@ -200,6 +202,7 @@ class Verb(OutputGuardMixin, Configurable):
         call: CallOptions | None = None,
         response_schema: dict[str, Any] | None = None,
         tools: list[Any] | None = _SENTINEL,
+        abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Execute a single chat call.
 
@@ -211,6 +214,8 @@ class Verb(OutputGuardMixin, Configurable):
             response_schema: JSON schema for structured output.
             tools: Tool definitions. Default (sentinel) uses config tools;
                 pass ``None`` or ``[]`` to suppress tools.
+            abort_signal: Event that signals abort request. Backend may use
+                streaming to enable fast abort between chunks.
         """
         call_id = self._generate_id()
         self._log_message_assembly(call_id, messages)
@@ -229,6 +234,7 @@ class Verb(OutputGuardMixin, Configurable):
             temperature=temperature,
             response_schema=response_schema,
             context=call_opts.context,
+            abort_signal=abort_signal,
         )
         response.call_id = call_id
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
@@ -239,13 +245,58 @@ class Verb(OutputGuardMixin, Configurable):
         prompt: str,
         run: CallOptions | None,
         conversation: ConversationLike | None,
+        resume: bool = False,
     ) -> tuple[CallOptions, ConversationLike, int | None, float | None]:
-        """Initialize loop state and return (config, conversation, max_tokens, temperature)."""
+        """Initialize loop state and return (config, conversation, max_tokens, temperature).
+
+        Args:
+            prompt: Task prompt (ignored when resuming).
+            run: Call options override.
+            conversation: External conversation (required when resuming).
+            resume: If True, skip adding initial user message and continue from
+                existing conversation state.
+
+        Raises:
+            ValueError: If resume=True but conversation is None.
+        """
+        if resume and conversation is None:
+            raise ValueError("conversation is required when resume=True")
         config = self._get_call_options(run)
         conv = conversation if conversation is not None else ListConversation()
-        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
-        self._log_loop_start(config)
+        if not resume:
+            await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         return config, conv, self._max_tokens(config), self._resolve_temperature(run)
+
+    async def _loop_iteration(
+        self,
+        conv: ConversationLike,
+        config: CallOptions,
+        max_tokens: int | None,
+        temperature: float | None,
+        iteration: int,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
+        _trace: VerbTrace | None,
+        abort_signal: asyncio.Event | None = None,
+    ) -> tuple[ChatResponse, bool]:
+        """Execute one loop iteration. Returns (response, should_continue)."""
+        response = await self._chat(
+            conv.as_messages(), max_tokens, temperature, call=config, abort_signal=abort_signal
+        )
+        self._log_response(response, iteration, response.input_tokens + response.output_tokens)
+        self._check_tool_support(response)
+
+        # Call on_iteration BEFORE appending to conv - if PauseRequested is raised,
+        # nothing is persisted and resume will re-issue the same request cleanly.
+        if on_iteration is not None:
+            await on_iteration(iteration, response)
+
+        await self._append_msg(conv, self._to_message(response))
+        self._record_step(response, phase="iteration", _trace=_trace)
+
+        should_continue = await self._apply_iteration_guards_or_tools(
+            config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
+        )
+        return response, should_continue
 
     async def _loop(
         self,
@@ -255,24 +306,47 @@ class Verb(OutputGuardMixin, Configurable):
         trace_id: str = "",
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        resume: bool = False,
+        abort_signal: asyncio.Event | None = None,
     ) -> tuple[str, T | None]:
-        """Execute prompt with tool-calling loop."""
-        config, conv, max_tokens, temperature = await self._init_loop(prompt, run, conversation)
+        """Execute prompt with tool-calling loop.
+
+        Args:
+            prompt: Task prompt (ignored when resuming).
+            run: Call options override.
+            schema: Optional schema for structured finalization.
+            trace_id: Trace correlation ID.
+            conversation: External conversation for message management.
+            _trace: Parent verb trace.
+            on_iteration: Optional callback invoked each iteration. May raise
+                ``PauseRequested`` to exit the loop early.
+            resume: If True, continue from existing conversation state.
+            abort_signal: Optional event for fast abort during LLM streaming.
+                When set, backends that support streaming can abort within ~100ms.
+
+        Returns:
+            Tuple of (content, structured_result).
+
+        Raises:
+            PauseRequested: If on_iteration callback requests pause or abort_signal
+                is set during an LLM call. The conversation is in a consistent
+                state for later resumption.
+        """
+        config, conv, max_tokens, temperature = await self._init_loop(
+            prompt, run, conversation, resume=resume
+        )
+        self._log_loop_start(config, abort_signal is not None, trace_id)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         trace_id = trace_id or self._generate_id()
 
         while not self._should_stop(config, iteration, start_time, total_tokens):
-            response = await self._chat(conv.as_messages(), max_tokens, temperature, call=config)
+            response, should_continue = await self._loop_iteration(
+                conv, config, max_tokens, temperature, iteration, on_iteration, _trace, abort_signal
+            )
             total_tokens += response.input_tokens + response.output_tokens
             last_content = response.content
-            await self._append_msg(conv, self._to_message(response))
-            self._log_response(response, iteration, total_tokens)
-            self._check_tool_support(response)
-            self._record_step(response, phase="iteration", _trace=_trace)
-
-            if await self._apply_iteration_guards_or_tools(
-                config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
-            ):
+            if should_continue:
                 iteration += 1
                 continue
             self._log_loop_complete(iteration, start_time, total_tokens, response.content)
@@ -515,12 +589,20 @@ class Verb(OutputGuardMixin, Configurable):
         for msg in source.as_messages()[base_len:]:
             await Verb._append_msg(target, msg)
 
-    async def _execute_tools(self, tool_calls: list[ToolCall], messages: MessageAppendable) -> None:
+    async def _execute_tools(
+        self,
+        tool_calls: list[ToolCall],
+        messages: MessageAppendable,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
         """Execute tool calls and append results.
 
         Args:
             tool_calls: Tool calls to execute.
             messages: Object supporting append() - list[Message] or ConversationLike.
+            pause_check: Optional async callback checked between tool calls.
+                If it returns True, remaining tools are acknowledged as "Paused."
+                and ``PauseRequested`` is raised.
         """
         if not self._config.executor:
             self._lg.warning(
@@ -528,11 +610,23 @@ class Verb(OutputGuardMixin, Configurable):
                 extra={"tool_count": len(tool_calls)},
             )
             return
-        for tc in tool_calls:
+        for i, tc in enumerate(tool_calls):
             result = await self._execute_single_tool(tc)
             await self._append_msg(
                 messages, Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id)
             )
+            # Check for pause after each tool (except the last one)
+            if pause_check is not None and i < len(tool_calls) - 1:
+                if await pause_check():
+                    remaining = tool_calls[i + 1 :]
+                    for rem_tc in remaining:
+                        msg = Message(role=Role.TOOL, content="Paused.", tool_call_id=rem_tc.id)
+                        await self._append_msg(messages, msg)
+                    self._lg.debug(
+                        "pause requested between tool calls",
+                        extra={"executed": i + 1, "remaining": len(remaining)},
+                    )
+                    raise PauseRequested()
 
     async def _execute_single_tool(self, tc: ToolCall) -> str:
         """Execute a single tool call with logging."""
@@ -766,10 +860,12 @@ class Verb(OutputGuardMixin, Configurable):
         self._emit_verb_trace_if_root(trace, parent_trace)
         return result
 
-    def _emit_verb_trace_if_root(self, trace: VerbTrace, parent: VerbTrace | None) -> None:
+    def _emit_verb_trace_if_root(
+        self, trace: VerbTrace, parent: VerbTrace | None, reason: str | None = None
+    ) -> None:
         """Emit verb trace only if this is the root trace (not nested)."""
         if parent is None:
-            self._emit_verb_trace(trace)
+            self._emit_verb_trace(trace, reason)
 
     def _handle_parse_error(
         self,

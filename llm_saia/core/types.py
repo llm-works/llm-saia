@@ -198,12 +198,28 @@ class LoopScore:
 
 @dataclass
 class TaskResult:
-    """Result from task execution."""
+    """Result from task execution.
+
+    Attributes:
+        completed: True if task completed successfully.
+        output: Final output text.
+        iterations: Number of iterations executed.
+        history: Full message history.
+        reason: Why the loop ended: "completed", "failed", "paused", "limit_reached".
+        paused: True if loop was paused (via PauseRequested). When True,
+            ``completed`` is False and history can be serialized for resumption.
+        terminal_data: Data from terminal tool if used.
+        terminal_tool: Name of terminal tool if used.
+        score: Loop quality metrics.
+        trace: Execution trace.
+    """
 
     completed: bool
     output: str
     iterations: int
     history: list[Message]
+    reason: str = ""
+    paused: bool = False
     terminal_data: dict[str, Any] | None = None
     terminal_tool: str | None = None
     score: LoopScore | None = None

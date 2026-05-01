@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from ..core.controller import (
     Observation,
 )
 from ..core.conversation import ConversationLike, Message, Role, ToolCall
+from ..core.errors import PauseRequested
 from ..core.guard import IterationGuard
 from ..core.trace import GuardOutcome, LLMCall, Step, ToolOutcome, Tracer, VerbTrace
 from ..core.types import DecisionReason, LoopScore, TaskResult
@@ -50,6 +52,8 @@ class _LoopCtx:
     verb_trace: VerbTrace | None = None
     acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     conv: ConversationLike | None = None  # External conversation (may compact)
+    pause_check: Callable[[], Awaitable[bool]] | None = None  # Check between tool calls
+    abort_signal: asyncio.Event | None = None  # Signal for streaming abort
 
     def llm_messages(self) -> list[Message]:
         """Messages for LLM calls - uses conv (possibly compacted) if available."""
@@ -69,44 +73,73 @@ class _LoopCtx:
 class Complete(Verb):
     """Execute a task with tool calling and completion confirmation."""
 
+    def _validate_call(self, resume: bool, conversation: ConversationLike | None) -> None:
+        """Validate Complete call parameters."""
+        if not self._has_tools():
+            raise ValueError("Complete requires tools and executor to be configured.")
+        if resume and conversation is None:
+            raise ValueError("conversation is required when resume=True")
+
     async def __call__(
         self,
         task: str,
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
         controller: LoopController | None = None,
         conversation: ConversationLike | None = None,
+        resume: bool = False,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> TaskResult:
         """Execute a task using tools until completion or limit reached.
 
         Args:
-            task: The task description / prompt.
-            on_iteration: Optional async callback invoked each iteration.
+            task: The task description / prompt (ignored when resuming).
+            on_iteration: Optional async callback invoked each iteration. May raise
+                ``PauseRequested`` to exit the loop early with ``paused=True``.
             controller: Custom loop controller (uses default if None).
             conversation: Optional external conversation for message management.
                 If provided, messages are appended to both an internal history
                 (returned in ``TaskResult.history``) and this conversation.
                 The LLM sees ``conversation.as_messages()`` which may be compacted.
+                Required when resuming.
+            resume: If True, continue from existing conversation state instead of
+                starting fresh. The conversation must contain the prior history.
+            pause_check: Optional async callback checked between tool calls in a
+                batch. Return True to pause after the current tool completes.
+                Remaining tools are acknowledged but not executed.
+            abort_signal: Optional event for fast abort during LLM streaming.
+                Set this event to abort the current LLM call within ~100ms
+                (requires backend support). Raises ``PauseRequested`` on abort.
         """
-        if not self._has_tools():
-            raise ValueError("Complete requires tools and executor to be configured.")
-
+        self._validate_call(resume, conversation)
         verb_trace = self._init_verb_trace()
-        trace_id = verb_trace.trace_id
         ctrl = controller or self._default_controller()
         ctrl.reset()
-
-        # Tracer is from config - caller owns it and is responsible for closing.
-        tracer = self._resolve_tracer(
-            {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
-        )
-
+        tid, rid = verb_trace.trace_id, verb_trace.request_id
+        tracer = self._resolve_tracer({"trace_id": tid, "request_id": rid, "task": task[:200]})
+        reason: str | None = None
         try:
             result = await self._run_loop(
-                task, trace_id, ctrl, tracer, on_iteration, verb_trace, conversation
+                task,
+                verb_trace.trace_id,
+                ctrl,
+                tracer,
+                on_iteration,
+                verb_trace,
+                conversation,
+                resume,
+                pause_check,
+                abort_signal,
             )
+            reason = self._result_reason(result)
             return self._tag_result(result, verb_trace)
         finally:
-            self._emit_verb_trace(verb_trace)
+            self._emit_verb_trace(verb_trace, reason)
+
+    @staticmethod
+    def _result_reason(result: TaskResult) -> str:
+        """Get completion reason from TaskResult."""
+        return result.reason
 
     @staticmethod
     def _score_action(acc: list[int], action: Action, tokens: int) -> None:
@@ -137,27 +170,83 @@ class Complete(Verb):
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
         verb_trace: VerbTrace | None,
         conversation: ConversationLike | None,
+        resume: bool = False,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> _LoopCtx:
-        """Initialize loop context with dual message storage."""
+        """Initialize loop context with dual message storage.
+
+        Args:
+            resume: If True, initialize from existing conversation state instead
+                of creating a fresh initial message.
+            pause_check: Optional callback to check for pause between tool calls.
+            abort_signal: Event to signal streaming abort (set by pause_check).
+        """
         call_options = self._config.call or DEFAULT_COMPLETE_CALL
-        initial_msg = Message(role=Role.USER, content=task)
-        ctx = _LoopCtx(
+
+        if resume and conversation is not None:
+            # Resuming: copy existing messages, don't add new initial message
+            messages = list(conversation.as_messages())
+        else:
+            # Fresh start: create initial user message
+            initial_msg = Message(role=Role.USER, content=task)
+            messages = [initial_msg]
+            if conversation is not None:
+                await self._append_msg(conversation, initial_msg)
+
+        return _LoopCtx(
             task=task,
             trace_id=trace_id,
             ctrl=ctrl,
             tracer=tracer,
             on_iteration=on_iteration,
             call_options=call_options,
-            messages=[initial_msg],
+            messages=messages,
             tool_names=[t.name for t in (self._config.tools or [])],
             iteration_guards=call_options.iteration_guards,
             verb_trace=verb_trace,
             conv=conversation,
+            pause_check=pause_check,
+            abort_signal=abort_signal,
         )
-        # Sync initial message to external conversation if provided
-        if conversation is not None:
-            await self._append_msg(conversation, initial_msg)
-        return ctx
+
+    def _make_incomplete_result(
+        self, ctx: _LoopCtx, iteration: int, total_tokens: int, content: str, paused: bool
+    ) -> TaskResult:
+        """Build TaskResult for incomplete loop (paused or limit reached)."""
+        result = TaskResult(
+            completed=False,
+            output=content,
+            iterations=iteration,
+            history=ctx.messages,
+            reason="paused" if paused else "limit_reached",
+            paused=paused,
+        )
+        result.score = self._build_score(iteration, total_tokens, ctx.acc)
+        return result
+
+    def _handle_pause(
+        self, ctx: _LoopCtx, iteration: int, total_tokens: int, last_content: str
+    ) -> TaskResult:
+        """Handle PauseRequested exception and return paused result.
+
+        Note: if pause occurs mid-iteration, total_tokens may exclude that iteration's
+        tokens (minor scoring inaccuracy). last_content is correct since we only append
+        the response after on_iteration succeeds.
+        """
+        return self._make_incomplete_result(ctx, iteration, total_tokens, last_content, True)
+
+    def _finalize_successful_result(
+        self,
+        result: TaskResult,
+        iteration: int,
+        start_time: float,
+        total_tokens: int,
+        ctx: _LoopCtx,
+    ) -> None:
+        """Log and score a successful task result."""
+        self._log_loop_complete(iteration, start_time, total_tokens, result.output or "")
+        result.score = self._build_score(iteration + 1, total_tokens, ctx.acc)
 
     async def _run_loop(
         self,
@@ -168,27 +257,41 @@ class Complete(Verb):
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
         verb_trace: VerbTrace | None = None,
         conversation: ConversationLike | None = None,
+        resume: bool = False,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> TaskResult:
         """Execute the main tool-calling loop."""
         ctx = await self._init_loop_ctx(
-            task, trace_id, ctrl, tracer, on_iteration, verb_trace, conversation
+            task,
+            trace_id,
+            ctrl,
+            tracer,
+            on_iteration,
+            verb_trace,
+            conversation,
+            resume,
+            pause_check,
+            abort_signal,
         )
-        self._log_loop_start(ctx.call_options)
+        self._log_loop_start(ctx.call_options, abort_signal is not None, trace_id)
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
 
-        while not self._should_stop(ctx.call_options, iteration, start_time, total_tokens):
-            result, tokens, last_content = await self._run_one_iteration(ctx, iteration)
-            total_tokens += tokens
-            if result:
-                self._log_loop_complete(iteration, start_time, total_tokens, result.output or "")
-                result.score = self._build_score(iteration + 1, total_tokens, ctx.acc)
-                return result
-            iteration += 1
+        try:
+            while not self._should_stop(ctx.call_options, iteration, start_time, total_tokens):
+                result, tokens, last_content = await self._run_one_iteration(ctx, iteration)
+                total_tokens += tokens
+                if result:
+                    self._finalize_successful_result(
+                        result, iteration, start_time, total_tokens, ctx
+                    )
+                    return result
+                iteration += 1
+        except PauseRequested:
+            return self._handle_pause(ctx, iteration, total_tokens, last_content)
 
         self._log_limit_reached(ctx.call_options, iteration, start_time, total_tokens)
-        result = TaskResult(False, last_content, iteration, ctx.messages)
-        result.score = self._build_score(iteration, total_tokens, ctx.acc)
-        return result
+        return self._make_incomplete_result(ctx, iteration, total_tokens, last_content, False)
 
     async def _run_one_iteration(
         self,
@@ -196,7 +299,9 @@ class Complete(Verb):
         iteration: int,
     ) -> tuple[TaskResult | None, int, str]:
         """Run one loop iteration. Returns (result, tokens, last_content)."""
-        response, tokens = await self._run_iteration(ctx.llm_messages(), ctx.call_options)
+        response, tokens = await self._run_iteration(
+            ctx.llm_messages(), ctx.call_options, ctx.abort_signal
+        )
         self._log_response(response, iteration, tokens)
 
         # Run iteration guards before controller decides.
@@ -340,12 +445,15 @@ class Complete(Verb):
         )
 
     async def _run_iteration(
-        self, messages: list[Message], config: CallOptions
+        self,
+        messages: list[Message],
+        config: CallOptions,
+        abort_signal: asyncio.Event | None = None,
     ) -> tuple[ChatResponse, int]:
         """Run one LLM iteration and return response with token count."""
         max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
         temperature = self._resolve_temperature(config)
-        response = await self._chat(messages, max_tokens, temperature)
+        response = await self._chat(messages, max_tokens, temperature, abort_signal=abort_signal)
         return response, response.input_tokens + response.output_tokens
 
     async def _execute_action(
@@ -396,10 +504,12 @@ class Complete(Verb):
             await self._ack_skipped_tools(
                 response.tool_calls, action.tool_ids_to_execute, ctx, confirmation_pending=True
             )
-            # Execute tools - pass internal list, then sync to conv
+            # Execute tools with pause check between calls
             pre_len = len(ctx.messages)
-            await self._execute_tools(calls, ctx.messages)
-            await self._sync_tool_results_to_conv(ctx, pre_len)
+            try:
+                await self._execute_tools(calls, ctx.messages, pause_check=ctx.pause_check)
+            finally:
+                await self._sync_tool_results_to_conv(ctx, pre_len)
 
     async def _sync_tool_results_to_conv(self, ctx: _LoopCtx, pre_len: int) -> None:
         """Sync tool results from internal list to external conversation."""
@@ -480,6 +590,7 @@ class Complete(Verb):
             output=action.output or response.content,
             iterations=iteration + 1,
             history=messages,
+            reason="completed" if completed else "failed",
             terminal_data=action.terminal_data,
             terminal_tool=action.terminal_tool,
         )

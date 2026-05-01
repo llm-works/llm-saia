@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pause/Resume support** for long-running tool loops. Allows interrupting a `Complete` loop and
+  resuming later from serialized conversation state.
+  - `PauseRequested` exception — raise from `on_iteration` callback to pause after current iteration
+  - `pause_check` parameter — async callback checked between tool calls in a batch; return `True` to
+    pause after current tool completes (remaining tools acknowledged but not executed)
+  - `abort_signal` parameter — `asyncio.Event` for fast abort during LLM streaming. When set,
+    backends that support streaming can abort within ~100ms instead of waiting for full response.
+    Requires backend support (SAIAAdapter in llm-infer 0.x+).
+  - `resume=True` parameter — continue from existing conversation state instead of starting fresh
+  - `TaskResult.paused` — indicates the result is from a paused loop (vs completed/failed)
+  - `Message.to_dict()` / `Message.from_dict()` — serialize conversation history for persistence
+  - `ToolCall.to_dict()` / `ToolCall.from_dict()` — serialize tool calls for persistence
+- `Backend.chat()` now accepts optional `abort_signal: asyncio.Event` parameter for streaming abort.
+- "verb completed" trace log now includes `reason` field ("completed", "paused", "limit_reached").
 - `CallOptions.context` — optional dict passed through to backend for callback tracking (e.g., cost
   tracking, request correlation). Requires backend support (llm-infer 0.x+).
 - Per-step logging for structured output retries: TRACE logs all steps, DEBUG logs errors only.
