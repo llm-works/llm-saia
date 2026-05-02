@@ -25,7 +25,8 @@ from .conversation import (
 from .errors import PauseRequested, StructuredOutputError, TruncatedResponseError
 from .guard import IterationContext, IterationGuard
 from .guards import OutputGuardMixin
-from .loop import CoreLoopResult, LoopAction, LoopDecision, LoopStrategy, SimpleStrategy
+from .loop import CoreLoopResult, LoopDecision, LoopStrategy, SimpleStrategy
+from .loop_runner import _LoopRunner
 from .schema import dataclass_to_json_schema, parse_json_to_dataclass
 
 if TYPE_CHECKING:
@@ -370,205 +371,18 @@ class Verb(OutputGuardMixin, Configurable):
         on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None = None,
         trace: VerbTrace | None = None,
     ) -> CoreLoopResult:
-        """Unified loop with pluggable strategy."""
-        start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
-        max_tokens, temperature = self._max_tokens(config), self._resolve_temperature(config)
-
-        try:
-            while not self._should_stop(config, iteration, start_time, total_tokens):
-                result, tokens, content = await self._run_core_iteration(
-                    messages,
-                    config,
-                    strategy,
-                    conv,
-                    abort_signal,
-                    pause_check,
-                    on_iteration,
-                    on_decide,
-                    trace,
-                    iteration,
-                    max_tokens,
-                    temperature,
-                )
-                total_tokens, last_content = total_tokens + tokens, content
-                if result is not None:
-                    result.iterations, result.total_tokens = iteration + 1, total_tokens
-                    self._log_loop_complete(iteration, start_time, total_tokens, result.output)
-                    return result
-                iteration += 1
-            self._log_limit_reached(config, iteration, start_time, total_tokens)
-            return self._incomplete_result(messages, iteration, total_tokens, last_content, False)
-        except PauseRequested:
-            return self._incomplete_result(messages, iteration, total_tokens, last_content, True)
-
-    async def _run_core_iteration(
-        self,
-        messages: list[Message],
-        config: CallOptions,
-        strategy: LoopStrategy,
-        conv: ConversationLike | None,
-        abort_signal: asyncio.Event | None,
-        pause_check: Callable[[], Awaitable[bool]] | None,
-        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
-        on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None,
-        trace: VerbTrace | None,
-        iteration: int,
-        max_tokens: int | None,
-        temperature: float | None,
-    ) -> tuple[CoreLoopResult | None, int, str]:
-        """Run one core loop iteration. Returns (result, tokens, content)."""
-        llm_messages = conv.as_messages() if conv else messages
-        response = await self._chat(
-            llm_messages, max_tokens, temperature, call=config, abort_signal=abort_signal
-        )
-        tokens = response.input_tokens + response.output_tokens
-        self._log_response(response, iteration, tokens)
-        self._check_tool_support(response)
-
-        _, outcomes = self._run_iteration_guards(
-            config.iteration_guards, response, iteration, config.max_iterations
-        )
-        blocking_fb, advisory_fb = self._split_guard_feedback(outcomes)
-
-        if on_iteration:
-            await on_iteration(iteration, response)
-
-        decision = await strategy.decide(response, messages, iteration, blocking_fb, advisory_fb)
-
-        if on_decide:
-            on_decide(response, decision, iteration, outcomes)
-        else:
-            self._record_step(response, phase="iteration", _trace=trace)
-            self._attach_guard_outcomes(trace, outcomes)
-
-        result = await self._execute_decision(
-            decision, response, messages, conv, pause_check, advisory_fb
-        )
-        strategy.on_iteration_complete(decision, tokens)
-        return result, tokens, response.content
-
-    @staticmethod
-    def _incomplete_result(
-        messages: list[Message], iteration: int, total_tokens: int, content: str, paused: bool
-    ) -> CoreLoopResult:
-        """Build CoreLoopResult for incomplete loop (limit or pause)."""
-        return CoreLoopResult(
-            completed=False,
-            output=content,
-            iterations=iteration,
-            messages=messages,
-            reason="paused" if paused else "limit_reached",
-            paused=paused,
-            total_tokens=total_tokens,
-        )
-
-    async def _execute_decision(
-        self,
-        decision: LoopDecision,
-        response: ChatResponse,
-        messages: list[Message],
-        conv: ConversationLike | None,
-        pause_check: Callable[[], Awaitable[bool]] | None,
-        advisory_fb: str | None,
-    ) -> CoreLoopResult | None:
-        """Execute a loop decision. Returns result if loop should exit."""
-        match decision.action:
-            case LoopAction.EXECUTE_TOOLS:
-                await self._do_execute_tools(
-                    decision, response, messages, conv, pause_check, advisory_fb
-                )
-                return None
-            case LoopAction.INSTRUCT:
-                await self._do_ack_and_inject(response, messages, conv, decision.message)
-                return None
-            case LoopAction.SKIP:
-                await self._do_ack_and_inject(response, messages, conv, "Continue.")
-                return None
-            case LoopAction.COMPLETE:
-                await self._do_ack_and_inject(response, messages, conv, None)
-                return self._make_loop_result(True, decision, response, messages)
-            case LoopAction.FAIL:
-                await self._do_ack_and_inject(response, messages, conv, None)
-                return self._make_loop_result(False, decision, response, messages)
-        return None
-
-    async def _do_execute_tools(
-        self,
-        decision: LoopDecision,
-        response: ChatResponse,
-        messages: list[Message],
-        conv: ConversationLike | None,
-        pause_check: Callable[[], Awaitable[bool]] | None,
-        advisory_fb: str | None,
-    ) -> None:
-        """Handle EXECUTE_TOOLS action: filter, ack skipped, execute, sync."""
-        messages.append(self._to_message(response))
-        if conv:
-            await self._append_msg(conv, self._to_message(response))
-
-        tool_calls = response.tool_calls or []
-        if decision.tool_ids is not None:
-            execute_ids = set(decision.tool_ids)
-            for tc in tool_calls:
-                if tc.id not in execute_ids:
-                    await self._ack_tool_to(tc, messages, conv)
-            tool_calls = [tc for tc in tool_calls if tc.id in execute_ids]
-
-        pre_len = len(messages)
-        try:
-            await self._execute_tools(tool_calls, messages, pause_check)
-        finally:
-            if conv:
-                for msg in messages[pre_len:]:
-                    await self._append_msg(conv, msg)
-
-        if advisory_fb:
-            msg = Message(role=Role.USER, content=advisory_fb)
-            messages.append(msg)
-            if conv:
-                await self._append_msg(conv, msg)
-
-    async def _do_ack_and_inject(
-        self,
-        response: ChatResponse,
-        messages: list[Message],
-        conv: ConversationLike | None,
-        inject: str | None,
-    ) -> None:
-        """Append response, ack all tools, optionally inject user message."""
-        messages.append(self._to_message(response))
-        if conv:
-            await self._append_msg(conv, self._to_message(response))
-        for tc in response.tool_calls or []:
-            await self._ack_tool_to(tc, messages, conv)
-        if inject:
-            msg = Message(role=Role.USER, content=inject)
-            messages.append(msg)
-            if conv:
-                await self._append_msg(conv, msg)
-
-    async def _ack_tool_to(
-        self, tc: ToolCall, messages: list[Message], conv: ConversationLike | None
-    ) -> None:
-        """Acknowledge a tool call to messages and optionally conv."""
-        msg = Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id)
-        messages.append(msg)
-        if conv:
-            await self._append_msg(conv, msg)
-
-    @staticmethod
-    def _make_loop_result(
-        completed: bool, decision: LoopDecision, response: ChatResponse, messages: list[Message]
-    ) -> CoreLoopResult:
-        """Build CoreLoopResult for COMPLETE/FAIL actions."""
-        return CoreLoopResult(
-            completed=completed,
-            output=decision.output or response.content,
-            iterations=0,
-            messages=messages,
-            reason="completed" if completed else "failed",
-            terminal_data=decision.terminal_data,
-            terminal_tool=decision.terminal_tool,
+        """Unified loop with pluggable strategy. Delegates to _LoopRunner."""
+        runner = _LoopRunner(self)
+        return await runner.run(
+            messages,
+            config,
+            strategy,
+            conv=conv,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
+            on_iteration=on_iteration,
+            on_decide=on_decide,
+            trace=trace,
         )
 
     async def _apply_iteration_guards_or_tools(
