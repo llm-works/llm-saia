@@ -21,13 +21,14 @@ from .conversation import (
     Role,
     ToolCall,
 )
-from .errors import PauseRequested, StructuredOutputError, TruncatedResponseError
+from .errors import StructuredOutputError, TruncatedResponseError
 from .guard import IterationContext, IterationGuard
 from .guard_eval import _GuardEvaluator
 from .guards import OutputGuardMixin
 from .loop import CoreLoopResult, LoopDecision, LoopStrategy, SimpleStrategy
 from .loop_runner import _LoopRunner
 from .structured_output import _StructuredOutputHandler
+from .tool_executor import _ToolExecutor
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -541,76 +542,8 @@ class Verb(OutputGuardMixin, Configurable):
         messages: MessageAppendable,
         pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
-        """Execute tool calls and append results.
-
-        Args:
-            tool_calls: Tool calls to execute.
-            messages: Object supporting append() - list[Message] or ConversationLike.
-            pause_check: Optional async callback checked between tool calls.
-                If it returns True, remaining tools are acknowledged as "Paused."
-                and ``PauseRequested`` is raised.
-        """
-        if not self._config.executor:
-            self._lg.warning(
-                "tool calls received but no executor configured",
-                extra={"tool_count": len(tool_calls)},
-            )
-            return
-        for i, tc in enumerate(tool_calls):
-            result = await self._execute_single_tool(tc)
-            await self._append_msg(
-                messages, Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id)
-            )
-            # Check for pause after each tool (except the last one)
-            if pause_check is not None and i < len(tool_calls) - 1:
-                if await pause_check():
-                    remaining = tool_calls[i + 1 :]
-                    for rem_tc in remaining:
-                        msg = Message(role=Role.TOOL, content="Paused.", tool_call_id=rem_tc.id)
-                        await self._append_msg(messages, msg)
-                    self._lg.debug(
-                        "pause requested between tool calls",
-                        extra={"executed": i + 1, "remaining": len(remaining)},
-                    )
-                    raise PauseRequested()
-
-    async def _execute_single_tool(self, tc: ToolCall) -> str:
-        """Execute a single tool call with logging."""
-        self._log_tool_start(tc)
-        try:
-            result = await self._config.executor(tc.name, tc.arguments)  # type: ignore[misc]
-        except Exception as e:
-            self._log_tool_error(tc, e)
-            return f"Error: {e}"
-        self._log_tool_success(tc, result)
-        return str(result)
-
-    def _log_tool_start(self, tc: ToolCall) -> None:
-        """Log tool execution start."""
-        self._lg.trace(
-            "executing tool...",
-            extra={"tool": tc.name, "id": tc.id, "tool_args": tc.arguments},
-        )
-
-    def _log_tool_success(self, tc: ToolCall, result: Any) -> None:
-        """Log successful tool execution with result."""
-        result_str = str(result)
-        self._lg.trace(
-            "tool result returned to llm",
-            extra={
-                "tool": tc.name,
-                "id": tc.id,
-                "result_len": len(result_str),
-                "result": self._truncate(result_str, self._TRACE_LIMIT),
-            },
-        )
-
-    def _log_tool_error(self, tc: ToolCall, error: Exception) -> None:
-        """Log failed tool execution."""
-        self._lg.warning(
-            "tool execution failed",
-            extra={"tool": tc.name, "id": tc.id, "tool_args": tc.arguments, "exception": error},
-        )
+        """Execute tool calls and append results."""
+        await _ToolExecutor(self).execute_tools(tool_calls, messages, pause_check)
 
     async def _finalize(
         self,
