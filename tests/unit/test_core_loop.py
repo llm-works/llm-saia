@@ -229,18 +229,13 @@ class TestCoreLoopIntegration:
         # Should have stopped at 3 iterations
         assert "result for search" in mock_backend.last_prompt or result.value is not None
 
-    async def test_loop_handles_pause_requested(self, mock_backend: MockBackend) -> None:
-        """Loop exits gracefully on PauseRequested."""
+    async def test_loop_completes_with_tool_call(self, mock_backend: MockBackend) -> None:
+        """Loop completes normally when tool call is present."""
         mock_backend.queue_response(_tool_response(tool_calls=[_make_tool_call()]))
 
-        async def pause_immediately() -> bool:
-            return True  # Pause after first tool
-
         verb = Instruct(_make_config(mock_backend))
-
-        # The pause happens inside tool execution - need to trigger via Complete
-        # For Instruct._loop this won't pause mid-tool, just test basic flow
         result = await verb("Test")
+
         assert result.value is not None
 
 

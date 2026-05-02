@@ -317,6 +317,11 @@ class Verb(OutputGuardMixin, Configurable):
             trace=_trace,
         )
 
+        if result.paused:
+            from .errors import PauseRequested
+
+            raise PauseRequested()
+
         return await self._finalize(
             prompt, result.output, schema, trace_id, temperature, run=config, _trace=_trace
         )
