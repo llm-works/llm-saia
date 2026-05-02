@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .loop import CoreLoopResult, LoopAction, LoopDecision, LoopStrategy
@@ -19,6 +20,22 @@ if TYPE_CHECKING:
     from .conversation import ConversationLike, Message, ToolCall
     from .guard import IterationGuard
     from .trace import GuardOutcome, VerbTrace
+
+
+@dataclass
+class _IterationContext:
+    """Loop-invariant state passed to each iteration."""
+
+    config: CallOptions
+    strategy: LoopStrategy
+    conv: ConversationLike | None
+    abort_signal: asyncio.Event | None
+    pause_check: Callable[[], Awaitable[bool]] | None
+    on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None
+    on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None
+    trace: VerbTrace | None
+    max_tokens: int | None
+    temperature: float | None
 
 
 class _LoopHost(Protocol):
@@ -139,24 +156,22 @@ class _LoopRunner:
 
         h = self._host
         start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
-        max_tokens, temperature = h._max_tokens(config), h._resolve_temperature(config)
+        ctx = _IterationContext(
+            config=config,
+            strategy=strategy,
+            conv=conv,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
+            on_iteration=on_iteration,
+            on_decide=on_decide,
+            trace=trace,
+            max_tokens=h._max_tokens(config),
+            temperature=h._resolve_temperature(config),
+        )
 
         try:
             while not h._should_stop(config, iteration, start_time, total_tokens):
-                result, tokens, content = await self._run_iteration(
-                    messages,
-                    config,
-                    strategy,
-                    conv,
-                    abort_signal,
-                    pause_check,
-                    on_iteration,
-                    on_decide,
-                    trace,
-                    iteration,
-                    max_tokens,
-                    temperature,
-                )
+                result, tokens, content = await self._run_iteration(ctx, messages, iteration)
                 total_tokens, last_content = total_tokens + tokens, content
                 if result is not None:
                     return self._finalize_complete(result, iteration, start_time, total_tokens)
@@ -166,51 +181,56 @@ class _LoopRunner:
         except PauseRequested:
             return self._incomplete_result(messages, iteration, total_tokens, last_content, True)
 
-    async def _run_iteration(
-        self,
-        messages: list[Message],
-        config: CallOptions,
-        strategy: LoopStrategy,
-        conv: ConversationLike | None,
-        abort_signal: asyncio.Event | None,
-        pause_check: Callable[[], Awaitable[bool]] | None,
-        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
-        on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None,
-        trace: VerbTrace | None,
-        iteration: int,
-        max_tokens: int | None,
-        temperature: float | None,
-    ) -> tuple[CoreLoopResult | None, int, str]:
-        """Run one loop iteration. Returns (result, tokens, content)."""
+    async def _call_llm(
+        self, ctx: _IterationContext, messages: list[Message], iteration: int
+    ) -> tuple[ChatResponse, int]:
+        """Call LLM and return (response, tokens)."""
         h = self._host
-        llm_messages = conv.as_messages() if conv else messages
+        llm_messages = ctx.conv.as_messages() if ctx.conv else messages
         response = await h._chat(
-            llm_messages, max_tokens, temperature, call=config, abort_signal=abort_signal
+            llm_messages,
+            ctx.max_tokens,
+            ctx.temperature,
+            call=ctx.config,
+            abort_signal=ctx.abort_signal,
         )
         tokens = response.input_tokens + response.output_tokens
         h._log_response(response, iteration, tokens)
         h._check_tool_support(response)
+        return response, tokens
+
+    async def _run_iteration(
+        self,
+        ctx: _IterationContext,
+        messages: list[Message],
+        iteration: int,
+    ) -> tuple[CoreLoopResult | None, int, str]:
+        """Run one loop iteration. Returns (result, tokens, content)."""
+        h = self._host
+        response, tokens = await self._call_llm(ctx, messages, iteration)
 
         _, outcomes = h._run_iteration_guards(
-            config.iteration_guards, response, iteration, config.max_iterations
+            ctx.config.iteration_guards, response, iteration, ctx.config.max_iterations
         )
         blocking_fb, advisory_fb = h._split_guard_feedback(outcomes)
 
-        if on_iteration:
-            await on_iteration(iteration, response)
+        if ctx.on_iteration:
+            await ctx.on_iteration(iteration, response)
 
-        decision = await strategy.decide(response, messages, iteration, blocking_fb, advisory_fb)
+        decision = await ctx.strategy.decide(
+            response, messages, iteration, blocking_fb, advisory_fb
+        )
 
-        if on_decide:
-            on_decide(response, decision, iteration, outcomes)
+        if ctx.on_decide:
+            ctx.on_decide(response, decision, iteration, outcomes)
         else:
-            h._record_step(response, phase="iteration", _trace=trace)
-            h._attach_guard_outcomes(trace, outcomes)
+            h._record_step(response, phase="iteration", _trace=ctx.trace)
+            h._attach_guard_outcomes(ctx.trace, outcomes)
 
         result = await self._execute_decision(
-            decision, response, messages, conv, pause_check, advisory_fb
+            decision, response, messages, ctx.conv, ctx.pause_check, advisory_fb
         )
-        strategy.on_iteration_complete(decision, tokens)
+        ctx.strategy.on_iteration_complete(decision, tokens)
         return result, tokens, response.content
 
     async def _execute_decision(
