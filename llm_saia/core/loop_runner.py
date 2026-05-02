@@ -32,23 +32,33 @@ class _LoopHost(Protocol):
         *,
         call: CallOptions | None = None,
         abort_signal: asyncio.Event | None = None,
-    ) -> ChatResponse: ...
+    ) -> ChatResponse:
+        """Call the LLM backend."""
+        ...
 
     async def _execute_tools(
         self,
         tool_calls: list[ToolCall],
         messages: list[Message],
         pause_check: Callable[[], Awaitable[bool]] | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Execute tool calls and append results to messages."""
+        ...
 
-    def _to_message(self, response: ChatResponse) -> Message: ...
+    def _to_message(self, response: ChatResponse) -> Message:
+        """Convert ChatResponse to Message."""
+        ...
 
     @staticmethod
-    async def _append_msg(conv: ConversationLike, msg: Message) -> None: ...
+    async def _append_msg(conv: ConversationLike, msg: Message) -> None:
+        """Append message to conversation."""
+        ...
 
     def _should_stop(
         self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
-    ) -> bool: ...
+    ) -> bool:
+        """Check if loop should stop due to limits."""
+        ...
 
     def _run_iteration_guards(
         self,
@@ -57,41 +67,58 @@ class _LoopHost(Protocol):
         iteration: int,
         max_iterations: int,
         trace: VerbTrace | None = None,
-    ) -> tuple[str | None, list[GuardOutcome]]: ...
+    ) -> tuple[str | None, list[GuardOutcome]]:
+        """Run iteration guards and return feedback."""
+        ...
 
-    def _split_guard_feedback(
-        self, outcomes: list[GuardOutcome]
-    ) -> tuple[str | None, str | None]: ...
+    def _split_guard_feedback(self, outcomes: list[GuardOutcome]) -> tuple[str | None, str | None]:
+        """Split guard outcomes into blocking and advisory feedback."""
+        ...
 
     def _record_step(
         self, response: ChatResponse, *, phase: str, _trace: VerbTrace | None = None
-    ) -> None: ...
+    ) -> None:
+        """Record a step to the trace."""
+        ...
 
-    def _attach_guard_outcomes(
-        self, trace: VerbTrace | None, outcomes: list[GuardOutcome]
-    ) -> None: ...
+    def _attach_guard_outcomes(self, trace: VerbTrace | None, outcomes: list[GuardOutcome]) -> None:
+        """Attach guard outcomes to the current step."""
+        ...
 
-    def _log_response(self, response: ChatResponse, iteration: int, tokens: int) -> None: ...
+    def _log_response(self, response: ChatResponse, iteration: int, tokens: int) -> None:
+        """Log LLM response details."""
+        ...
 
     def _log_loop_complete(
         self, iteration: int, start_time: float, total_tokens: int, output: str
-    ) -> None: ...
+    ) -> None:
+        """Log loop completion."""
+        ...
 
     def _log_limit_reached(
         self, config: CallOptions, iteration: int, start_time: float, total_tokens: int
-    ) -> None: ...
+    ) -> None:
+        """Log when loop limit is reached."""
+        ...
 
-    def _max_tokens(self, config: CallOptions) -> int | None: ...
+    def _max_tokens(self, config: CallOptions) -> int | None:
+        """Get max tokens from config."""
+        ...
 
-    def _resolve_temperature(self, override: CallOptions | None) -> float | None: ...
+    def _resolve_temperature(self, override: CallOptions | None) -> float | None:
+        """Resolve temperature from override or config."""
+        ...
 
-    def _check_tool_support(self, response: ChatResponse) -> None: ...
+    def _check_tool_support(self, response: ChatResponse) -> None:
+        """Check if backend supports tool calls."""
+        ...
 
 
 class _LoopRunner:
     """Executes the unified loop on behalf of a Verb."""
 
     def __init__(self, host: _LoopHost):
+        """Initialize with host providing required capabilities."""
         self._host = host
 
     async def run(
@@ -307,12 +334,14 @@ class _LoopRunner:
 
     @staticmethod
     def _make_user_message(content: str) -> Message:
+        """Create a user message."""
         from .conversation import Message, Role
 
         return Message(role=Role.USER, content=content)
 
     @staticmethod
     def _make_tool_ack(tool_call_id: str) -> Message:
+        """Create a tool acknowledgment message."""
         from .conversation import Message, Role
 
         return Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tool_call_id)
