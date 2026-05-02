@@ -263,37 +263,6 @@ class Verb(OutputGuardMixin, Configurable):
             await self._append_msg(conv, Message(role=Role.USER, content=prompt))
         return config, conv, self._max_tokens(config), self._resolve_temperature(run)
 
-    async def _loop_iteration(
-        self,
-        conv: ConversationLike,
-        config: CallOptions,
-        max_tokens: int | None,
-        temperature: float | None,
-        iteration: int,
-        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
-        _trace: VerbTrace | None,
-        abort_signal: asyncio.Event | None = None,
-    ) -> tuple[ChatResponse, bool]:
-        """Execute one loop iteration. Returns (response, should_continue)."""
-        response = await self._chat(
-            conv.as_messages(), max_tokens, temperature, call=config, abort_signal=abort_signal
-        )
-        self._log_response(response, iteration, response.input_tokens + response.output_tokens)
-        self._check_tool_support(response)
-
-        # Call on_iteration BEFORE appending to conv - if PauseRequested is raised,
-        # nothing is persisted and resume will re-issue the same request cleanly.
-        if on_iteration is not None:
-            await on_iteration(iteration, response)
-
-        await self._append_msg(conv, self._to_message(response))
-        self._record_step(response, phase="iteration", _trace=_trace)
-
-        should_continue = await self._apply_iteration_guards_or_tools(
-            config.iteration_guards, response, conv, iteration, config.max_iterations, _trace
-        )
-        return response, should_continue
-
     async def _loop(
         self,
         prompt: str,
@@ -377,63 +346,6 @@ class Verb(OutputGuardMixin, Configurable):
             on_iteration=on_iteration,
             on_decide=on_decide,
             trace=trace,
-        )
-
-    async def _apply_iteration_guards_or_tools(
-        self,
-        iter_guards: tuple[IterationGuard, ...],
-        response: ChatResponse,
-        conv: ConversationLike,
-        iteration: int,
-        max_iterations: int,
-        _trace: VerbTrace | None,
-    ) -> bool:
-        """Check iteration guards and execute tools. Returns True if loop should continue."""
-        _feedback, outcomes = self._run_iteration_guards(
-            iter_guards, response, iteration, max_iterations, _trace
-        )
-        blocking_fb, advisory_fb = self._split_guard_feedback(outcomes)
-
-        if blocking_fb:
-            await self._apply_blocking_feedback(response, conv, blocking_fb)
-            return True
-
-        if response.tool_calls:
-            await self._execute_tools(response.tool_calls, conv)
-
-        if advisory_fb:
-            await self._apply_advisory_feedback(conv, advisory_fb)
-            return True
-
-        return bool(response.tool_calls)
-
-    async def _apply_blocking_feedback(
-        self, response: ChatResponse, conv: ConversationLike, feedback: str
-    ) -> None:
-        """ACK tool calls and inject blocking guard feedback."""
-        for tc in response.tool_calls or []:
-            await self._append_msg(
-                conv, Message(role=Role.TOOL, content="Acknowledged.", tool_call_id=tc.id)
-            )
-        await self._append_msg(conv, Message(role=Role.USER, content=feedback))
-        self._lg.trace(
-            "blocking guard feedback injected",
-            extra={
-                "feedback_len": len(feedback),
-                "feedback": self._truncate(feedback, self._TRACE_LIMIT),
-                "acked_tools": [tc.name for tc in (response.tool_calls or [])],
-            },
-        )
-
-    async def _apply_advisory_feedback(self, conv: ConversationLike, feedback: str) -> None:
-        """Inject advisory guard feedback after tool execution."""
-        await self._append_msg(conv, Message(role=Role.USER, content=feedback))
-        self._lg.trace(
-            "advisory guard feedback injected",
-            extra={
-                "feedback_len": len(feedback),
-                "feedback": self._truncate(feedback, self._TRACE_LIMIT),
-            },
         )
 
     @staticmethod
