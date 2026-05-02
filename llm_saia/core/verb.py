@@ -387,17 +387,13 @@ class Verb(OutputGuardMixin, Configurable):
 
     def _eval_single_guard(self, guard: IterationGuard, ctx: IterationContext) -> str | None:
         """Evaluate a single guard, catching exceptions."""
-        try:
-            return guard.validator(ctx)
-        except Exception as e:
-            return f"Validator raised {type(e).__name__}: {e}"
+        return _GuardEvaluator.eval_single_guard(guard, ctx)
 
     def _attach_guard_outcomes(
         self, _trace: VerbTrace | None, outcomes: list[GuardOutcome]
     ) -> None:
         """Attach outcomes to the most recent step if trace exists."""
-        if _trace and _trace.steps:
-            _trace.steps[-1].guards = outcomes
+        _GuardEvaluator.attach_guard_outcomes(_trace, outcomes)
 
     def _to_message(self, response: ChatResponse) -> Message:
         """Convert ChatResponse to Message."""

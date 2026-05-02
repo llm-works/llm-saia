@@ -60,7 +60,7 @@ class _GuardEvaluator:
         )
         self._host._lg.trace("running iteration guards", extra={"guards": [g.name for g in guards]})
         feedback_parts, outcomes = self._eval_guards(guards, ctx, GuardOutcome)
-        self._attach_guard_outcomes(_trace, outcomes)
+        self.attach_guard_outcomes(_trace, outcomes)
         return self._finalize_result(feedback_parts, outcomes)
 
     def _eval_guards(
@@ -73,7 +73,7 @@ class _GuardEvaluator:
         feedback_parts: list[str] = []
         outcomes: list[GuardOutcome] = []
         for guard in guards:
-            result = self._eval_single_guard(guard, ctx)
+            result = self.eval_single_guard(guard, ctx)
             passed = result is None
             outcomes.append(
                 outcome_cls(
@@ -88,16 +88,16 @@ class _GuardEvaluator:
                 feedback_parts.append(result)  # type: ignore[arg-type]
         return feedback_parts, outcomes
 
-    def _eval_single_guard(self, guard: IterationGuard, ctx: IterationContext) -> str | None:
+    @staticmethod
+    def eval_single_guard(guard: IterationGuard, ctx: IterationContext) -> str | None:
         """Evaluate a single guard, catching exceptions."""
         try:
             return guard.validator(ctx)
         except Exception as e:
             return f"Validator raised {type(e).__name__}: {e}"
 
-    def _attach_guard_outcomes(
-        self, _trace: VerbTrace | None, outcomes: list[GuardOutcome]
-    ) -> None:
+    @staticmethod
+    def attach_guard_outcomes(_trace: VerbTrace | None, outcomes: list[GuardOutcome]) -> None:
         """Attach outcomes to the most recent step if trace exists."""
         if _trace and _trace.steps:
             _trace.steps[-1].guards = outcomes
