@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
+    "AsyncConversationLike",
     "ConversationLike",
     "ListConversation",
     "Message",
@@ -50,6 +51,15 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for persistence. Does not copy arguments."""
+        return {"id": self.id, "name": self.name, "arguments": self.arguments}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ToolCall:
+        """Deserialize from dict. Does not copy arguments."""
+        return cls(id=data["id"], name=data["name"], arguments=data["arguments"])
+
 
 @dataclass
 class Message:
@@ -67,6 +77,28 @@ class Message:
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for persistence. Omits None fields."""
+        d: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls is not None:
+            d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+        if self.tool_call_id is not None:
+            d["tool_call_id"] = self.tool_call_id
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Message:
+        """Deserialize from dict."""
+        tool_calls = None
+        if "tool_calls" in data and data["tool_calls"] is not None:
+            tool_calls = [ToolCall.from_dict(tc) for tc in data["tool_calls"]]
+        return cls(
+            role=data["role"],
+            content=data["content"],
+            tool_calls=tool_calls,
+            tool_call_id=data.get("tool_call_id"),
+        )
 
 
 @runtime_checkable
@@ -103,6 +135,29 @@ class ConversationLike(Protocol):
 
     def as_messages(self) -> list[Message]:
         """Return current messages as a list (view, not copy)."""
+        ...
+
+
+@runtime_checkable
+class AsyncConversationLike(ConversationLike, Protocol):
+    """Extended protocol with async append support for non-blocking compaction.
+
+    Use this when conversation operations may trigger I/O (e.g., LLM-based
+    compaction). The ``append_async()`` method allows compaction to run without
+    blocking the event loop.
+
+    Implementations should support both ``append()`` and ``append_async()``:
+        - ``append()``: Synchronous append (may block or raise if async compaction needed)
+        - ``append_async()``: Non-blocking append with async compaction support
+    """
+
+    async def append_async(self, msg: Message) -> None:
+        """Append a message asynchronously.
+
+        Async variant of ``append()`` that supports non-blocking compaction.
+        Use this when the conversation may trigger I/O during append (e.g.,
+        LLM-based summarization for compaction).
+        """
         ...
 
 

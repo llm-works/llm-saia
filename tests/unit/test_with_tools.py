@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from llm_saia.core.types import AgentResponse, ToolCall, ToolDef
+from llm_saia.core.types import ChatResponse, ToolCall, ToolDef
 from tests.unit.conftest import MockBackend, make_saia
 
 pytestmark = pytest.mark.unit
@@ -108,7 +108,7 @@ class TestWithTools:
 
         # Queue a tool call response, then a final text response
         backend.queue_response(
-            AgentResponse(
+            ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="calc", arguments={"x": 1})],
                 finish_reason="tool_use",
@@ -130,3 +130,38 @@ class TestWithTools:
         cloned = saia.with_tools([])
 
         assert cloned._config.tools == []
+
+
+class TestWithJsonParser:
+    """Tests for Configurable.with_json_parser()."""
+
+    def test_sets_json_parser(self) -> None:
+        """with_json_parser() sets parser on the cloned instance."""
+        import json
+
+        backend = MockBackend()
+        saia = make_saia(backend)
+
+        def parser(content: str) -> dict:
+            return json.loads(content)
+
+        cloned = saia.with_json_parser(parser)
+
+        assert cloned._config.json_parser is parser
+        assert saia._config.json_parser is None  # original unchanged
+
+    def test_chains_with_other_overrides(self) -> None:
+        """with_json_parser() composes with other with_*() methods."""
+        import json
+
+        backend = MockBackend()
+        saia = make_saia(backend)
+
+        def parser(content: str) -> dict:
+            return json.loads(content)
+
+        chained = saia.with_json_parser(parser).with_temperature(0.5)
+
+        assert chained._config.json_parser is parser
+        assert chained._config.call is not None
+        assert chained._config.call.temperature == 0.5

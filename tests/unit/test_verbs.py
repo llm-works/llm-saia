@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import (
     ChooseResult,
     ClassifyResult,
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.unit
 
 def make_config(backend: MockBackend) -> Config:
     """Create a Config with no tools (direct backend calls)."""
-    return Config(backend=backend, tools=[], executor=None)
+    return Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
 
 
 class TestAsk:
@@ -149,6 +150,77 @@ class TestExtract:
 
         assert result.value.value == "extracted"
         assert "Focus on names" in mock_backend.last_prompt
+
+    async def test_extract_with_custom_json_parser(self, mock_backend: MockBackend) -> None:
+        @dataclass
+        class TestSchema:
+            value: str
+
+        # Simulate malformed JSON with unescaped newline
+        malformed = '{"value": "line1\nline2"}'
+        mock_backend.queue_raw_structured(malformed)
+
+        def custom_parser(content: str) -> dict:
+            # Parser that fixes newlines then parses
+            import json
+
+            return json.loads(content.replace("\n", "\\n"))
+
+        config = Config(
+            lg=NullLogger(),
+            backend=mock_backend,
+            tools=[],
+            executor=None,
+            json_parser=custom_parser,
+        )
+        extract = Extract(config)
+        result = await extract("content", TestSchema)
+
+        assert result.value.value == "line1\nline2"
+
+    async def test_extract_default_parser_fails_on_malformed(
+        self, mock_backend: MockBackend
+    ) -> None:
+        from llm_saia.core.errors import StructuredOutputError
+
+        @dataclass
+        class TestSchema:
+            value: str
+
+        malformed = '{"value": "line1\nline2"}'
+        mock_backend.queue_raw_structured(malformed)
+
+        extract = Extract(make_config(mock_backend))
+        with pytest.raises(StructuredOutputError):
+            await extract("content", TestSchema)
+
+    async def test_extract_custom_parser_always_called(self, mock_backend: MockBackend) -> None:
+        @dataclass
+        class TestSchema:
+            value: str
+
+        mock_backend.set_structured_response(TestSchema, TestSchema(value="valid"))
+        parser_called = False
+
+        def custom_parser(content: str) -> dict:
+            nonlocal parser_called
+            parser_called = True
+            import json
+
+            return json.loads(content)
+
+        config = Config(
+            lg=NullLogger(),
+            backend=mock_backend,
+            tools=[],
+            executor=None,
+            json_parser=custom_parser,
+        )
+        extract = Extract(config)
+        result = await extract("content", TestSchema)
+
+        assert result.value.value == "valid"
+        assert parser_called
 
 
 class TestConstrain:

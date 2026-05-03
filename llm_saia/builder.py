@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from .core import trace
 from .core.backend import Backend, ToolDef
-from .core.config import DEFAULT_CALL, CallOptions, Config, TerminalConfig
-from .core.logger import Logger
+from .core.config import DEFAULT_CALL, CallOptions, Config, JsonParser, TerminalConfig
+from .core.logger import Logger, NullLogger
 
 if TYPE_CHECKING:
     from .saia import SAIA
@@ -32,7 +32,7 @@ class SAIABuilder:
         self._tools: list[ToolDef] = []
         self._executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None
         self._terminal: TerminalConfig | None = None
-        self._lg: Logger | None = None
+        self._lg: Logger = NullLogger()
         self._warn_tool_support: bool = True
         self._tracer: trace.Tracer | None = None
         # CallOptions fields (from DEFAULT_CALL)
@@ -42,9 +42,9 @@ class SAIABuilder:
         self._max_call_tokens: int = DEFAULT_CALL.max_call_tokens
         self._max_total_tokens: int = DEFAULT_CALL.max_total_tokens
         self._timeout_secs: float = DEFAULT_CALL.timeout_secs
-        self._max_retries: int = DEFAULT_CALL.max_retries
-        self._retry_escalation: str | None = DEFAULT_CALL.retry_escalation
         self._request_id: str | None = DEFAULT_CALL.request_id
+        # Config-level options
+        self._json_parser: JsonParser | None = None
 
     def backend(self, backend: Backend) -> SAIABuilder:
         """Set the LLM backend (required)."""
@@ -72,6 +72,8 @@ class SAIABuilder:
         output_field: str | None = None,
         status_field: str | None = None,
         failure_values: tuple[str, ...] | None = None,
+        *,
+        require_confirmation: bool = True,
     ) -> SAIABuilder:
         """Set terminal tool configuration for task completion.
 
@@ -80,21 +82,32 @@ class SAIABuilder:
             output_field: Field in tool args containing output (default: check common names)
             status_field: Field in tool args containing status (default: "status")
             failure_values: Status values that indicate failure (default: stuck/failed/error)
+            require_confirmation: If True, require model to call terminal tool twice to
+                confirm completion. If False, complete immediately on first call.
+                Note: Many models respond to confirmation prompts with text instead of
+                a tool call, causing terminal_data to be None. Set to False if you
+                don't need explicit confirmation.
         """
         self._terminal = TerminalConfig(
             tool=tool,
             output_field=output_field,
             status_field=status_field,
             failure_values=failure_values or ("stuck", "failed", "error"),
+            require_confirmation=require_confirmation,
         )
         return self
 
-    def terminal_tool(self, name: str) -> SAIABuilder:
+    def terminal_tool(self, name: str, *, require_confirmation: bool = True) -> SAIABuilder:
         """Set terminal tool name for task completion (simple form).
 
         For more control, use .terminal() instead.
+
+        Args:
+            name: Name of the terminal tool
+            require_confirmation: If True, require model to call terminal tool twice.
+                If False, complete immediately on first call. Default True.
         """
-        self._terminal = TerminalConfig(tool=name)
+        self._terminal = TerminalConfig(tool=name, require_confirmation=require_confirmation)
         return self
 
     def logger(self, lg: Logger) -> SAIABuilder:
@@ -136,12 +149,6 @@ class SAIABuilder:
         self._timeout_secs = secs
         return self
 
-    def retries(self, max_retries: int, escalation: str | None = None) -> SAIABuilder:
-        """Set retry configuration."""
-        self._max_retries = max_retries
-        self._retry_escalation = escalation
-        return self
-
     def request_id(self, request_id: str) -> SAIABuilder:
         """Set user-provided correlation ID."""
         self._request_id = request_id
@@ -150,6 +157,11 @@ class SAIABuilder:
     def temperature(self, temp: float) -> SAIABuilder:
         """Set sampling temperature."""
         self._temperature = temp
+        return self
+
+    def json_parser(self, parser: JsonParser) -> SAIABuilder:
+        """Set custom JSON parser for structured output."""
+        self._json_parser = parser
         return self
 
     def build(self) -> SAIA:
@@ -170,18 +182,17 @@ class SAIABuilder:
             max_total_tokens=self._max_total_tokens,
             timeout_secs=self._timeout_secs,
             max_iterations=self._max_iterations,
-            max_retries=self._max_retries,
-            retry_escalation=self._retry_escalation,
             request_id=self._request_id,
         )
         config = Config(
+            lg=self._lg,
             backend=self._backend,
             tools=self._tools,
             executor=self._executor,
             call=call,
             terminal=self._terminal,
-            lg=self._lg,
             tracer=self._tracer,
             warn_tool_support=self._warn_tool_support,
+            json_parser=self._json_parser,
         )
         return SAIA(config)

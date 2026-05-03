@@ -1,18 +1,26 @@
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
 from .builder import SAIABuilder
-from .core.backend import AgentResponse, Backend, ToolDef
-from .core.config import CallOptions, Config, TerminalConfig
+from .core.backend import Backend, ChatResponse, ToolDef
+from .core.config import CallOptions, Config, JsonParser, TerminalConfig
 from .core.conversation import Message, Role, ToolCall
 from .core.errors import (
     BackendError,
     ConfigurationError,
     Error,
+    PauseRequested,
     StructuredOutputError,
     ToolExecutionError,
     TruncatedResponseError,
 )
-from .core.guard import Guarded, IterationGuard, OutputGuard, OutputGuardError
+from .core.guard import (
+    UNLIMITED,
+    Guarded,
+    IterationContext,
+    IterationGuard,
+    OutputGuard,
+    OutputGuardError,
+)
 from .core.logger import Logger, NullLogger
 from .core.trace import (
     CallbackTracer,
@@ -25,6 +33,7 @@ from .core.trace import (
     VerbTrace,
 )
 from .core.types import (
+    AsyncConversationLike,
     ChooseResult,
     ClassifyResult,
     ConversationLike,
@@ -49,18 +58,22 @@ __all__ = [
     # Custom verbs
     "Verb",
     "Config",
+    "JsonParser",
     # Errors
     "Error",
     "BackendError",
     "ConfigurationError",
     "OutputGuardError",
+    "PauseRequested",
     "StructuredOutputError",
     "ToolExecutionError",
     "TruncatedResponseError",
     # Guards
     "Guarded",
+    "IterationContext",
     "IterationGuard",
     "OutputGuard",
+    "UNLIMITED",
     # Logger
     "NullLogger",
     "Logger",
@@ -73,7 +86,7 @@ __all__ = [
     "VerifyResult",
     "VerbResult",
     # Task types
-    "AgentResponse",
+    "ChatResponse",
     "DecisionReason",
     "LoopScore",
     "Message",
@@ -83,6 +96,7 @@ __all__ = [
     "ToolCall",
     "ToolDef",
     # Conversation protocol
+    "AsyncConversationLike",
     "ConversationLike",
     "ListConversation",
     # Terminal

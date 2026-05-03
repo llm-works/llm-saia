@@ -13,6 +13,7 @@ Environment variables:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -24,8 +25,8 @@ from typing import Any
 import httpx
 
 from llm_saia.core.backend import (
-    AgentResponse,
     Backend,
+    ChatResponse,
     ToolDef,
 )
 from llm_saia.core.conversation import Message, Role, ToolCall
@@ -314,8 +315,8 @@ class OpenAIBackend(Backend):
         except json.JSONDecodeError:
             return {"_error": "malformed_json", "_raw": args_str[:200]}
 
-    def _parse_response(self, data: dict[str, Any]) -> AgentResponse:
-        """Parse OpenAI API response into AgentResponse."""
+    def _parse_response(self, data: dict[str, Any]) -> ChatResponse:
+        """Parse OpenAI API response into ChatResponse."""
         choices = data.get("choices")
         if not choices:
             raise ValueError(f"API response missing 'choices': {data}")
@@ -336,12 +337,14 @@ class OpenAIBackend(Backend):
                     )
                 )
 
-        return AgentResponse(
+        return ChatResponse(
             content=message.get("content") or "",
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
+            model=data.get("model"),
+            raw=data,
         )
 
     async def chat(
@@ -352,7 +355,9 @@ class OpenAIBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+        context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
+    ) -> ChatResponse:
         """Send a chat completion request to OpenAI."""
         api_messages = self._build_api_messages(messages, system)
         request = self._build_request(api_messages, tools, response_schema, max_tokens, temperature)
@@ -427,7 +432,7 @@ async def get_backend(model: str | None = None) -> AsyncGenerator[Backend, None]
 
         lg = AppLogger("saia-examples")
         factory = Factory(lg)
-        async with factory.anthropic(model=model or DEFAULT_ANTHROPIC_MODEL) as client:
+        async with factory.anthropic(default_model=model or DEFAULT_ANTHROPIC_MODEL) as client:
             yield SAIAAdapter(client)
     else:
         # Default: OpenAI-compatible backend

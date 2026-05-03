@@ -2,106 +2,93 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 
-from ..core.backend import AgentResponse
+from ..core.backend import ChatResponse
 from ..core.config import CallOptions
-from ..core.controller import (
-    Action,
-    ActionType,
-    ControllerConfig,
-    DefaultController,
-    LoopController,
-    Observation,
-)
-from ..core.conversation import Message, Role, ToolCall
-from ..core.guard import IterationGuard
+from ..core.controller import ControllerConfig, DefaultController, LoopController
+from ..core.conversation import ConversationLike, Message, Role
+from ..core.loop import ControllerStrategy, ControllerStrategyConfig, CoreLoopResult, LoopDecision
 from ..core.trace import GuardOutcome, LLMCall, Step, ToolOutcome, Tracer, VerbTrace
-from ..core.types import DecisionReason, LoopScore, TaskResult
+from ..core.types import LoopScore, TaskResult
 from ..core.verb import Verb
 
 # Default call options for complete (unlimited iterations)
 DEFAULT_COMPLETE_CALL = CallOptions(max_iterations=0)
 
-# Reasons that count as productive despite being INSTRUCT
-_PRODUCTIVE_INSTRUCT_REASONS = frozenset({DecisionReason.TERMINAL_CONFIRMATION_REQUEST})
-
-
-@dataclass
-class _LoopCtx:
-    """Mutable loop context bundling iteration state and scoring."""
-
-    task: str
-    trace_id: str
-    ctrl: LoopController
-    tracer: Tracer | None
-    on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None
-    call_options: CallOptions
-    messages: list[Message]
-    tool_names: list[str]
-    iteration_guards: tuple[IterationGuard, ...] = ()
-    verb_trace: VerbTrace | None = None
-    acc: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
-
 
 class Complete(Verb):
     """Execute a task with tool calling and completion confirmation."""
 
+    def _validate_call(self, resume: bool, conversation: ConversationLike | None) -> None:
+        """Validate Complete call parameters."""
+        if not self._has_tools():
+            raise ValueError("Complete requires tools and executor to be configured.")
+        if resume and conversation is None:
+            raise ValueError("conversation is required when resume=True")
+
     async def __call__(
         self,
         task: str,
-        on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
         controller: LoopController | None = None,
-        tracer: Tracer | None = None,
+        conversation: ConversationLike | None = None,
+        resume: bool = False,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> TaskResult:
         """Execute a task using tools until completion or limit reached.
 
         Args:
-            task: The task description / prompt.
-            on_iteration: Optional async callback invoked each iteration.
+            task: The task description / prompt (ignored when resuming).
+            on_iteration: Optional async callback invoked each iteration. May raise
+                ``PauseRequested`` to exit the loop early with ``paused=True``.
             controller: Custom loop controller (uses default if None).
-            tracer: Per-call tracer (closed on completion). Falls back to
-                config tracer if not provided.
+            conversation: Optional external conversation for message management.
+                If provided, messages are appended to both an internal history
+                (returned in ``TaskResult.history``) and this conversation.
+                The LLM sees ``conversation.as_messages()`` which may be compacted.
+                Required when resuming.
+            resume: If True, continue from existing conversation state instead of
+                starting fresh. The conversation must contain the prior history.
+            pause_check: Optional async callback checked between tool calls in a
+                batch. Return True to pause after the current tool completes.
+                Remaining tools are acknowledged but not executed.
+            abort_signal: Optional event for fast abort during LLM streaming.
+                Set this event to abort the current LLM call within ~100ms
+                (requires backend support). Raises ``PauseRequested`` on abort.
         """
-        if not self._has_tools():
-            raise ValueError("Complete requires tools and executor to be configured.")
-
+        self._validate_call(resume, conversation)
         verb_trace = self._init_verb_trace()
-        trace_id = verb_trace.trace_id
         ctrl = controller or self._default_controller()
         ctrl.reset()
-
-        owns_tracer, active_tracer = self._resolve_tracer(
-            tracer,
-            {"trace_id": trace_id, "request_id": verb_trace.request_id, "task": task[:200]},
-        )
-
+        tid, rid = verb_trace.trace_id, verb_trace.request_id
+        tracer = self._resolve_tracer({"trace_id": tid, "request_id": rid, "task": task[:200]})
+        reason: str | None = None
         try:
             result = await self._run_loop(
-                task, trace_id, ctrl, active_tracer, on_iteration, verb_trace
+                task,
+                verb_trace.trace_id,
+                ctrl,
+                tracer,
+                on_iteration,
+                verb_trace,
+                conversation,
+                resume,
+                pause_check,
+                abort_signal,
             )
-            self._emit_verb_trace(verb_trace)
+            reason = self._result_reason(result)
             return self._tag_result(result, verb_trace)
         finally:
-            if active_tracer and owns_tracer:
-                active_tracer.close()
+            self._emit_verb_trace(verb_trace, reason)
 
     @staticmethod
-    def _score_action(acc: list[int], action: Action, tokens: int) -> None:
-        """Accumulate scoring stats. acc = [productive, nudges, skips, wasted_tokens]."""
-        is_productive_instruct = action.reason in _PRODUCTIVE_INSTRUCT_REASONS
-        if action.kind in (ActionType.EXECUTE_TOOLS, ActionType.COMPLETE, ActionType.FAIL):
-            acc[0] += 1
-        elif action.kind == ActionType.INSTRUCT and is_productive_instruct:
-            acc[0] += 1
-        elif action.kind == ActionType.INSTRUCT:
-            acc[1] += 1
-            acc[3] += tokens
-        elif action.kind == ActionType.SKIP:
-            acc[2] += 1
-            acc[3] += tokens
+    def _result_reason(result: TaskResult) -> str:
+        """Get completion reason from TaskResult."""
+        return result.reason
 
     @staticmethod
     def _build_score(iters: int, total_tokens: int, acc: list[int]) -> LoopScore:
@@ -114,142 +101,89 @@ class Complete(Verb):
         trace_id: str,
         ctrl: LoopController,
         tracer: Tracer | None,
-        on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
         verb_trace: VerbTrace | None = None,
+        conversation: ConversationLike | None = None,
+        resume: bool = False,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> TaskResult:
-        """Execute the main tool-calling loop."""
+        """Execute the main tool-calling loop using unified core loop."""
         call_options = self._config.call or DEFAULT_COMPLETE_CALL
-        ctx = _LoopCtx(
-            task=task,
-            trace_id=trace_id,
-            ctrl=ctrl,
-            tracer=tracer,
-            on_iteration=on_iteration,
-            call_options=call_options,
-            messages=[Message(role=Role.USER, content=task)],
-            tool_names=[t.name for t in (self._config.tools or [])],
-            iteration_guards=call_options.iteration_guards,
-            verb_trace=verb_trace,
-        )
-        self._log_loop_start(call_options)
-        start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
+        messages = await self._init_messages(task, conversation, resume)
+        acc, strategy = self._create_strategy(task, ctrl)
 
-        while not self._should_stop(call_options, iteration, start_time, total_tokens):
-            result, tokens, last_content = await self._run_one_iteration(ctx, iteration)
-            total_tokens += tokens
-            if result:
-                self._log_loop_complete(iteration, start_time, total_tokens, result.output or "")
-                result.score = self._build_score(iteration + 1, total_tokens, ctx.acc)
-                return result
-            iteration += 1
+        def on_decide(
+            response: ChatResponse,
+            decision: LoopDecision,
+            iteration: int,
+            outcomes: list[GuardOutcome],
+        ) -> None:
+            self._record_decision(
+                response, decision, iteration, outcomes, ctrl, trace_id, verb_trace, tracer
+            )
 
-        self._log_limit_reached(call_options, iteration, start_time, total_tokens)
-        result = TaskResult(False, last_content, iteration, ctx.messages)
-        result.score = self._build_score(iteration, total_tokens, ctx.acc)
-        return result
-
-    async def _run_one_iteration(
-        self,
-        ctx: _LoopCtx,
-        iteration: int,
-    ) -> tuple[TaskResult | None, int, str]:
-        """Run one loop iteration. Returns (result, tokens, last_content)."""
-        response, tokens = await self._run_iteration(ctx.messages, ctx.call_options)
-        self._log_response(response, iteration, tokens)
-
-        # Run iteration guards before controller decides.
-        # Don't pass verb_trace here — Complete builds its own Step later and
-        # attaches outcomes explicitly (avoids overwriting the previous step).
-        feedback, outcomes = self._run_iteration_guards(ctx.iteration_guards, response)
-        if feedback is not None:
-            await self._apply_guard_nudge(ctx, response, feedback, outcomes, iteration, tokens)
-            return None, tokens, response.content
-
-        action, result = await self._process_iteration(
-            response,
-            ctx.messages,
-            iteration,
-            ctx.task,
-            ctx.tool_names,
-            ctx.ctrl,
-            ctx.on_iteration,
-            ctx.tracer,
-            ctx.trace_id,
-            ctx.verb_trace,
-            outcomes,
-        )
-        self._score_action(ctx.acc, action, tokens)
-        return result, tokens, response.content
-
-    async def _apply_guard_nudge(
-        self,
-        ctx: _LoopCtx,
-        response: AgentResponse,
-        feedback: str,
-        outcomes: list[GuardOutcome],
-        iteration: int,
-        tokens: int,
-    ) -> None:
-        """Inject iteration-guard feedback into conversation and record the step."""
-        if ctx.on_iteration:
-            await ctx.on_iteration(iteration, response)
-        ctx.messages.append(self._to_message(response))
-        self._ack_response_tools(response, ctx.messages)
-        ctx.messages.append(Message(role=Role.USER, content=feedback))
-        step = self._build_guard_nudge_step(response, ctx.trace_id, feedback)
-        step.guards = outcomes
-        if ctx.verb_trace is not None:
-            ctx.verb_trace.add_step(step)
-        if ctx.tracer:
-            ctx.tracer.write(step)
-        nudge_action = Action(
-            kind=ActionType.INSTRUCT,
-            reason=DecisionReason.ITERATION_GUARD,
-        )
-        self._score_action(ctx.acc, nudge_action, tokens)
-
-    async def _process_iteration(
-        self,
-        response: AgentResponse,
-        messages: list[Message],
-        iteration: int,
-        task: str,
-        tool_names: list[str],
-        ctrl: LoopController,
-        on_iteration: Callable[[int, AgentResponse], Awaitable[None]] | None,
-        tracer: Tracer | None = None,
-        trace_id: str = "",
-        verb_trace: VerbTrace | None = None,
-        guard_outcomes: list[GuardOutcome] | None = None,
-    ) -> tuple[Action, TaskResult | None]:
-        """Process a single iteration: callback, decide, execute, trace."""
-        self._check_tool_support(response)
-
-        if on_iteration:
-            await on_iteration(iteration, response)
-
-        terminal = self._config.terminal
-        obs = Observation(
-            response=response,
+        self._log_loop_start(call_options, abort_signal is not None, trace_id)
+        result = await self._core_loop(
             messages=messages,
-            iteration=iteration,
-            task=task,
-            tool_names=tool_names,
-            terminal_tool=terminal.tool if terminal else None,
+            config=call_options,
+            strategy=strategy,
+            conv=conversation,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
+            on_iteration=on_iteration,
+            on_decide=on_decide,
         )
-        action = await ctrl.decide(obs)
-        self._log_action(action)
+        return self._core_result_to_task_result(result, messages, acc)
 
-        step = self._build_iteration_step(obs, action, response, ctrl, trace_id)
-        if guard_outcomes:
-            step.guards = guard_outcomes
+    async def _init_messages(
+        self, task: str, conversation: ConversationLike | None, resume: bool
+    ) -> list[Message]:
+        """Initialize message list for loop."""
+        if resume and conversation is not None:
+            return list(conversation.as_messages())
+        initial_msg = Message(role=Role.USER, content=task)
+        if conversation is not None:
+            await self._append_msg(conversation, initial_msg)
+        return [initial_msg]
+
+    def _create_strategy(
+        self, task: str, ctrl: LoopController
+    ) -> tuple[list[int], ControllerStrategy]:
+        """Create strategy with scoring accumulator."""
+        tool_names = [t.name for t in (self._config.tools or [])]
+        terminal = self._config.terminal
+        acc: list[int] = [0, 0, 0, 0]
+        strategy = ControllerStrategy(
+            ctrl,
+            ControllerStrategyConfig(
+                task=task,
+                tool_names=tool_names,
+                terminal_tool=terminal.tool if terminal else None,
+                acc=acc,
+            ),
+        )
+        return acc, strategy
+
+    def _record_decision(
+        self,
+        response: ChatResponse,
+        decision: LoopDecision,
+        iteration: int,
+        outcomes: list[GuardOutcome],
+        ctrl: LoopController,
+        trace_id: str,
+        verb_trace: VerbTrace | None,
+        tracer: Tracer | None,
+    ) -> None:
+        """Record decision step to trace."""
+        step = self._build_step_from_decision(response, decision, ctrl, trace_id, iteration)
+        if outcomes:
+            step.guards = outcomes
         if verb_trace is not None:
             verb_trace.add_step(step)
         if tracer:
             tracer.write(step)
-
-        result = await self._execute_action(action, response, messages, iteration)
-        return action, result
 
     def _default_controller(self) -> DefaultController:
         """Create default controller with config from this verb."""
@@ -262,148 +196,19 @@ class Complete(Verb):
             temperature=self._call.temperature,
         )
         llm_config = Config(
+            lg=self._config.lg,
             backend=self._config.backend,
             tools=[],
             executor=None,
             call=call_options,
             terminal=None,
-            lg=self._config.lg,
             warn_tool_support=self._config.warn_tool_support,
         )
-        call = self._config.call or DEFAULT_COMPLETE_CALL
         return DefaultController(
             config=ControllerConfig(
                 llm_config=llm_config,
                 terminal=self._config.terminal,
-                max_failure_retries=call.max_retries,
             ),
-        )
-
-    async def _run_iteration(
-        self, messages: list[Message], config: CallOptions
-    ) -> tuple[AgentResponse, int]:
-        """Run one LLM iteration and return response with token count."""
-        max_tokens = config.max_call_tokens if config.max_call_tokens > 0 else None
-        temperature = self._resolve_temperature(config)
-        response = await self._chat(messages, max_tokens, temperature)
-        return response, response.input_tokens + response.output_tokens
-
-    async def _execute_action(
-        self,
-        action: Action,
-        response: AgentResponse,
-        messages: list[Message],
-        iteration: int,
-    ) -> TaskResult | None:
-        """Execute the action decided by the controller."""
-        match action.kind:
-            case ActionType.EXECUTE_TOOLS:
-                await self._execute_tool_action(action, response, messages)
-                return None
-
-            case ActionType.INSTRUCT:
-                self._add_response_if_needed(messages, response)
-                self._ack_response_tools(response, messages)
-                if action.message:
-                    messages.append(Message(role=Role.USER, content=action.message))
-                return None
-
-            case ActionType.SKIP:
-                self._add_response_if_needed(messages, response)
-                self._ack_response_tools(response, messages)
-                messages.append(Message(role=Role.USER, content="Continue."))
-                return None
-
-            case ActionType.COMPLETE:
-                self._add_response_if_needed(messages, response)
-                return self._make_result(True, action, response, messages, iteration)
-
-            case ActionType.FAIL:
-                self._add_response_if_needed(messages, response)
-                return self._make_result(False, action, response, messages, iteration)
-
-        return None
-
-    async def _execute_tool_action(
-        self, action: Action, response: AgentResponse, messages: list[Message]
-    ) -> None:
-        """Handle EXECUTE_TOOLS action: add response, ack skipped, execute."""
-        messages.append(self._to_message(response))
-        if response.tool_calls:
-            calls = self._filter_tool_calls(response.tool_calls, action.tool_ids_to_execute)
-            self._ack_skipped_tools(response.tool_calls, action.tool_ids_to_execute, messages)
-            await self._execute_tools(calls, messages)
-
-    def _filter_tool_calls(
-        self, tool_calls: list[ToolCall], tool_ids: list[str] | None
-    ) -> list[ToolCall]:
-        """Filter tool calls by ID. Returns all if tool_ids is None."""
-        if tool_ids is None:
-            return tool_calls
-        return [c for c in tool_calls if c.id in tool_ids]
-
-    def _ack_skipped_tools(
-        self,
-        all_calls: list[ToolCall],
-        execute_ids: list[str] | None,
-        messages: list[Message],
-    ) -> None:
-        """Add synthetic tool results for tool calls that won't be executed.
-
-        LLM APIs require every tool_call in an assistant message to have a
-        matching tool result. When we skip executing a tool (e.g., the terminal
-        tool during confirmation), we still need to provide a result.
-        """
-        if execute_ids is None:
-            return
-        skip_ids = {c.id for c in all_calls} - set(execute_ids)
-        for call in all_calls:
-            if call.id in skip_ids:
-                messages.append(
-                    Message(
-                        role=Role.TOOL,
-                        content="Acknowledged. Awaiting confirmation.",
-                        tool_call_id=call.id,
-                    )
-                )
-
-    def _ack_response_tools(self, response: AgentResponse, messages: list[Message]) -> None:
-        """Acknowledge all tool_calls in a response that won't be executed.
-
-        Must be called after _add_response_if_needed for INSTRUCT/SKIP paths
-        where the assistant message contains tool_calls but no tools are executed.
-        """
-        if response.tool_calls:
-            self._ack_skipped_tools(response.tool_calls, [], messages)
-
-    def _add_response_if_needed(self, messages: list[Message], response: AgentResponse) -> None:
-        """Add response to messages if not already added."""
-        if messages:
-            last = messages[-1]
-            if (
-                last.role == Role.ASSISTANT
-                and last.content == response.content
-                and last.tool_calls == (response.tool_calls or None)
-            ):
-                return
-        messages.append(self._to_message(response))
-
-    def _make_result(
-        self,
-        completed: bool,
-        action: Action,
-        response: AgentResponse,
-        messages: list[Message],
-        iteration: int,
-    ) -> TaskResult:
-        """Build a TaskResult from action and response."""
-        return TaskResult(
-            completed=completed,
-            output=action.output or response.content,
-            iterations=iteration + 1,
-            history=messages,
-            terminal_data=action.terminal_data,
-            terminal_tool=action.terminal_tool,
         )
 
     @staticmethod
@@ -412,70 +217,67 @@ class Complete(Verb):
         result.trace = trace
         return result
 
-    def _log_action(self, action: Action) -> None:
-        """Log the controller's decision."""
-        if self._lg:
-            self._lg.debug(
-                "controller_action",
-                extra={"kind": action.kind.value, "reason": action.reason.value},
-            )
-
-    # --- Trace helpers ---
-
-    def _build_iteration_step(
+    def _build_step_from_decision(
         self,
-        obs: Observation,
-        action: Action,
-        response: AgentResponse,
+        response: ChatResponse,
+        decision: LoopDecision,
         ctrl: LoopController,
         trace_id: str,
+        iteration: int,
     ) -> Step:
-        """Build a Step from Complete verb iteration state."""
+        """Build a Step from LoopDecision (used by unified loop)."""
+        from ..core.loop import LoopAction
+
+        action_map = {
+            LoopAction.EXECUTE_TOOLS: "execute_tools",
+            LoopAction.INSTRUCT: "instruct",
+            LoopAction.SKIP: "skip",
+            LoopAction.COMPLETE: "complete",
+            LoopAction.FAIL: "fail",
+        }
         step = Step(
             phase="iteration",
             ts=time.time(),
             trace_id=trace_id,
             verb="Complete",
-            llm_call=LLMCall(
-                call_id=response.call_id,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                finish_reason=response.finish_reason,
-            ),
+            llm_call=self._response_to_llm_call(response),
             tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
-            action=action.kind.value,
-            reason=action.reason.value,
-            nudge_preview=action.message[:200] if action.message else None,
-            classifier_called=action.reason
-            in (DecisionReason.CLASSIFIED_COMPLETE, DecisionReason.NUDGE_CLASSIFIED),
+            action=action_map.get(decision.action, "unknown"),
+            reason=decision.reason,
+            nudge_preview=decision.message[:200] if decision.message else None,
+            classifier_called=decision.reason in ("classified_complete", "nudge_classified"),
         )
-        self._attach_controller_internals(step, obs, ctrl)
-        return step
-
-    @staticmethod
-    def _build_guard_nudge_step(response: AgentResponse, trace_id: str, feedback: str) -> Step:
-        """Build a Step for an iteration guard nudge."""
-        return Step(
-            phase="iteration",
-            ts=time.time(),
-            trace_id=trace_id,
-            verb="Complete",
-            llm_call=LLMCall(
-                call_id=response.call_id,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                finish_reason=response.finish_reason,
-            ),
-            tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
-            action=ActionType.INSTRUCT.value,
-            reason=DecisionReason.ITERATION_GUARD.value,
-            nudge_preview=feedback[:200] if feedback else None,
-        )
-
-    @staticmethod
-    def _attach_controller_internals(step: Step, obs: Observation, ctrl: LoopController) -> None:
-        """Attach DefaultController internals to a Step, if available."""
         if isinstance(ctrl, DefaultController):
-            step.iterations_since_nudge = obs.iteration - ctrl.iterations_since_last_nudge
+            step.iterations_since_nudge = iteration - ctrl.iterations_since_last_nudge
             step.consecutive_degenerate = ctrl.consecutive_degenerate
             step.pending_terminal = ctrl.has_pending_terminal
+        return step
+
+    def _response_to_llm_call(self, response: ChatResponse) -> LLMCall:
+        return LLMCall(
+            call_id=response.call_id,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            finish_reason=response.finish_reason,
+            model=response.model,
+        )
+
+    def _core_result_to_task_result(
+        self,
+        result: CoreLoopResult,
+        messages: list[Message],
+        acc: list[int],
+    ) -> TaskResult:
+        """Convert CoreLoopResult to TaskResult with scoring."""
+        task_result = TaskResult(
+            completed=result.completed,
+            output=result.output,
+            iterations=result.iterations,
+            history=messages,
+            reason=result.reason,
+            paused=result.paused,
+            terminal_data=result.terminal_data,
+            terminal_tool=result.terminal_tool,
+        )
+        task_result.score = self._build_score(result.iterations, result.total_tokens, acc)
+        return task_result

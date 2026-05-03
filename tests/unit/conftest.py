@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -11,9 +12,9 @@ import pytest
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
-from llm_saia.core.logger import Logger
+from llm_saia.core.logger import Logger, NullLogger
 from llm_saia.core.types import (
-    AgentResponse,
+    ChatResponse,
     Message,
     ToolDef,
 )
@@ -59,9 +60,10 @@ class MockBackend(Backend):
         self.last_response_schema: dict[str, Any] | None = None
         self.last_temperature: float | None = None
         self._response_content: str = "mock response"
-        self._queued_responses: list[AgentResponse] = []
+        self._queued_responses: list[ChatResponse] = []
         self._structured_responses: dict[str, dict[str, Any]] = _default_structured_responses()
         self._queued_structured: dict[str, list[dict[str, Any]]] = {}
+        self._queued_raw_structured: list[str] = []
 
     @property
     def last_prompt(self) -> str:
@@ -121,18 +123,22 @@ class MockBackend(Backend):
             self._queued_structured[schema_name] = []
         self._queued_structured[schema_name].append(response_dict)
 
-    def queue_response(self, response: AgentResponse) -> None:
+    def queue_response(self, response: ChatResponse) -> None:
         """Queue a response for the next chat() call."""
         self._queued_responses.append(response)
 
+    def queue_raw_structured(self, raw_json: str) -> None:
+        """Queue raw JSON string for next structured output call (for testing malformed JSON)."""
+        self._queued_raw_structured.append(raw_json)
+
     # Backwards compatibility alias
-    def queue_tool_response(self, response: AgentResponse) -> None:
+    def queue_tool_response(self, response: ChatResponse) -> None:
         """Queue a response for the next chat() call (alias for queue_response)."""
         self._queued_responses.append(response)
 
-    def _make_response(self, content: str) -> AgentResponse:
-        """Create a simple AgentResponse with given content."""
-        return AgentResponse(content=content, tool_calls=[], finish_reason="end_turn")
+    def _make_response(self, content: str) -> ChatResponse:
+        """Create a simple ChatResponse with given content."""
+        return ChatResponse(content=content, tool_calls=[], finish_reason="end_turn")
 
     async def chat(
         self,
@@ -142,7 +148,9 @@ class MockBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+        context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
+    ) -> ChatResponse:
         """Return predetermined response."""
         self.last_messages = messages
         self.last_system = system
@@ -152,8 +160,11 @@ class MockBackend(Backend):
 
         # Check structured output first (these calls have response_schema set)
         if response_schema:
+            # Check raw structured responses first (for testing malformed JSON)
+            if self._queued_raw_structured:
+                return self._make_response(self._queued_raw_structured.pop(0))
             schema_name = response_schema.get("name", "")
-            # Check queued structured responses first
+            # Check queued structured responses
             if schema_name in self._queued_structured and self._queued_structured[schema_name]:
                 response_dict = self._queued_structured[schema_name].pop(0)
                 return self._make_response(json.dumps(response_dict))
@@ -181,17 +192,22 @@ def make_saia(
     executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
     system: str | None = None,
     terminal_tool: str | None = None,
+    require_confirmation: bool = True,
     lg: Logger | None = None,
 ) -> SAIA:
     """Helper to create SAIA instances for tests."""
-    terminal = TerminalConfig(tool=terminal_tool) if terminal_tool else None
+    terminal = (
+        TerminalConfig(tool=terminal_tool, require_confirmation=require_confirmation)
+        if terminal_tool
+        else None
+    )
     call = CallOptions(system=system) if system is not None else None
     config = Config(
+        lg=lg if lg is not None else NullLogger(),
         backend=backend,
         tools=tools or [],
         executor=executor,
         call=call,
         terminal=terminal,
-        lg=lg,
     )
     return SAIA(config)

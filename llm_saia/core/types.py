@@ -7,13 +7,14 @@ from enum import Enum
 from typing import Any, Generic, TypeVar
 
 # Re-export backend types for convenience
-from .backend import AgentResponse, ToolDef
+from .backend import ChatResponse, ToolDef
 
 # Re-export config types for convenience
 from .config import CallOptions, Config
 
 # Re-export conversation types for convenience
 from .conversation import (
+    AsyncConversationLike,
     ConversationLike,
     ListConversation,
     Message,
@@ -27,9 +28,10 @@ _T = TypeVar("_T")
 
 __all__ = [
     # Backend types (re-exported)
-    "AgentResponse",
+    "ChatResponse",
     "ToolDef",
     # Conversation types (re-exported)
+    "AsyncConversationLike",
     "ConversationLike",
     "ListConversation",
     "Message",
@@ -72,6 +74,7 @@ class DecisionReason(Enum):
     TEXT_TOOL_PATTERN = "text_tool_pattern"  # LLM wrote tool names as text
     TERMINAL_CONFIRMATION_REQUEST = "terminal_confirmation_request"  # Asking to confirm terminal
     TERMINAL_FAILURE_RETRY = "terminal_failure_retry"  # Retry after terminal failure
+    TERMINAL_SCHEMA_RETRY = "terminal_schema_retry"  # Retry after schema validation failure
     CONTRADICTION_DETECTED = "contradiction_detected"  # LLM contradicted terminal confirmation
     NUDGE_CLASSIFIED = "nudge_classified"  # Classifier suggests nudge (wants_continue, stuck, etc)
 
@@ -195,12 +198,28 @@ class LoopScore:
 
 @dataclass
 class TaskResult:
-    """Result from task execution."""
+    """Result from task execution.
+
+    Attributes:
+        completed: True if task completed successfully.
+        output: Final output text.
+        iterations: Number of iterations executed.
+        history: Full message history.
+        reason: Why the loop ended: "completed", "failed", "paused", "limit_reached".
+        paused: True if loop was paused (via PauseRequested). When True,
+            ``completed`` is False and history can be serialized for resumption.
+        terminal_data: Data from terminal tool if used.
+        terminal_tool: Name of terminal tool if used.
+        score: Loop quality metrics.
+        trace: Execution trace.
+    """
 
     completed: bool
     output: str
     iterations: int
     history: list[Message]
+    reason: str = ""
+    paused: bool = False
     terminal_data: dict[str, Any] | None = None
     terminal_tool: str | None = None
     score: LoopScore | None = None

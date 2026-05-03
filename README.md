@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
-[![Coverage](https://codecov.io/gh/llm-works/llm-saia/branch/main/graph/badge.svg)](https://codecov.io/gh/llm-works/llm-saia)
+![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)
 [![Typed](https://img.shields.io/badge/typed-PEP%20561-brightgreen.svg)](https://peps.python.org/pep-0561/)
 [![Linting: Ruff](https://img.shields.io/badge/linting-ruff-brightgreen)](https://github.com/astral-sh/ruff)
 [![CI](https://github.com/llm-works/llm-saia/actions/workflows/ci.yml/badge.svg)](https://github.com/llm-works/llm-saia/actions/workflows/ci.yml)

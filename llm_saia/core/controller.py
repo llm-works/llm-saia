@@ -19,7 +19,7 @@ from .classifier import LLMTaskStateClassifier, TaskState
 from .types import DecisionReason
 
 if TYPE_CHECKING:
-    from .backend import AgentResponse
+    from .backend import ChatResponse
     from .config import Config, TerminalConfig
     from .conversation import Message, ToolCall
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class Observation:
     """What the controller observes at each iteration."""
 
-    response: AgentResponse
+    response: ChatResponse
     messages: list[Message]
     iteration: int
     task: str
@@ -90,8 +90,6 @@ class ControllerConfig:
     llm_config: Config  # Config for classifier LLM calls
     terminal: TerminalConfig | None = None  # Terminal tool configuration
     backoff_iterations: int = 3  # Iterations to wait after nudging
-    max_confirmation_retries: int = 3  # Max retries for terminal tool confirmation
-    max_failure_retries: int = 1  # Max retries when terminal tool indicates failure
 
 
 # Default nudge messages for each state
@@ -137,8 +135,6 @@ class DefaultController:
     _classifier: LLMTaskStateClassifier = field(init=False, repr=False)
     _last_nudge_iteration: int = field(default=-100, init=False, repr=False)
     _pending_terminal: ToolCall | None = field(default=None, init=False, repr=False)
-    _confirmation_retries: int = field(default=0, init=False, repr=False)
-    _failure_retries: int = field(default=0, init=False, repr=False)
     _consecutive_degenerate: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -148,8 +144,6 @@ class DefaultController:
         """Reset state for a new task."""
         self._last_nudge_iteration = -self.config.backoff_iterations
         self._pending_terminal = None
-        self._confirmation_retries = 0
-        self._failure_retries = 0
         self._consecutive_degenerate = 0
 
     @property
@@ -191,14 +185,24 @@ class DefaultController:
 
         # Check if this is a confirmation of pending terminal
         if self._pending_terminal and terminal_call:
+            # With require_confirmation=False, skip confirmation logic entirely
+            if self.config.terminal and not self.config.terminal.require_confirmation:
+                self._pending_terminal = None
+                return self._make_terminal_action(terminal_call, obs.response.content)
             return self._handle_confirmation(terminal_call, obs)
 
         # First terminal call - request confirmation
         if terminal_call:
             return self._request_confirmation(terminal_call, obs)
 
-        # LLM reconsidered - clear pending state so next terminal call is fresh
+        # LLM didn't call terminal tool again
         if self._pending_terminal:
+            # With require_confirmation=False, complete with stored terminal data
+            if self.config.terminal and not self.config.terminal.require_confirmation:
+                call = self._pending_terminal
+                self._pending_terminal = None
+                return self._make_terminal_action(call, obs.response.content)
+            # Otherwise, LLM reconsidered - clear pending state
             self._pending_terminal = None
 
         return None
@@ -214,22 +218,39 @@ class DefaultController:
                 return call
         return None
 
+    def _make_terminal_action(self, call: ToolCall, fallback_content: str) -> Action:
+        """Create a completion/failure action from a terminal tool call."""
+        output = self._extract_terminal_output(call.arguments, fallback_content)
+        is_failure = self._is_terminal_failure(call.arguments)
+        return Action(
+            ActionType.FAIL if is_failure else ActionType.COMPLETE,
+            DecisionReason.TERMINAL_CONFIRMED_FAIL
+            if is_failure
+            else DecisionReason.TERMINAL_CONFIRMED,
+            output=output,
+            terminal_data=call.arguments,
+            terminal_tool=call.name,
+        )
+
     def _request_confirmation(self, call: ToolCall, obs: Observation) -> Action:
         """Request confirmation for terminal tool."""
-        self._pending_terminal = call
-        self._confirmation_retries = 0
-        self._failure_retries = 0
-
-        # Execute other tools if any (but not the terminal tool)
+        # Execute other tools first if any (but not the terminal tool)
         other_calls = [c for c in (obs.response.tool_calls or []) if c.name != obs.terminal_tool]
         if other_calls:
+            # Store terminal call for after tools execute
+            self._pending_terminal = call
             return Action(
                 ActionType.EXECUTE_TOOLS,
                 DecisionReason.TERMINAL_WITH_OTHER_TOOLS,
                 tool_ids_to_execute=[c.id for c in other_calls],
             )
 
-        # Only terminal call - send confirmation request
+        # No other tools - check if confirmation is required
+        if self.config.terminal and not self.config.terminal.require_confirmation:
+            return self._make_terminal_action(call, obs.response.content)
+
+        # Confirmation required - set up state and request confirmation
+        self._pending_terminal = call
         msg = (
             f"You called `{obs.terminal_tool}` to indicate task completion. "
             f"Please call `{obs.terminal_tool}` again to confirm this is your final answer, "
@@ -241,61 +262,19 @@ class DefaultController:
 
     def _handle_confirmation(self, call: ToolCall, obs: Observation) -> Action:
         """Handle confirmation of terminal tool."""
-        if self._has_contradiction(obs.response.content, obs.tool_names):
-            return self._handle_contradiction(obs.response.content)
-
-        output = self._extract_terminal_output(call.arguments, obs.response.content)
-        is_failure = self._is_terminal_failure(call.arguments)
-
-        if is_failure and self._failure_retries < self.config.max_failure_retries:
-            return self._handle_failure_retry(call.arguments)
-
         self._pending_terminal = None
-        return Action(
-            ActionType.FAIL if is_failure else ActionType.COMPLETE,
-            DecisionReason.TERMINAL_CONFIRMED_FAIL
-            if is_failure
-            else DecisionReason.TERMINAL_CONFIRMED,
-            output=output,
-            terminal_data=call.arguments,
-            terminal_tool=call.name,
-        )
+        return self._make_terminal_action(call, obs.response.content)
 
-    def _handle_contradiction(self, content: str) -> Action:
-        """Handle contradictory confirmation (continuation signals detected)."""
-        self._confirmation_retries += 1
-        if self._confirmation_retries >= self.config.max_confirmation_retries:
-            self._pending_terminal = None
-            return Action(
-                ActionType.FAIL,
-                DecisionReason.CONFIRMATION_RETRIES_EXCEEDED,
-                output=content,
-            )
-        msg = (
-            "Your response contains contradictory signals - you confirmed completion "
-            "but also indicated you want to continue. Please either continue working "
-            "using the available tools, or call the terminal tool with a clear final answer."
-        )
-        return Action(ActionType.INSTRUCT, DecisionReason.CONTRADICTION_DETECTED, message=msg)
-
-    def _handle_failure_retry(self, arguments: dict[str, Any]) -> Action:
-        """Push back on failure status and let the agent retry."""
-        self._failure_retries += 1
-        self._pending_terminal = None
-        status = arguments.get("status", "unknown")
-        msg = (
-            f"You indicated status '{status}' but the task is not complete.\n"
-            f"Please continue working on the task using the available tools. "
-            f"Do not give up - try a different approach if needed."
-        )
-        return Action(ActionType.INSTRUCT, DecisionReason.TERMINAL_FAILURE_RETRY, message=msg)
-
-    def _is_terminal_failure(self, arguments: dict[str, Any]) -> bool:
+    def _is_terminal_failure(self, arguments: Any) -> bool:
         """Check if terminal tool arguments indicate failure.
 
         Uses configured status_field if set, otherwise checks "status".
         Returns True if status value exactly matches any failure value (case-insensitive).
+        Returns False if arguments is not a dict.
         """
+        if not isinstance(arguments, dict):
+            return False
+
         terminal = self.config.terminal
         # Get status field name (default: "status")
         status_field = (terminal.status_field if terminal else None) or "status"
@@ -311,12 +290,16 @@ class DefaultController:
         status_lower = str(status_value).lower()
         return status_lower in {v.lower() for v in failure_values}
 
-    def _extract_terminal_output(self, arguments: dict[str, Any], fallback: str) -> str:
+    def _extract_terminal_output(self, arguments: Any, fallback: str) -> str:
         """Extract output from terminal tool arguments.
 
         Uses the configured output_field if set.
         Falls back to checking common field names, then response content.
+        Returns fallback if arguments is not a dict.
         """
+        if not isinstance(arguments, dict):
+            return fallback
+
         terminal = self.config.terminal
         # Use configured field if set
         field_name = terminal.output_field if terminal else None
@@ -331,29 +314,6 @@ class DefaultController:
 
         return fallback
 
-    # Phrases indicating the LLM wants to continue (contradicts completion confirmation)
-    _CONTINUATION_SIGNALS = (
-        # Intent to act
-        "let me ",
-        "i will ",
-        "i'll ",
-        "let's ",
-        "now i'll",
-        "now i will",
-        "next, i will",
-        "next i will",
-        "i'm going to use",
-        "i am going to use",
-        # Asking for permission
-        "shall i ",
-        "should i ",
-        "would you like me to",
-        "would you like to proceed",
-        "do you want me to",
-        "do you want to proceed",
-        "want me to continue",
-    )
-
     # Patterns that look like tool invocations written as text (tool access lost)
     _TEXT_TOOL_PATTERNS = (
         "read_file",
@@ -364,22 +324,8 @@ class DefaultController:
         "list_files",
     )
 
-    def _has_contradiction(self, content: str, tool_names: list[str] | None = None) -> bool:
-        """Check if content has continuation signals (contradiction).
-
-        Detects two categories:
-        1. Continuation phrases (e.g., "let me check", "I will continue")
-        2. Text tool patterns (e.g., LLM writes "read_file" as text instead of calling it)
-        """
-        if not content:
-            return False
-        content_lower = content.lower()
-        if any(s in content_lower for s in self._CONTINUATION_SIGNALS):
-            return True
-        return self._has_text_tool_pattern(content, tool_names or [])
-
     @staticmethod
-    def _is_empty_response(response: AgentResponse) -> bool:
+    def _is_empty_response(response: ChatResponse) -> bool:
         """Check if the LLM produced an empty response (no content and no tool calls)."""
         return not response.content and not response.tool_calls
 

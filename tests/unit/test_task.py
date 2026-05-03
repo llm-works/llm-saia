@@ -5,8 +5,11 @@ from typing import Any
 import pytest
 
 from llm_saia.core.config import CallOptions, Config
+from llm_saia.core.conversation import ListConversation, Message
+from llm_saia.core.errors import PauseRequested
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import (
-    AgentResponse,
+    ChatResponse,
     ClassifyResult,
     DecisionReason,
     Role,
@@ -56,7 +59,7 @@ class TestTask:
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
 
         mock_backend.queue_tool_response(
-            AgentResponse(content="Task completed!", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Task completed!", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
@@ -82,14 +85,14 @@ class TestTask:
         saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
 
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Let me search for that.",
                 tool_calls=[ToolCall(id="call_1", name="search", arguments={"query": "python"})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_tool_response(
-            AgentResponse(content="Found it. Done.", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Found it. Done.", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
@@ -109,10 +112,10 @@ class TestTask:
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
 
         mock_backend.queue_tool_response(
-            AgentResponse(content="I started...", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="I started...", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.queue_tool_response(
-            AgentResponse(content="Now I finished!", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Now I finished!", tool_calls=[], finish_reason="end_turn")
         )
 
         # First call returns wants_continue, second returns completed
@@ -141,7 +144,7 @@ class TestTask:
 
         for _ in range(5):
             mock_backend.queue_tool_response(
-                AgentResponse(content="Still working...", tool_calls=[], finish_reason="end_turn")
+                ChatResponse(content="Still working...", tool_calls=[], finish_reason="end_turn")
             )
         mock_backend.set_structured_response(
             ClassifyResult,
@@ -161,13 +164,13 @@ class TestTask:
         iterations_seen: list[int] = []
 
         mock_backend.queue_tool_response(
-            AgentResponse(content="Done!", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Done!", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Complete")
         )
 
-        async def on_iteration(iteration: int, response: AgentResponse) -> None:
+        async def on_iteration(iteration: int, response: ChatResponse) -> None:
             iterations_seen.append(iteration)
 
         result = await saia.complete(task="Quick task", on_iteration=on_iteration)
@@ -186,14 +189,14 @@ class TestTask:
         saia = make_saia(mock_backend, tools=sample_tools, executor=failing_executor)
 
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Let me try this tool.",
                 tool_calls=[ToolCall(id="call_1", name="search", arguments={"query": "test"})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_tool_response(
-            AgentResponse(content="Tool failed, but done.", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Tool failed, but done.", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult,
@@ -233,7 +236,7 @@ class TestTask:
         # Queue enough responses for multiple iterations
         for _ in range(10):
             mock_backend.queue_tool_response(
-                AgentResponse(content="Working...", tool_calls=[], finish_reason="end_turn")
+                ChatResponse(content="Working...", tool_calls=[], finish_reason="end_turn")
             )
         mock_backend.set_structured_response(
             ClassifyResult,
@@ -256,10 +259,10 @@ class TestTask:
         # Queue 5 "not done" responses, then one "done"
         for _ in range(5):
             mock_backend.queue_tool_response(
-                AgentResponse(content="Working...", tool_calls=[], finish_reason="end_turn")
+                ChatResponse(content="Working...", tool_calls=[], finish_reason="end_turn")
             )
         mock_backend.queue_tool_response(
-            AgentResponse(content="Done!", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Done!", tool_calls=[], finish_reason="end_turn")
         )
 
         # Queue 5 "wants_continue" responses, then one "completed"
@@ -302,7 +305,7 @@ class TestTask:
 
         # First: LLM calls terminal tool
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Task finished!",
                 tool_calls=[
                     ToolCall(
@@ -316,7 +319,7 @@ class TestTask:
         )
         # Second: LLM confirms by calling terminal tool again
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed complete",
                 tool_calls=[
                     ToolCall(
@@ -337,6 +340,154 @@ class TestTask:
         assert result.terminal_data == {"summary": "Successfully completed the search"}
         # Output is from the confirmation response
         assert result.output == "Confirmed complete"
+
+    async def test_task_terminal_tool_no_confirmation_completes_immediately(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Task completes on first terminal tool call when require_confirmation=False."""
+        terminal_tool_def = ToolDef(
+            name="report_findings",
+            description="Report final findings",
+            parameters={
+                "type": "object",
+                "properties": {"findings": {"type": "string"}},
+                "required": ["findings"],
+            },
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="report_findings",
+            require_confirmation=False,  # No confirmation needed
+        )
+
+        # Single call to terminal tool should complete immediately
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Here are my findings",
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="report_findings",
+                        arguments={"findings": "Found 5 relevant items"},
+                    )
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Research something")
+
+        assert result.completed is True
+        assert result.iterations == 1  # Only one call, no confirmation needed
+        assert result.terminal_tool == "report_findings"
+        assert result.terminal_data == {"findings": "Found 5 relevant items"}
+        assert result.output == "Here are my findings"
+
+    async def test_task_terminal_tool_no_confirmation_with_batched_tools(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """With require_confirmation=False, batched tools are executed before completion."""
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Executed {name}"
+
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=tracking_executor,
+            terminal_tool="finish",
+            require_confirmation=False,
+        )
+
+        # LLM calls both a work tool and terminal tool in same batch
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching and finishing",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+        # LLM responds after seeing tool results (doesn't need to call finish again)
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Got the results",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        assert result.completed is True
+        # Other tools ARE executed even with require_confirmation=False
+        assert executed_tools == ["search"]
+        assert result.terminal_tool == "finish"
+        assert result.terminal_data == {}
+
+    async def test_task_terminal_tool_no_confirmation_skips_confirmation_logic(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """With require_confirmation=False, skip contradiction/retry checks."""
+        terminal_tool_def = ToolDef(
+            name="finish",
+            description="Finish task",
+            parameters={"type": "object", "properties": {}, "required": []},
+        )
+        tools_with_terminal = sample_tools + [terminal_tool_def]
+
+        saia = make_saia(
+            mock_backend,
+            tools=tools_with_terminal,
+            executor=dummy_executor,
+            terminal_tool="finish",
+            require_confirmation=False,
+        )
+
+        # LLM calls work tool + terminal in batch
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching and finishing",
+                tool_calls=[
+                    ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+                    ToolCall(id="call_2", name="finish", arguments={}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+        # LLM calls terminal again with continuation-like text (would trigger contradiction
+        # check in confirmation mode, but should complete immediately with no confirmation)
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Actually let me continue working on this...",
+                tool_calls=[ToolCall(id="call_3", name="finish", arguments={})],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Search and finish")
+
+        # Should complete immediately on second terminal call, skipping contradiction check
+        assert result.completed is True
+        assert result.terminal_tool == "finish"
+        # Completes in 2 iterations (batch + terminal again), not 3+ (would be more if
+        # contradiction handling kicked in)
+        assert result.iterations == 2
 
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
@@ -364,7 +515,7 @@ class TestTask:
 
         # First: LLM calls terminal tool
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Done",
                 tool_calls=[ToolCall(id="call_1", name="finish", arguments={})],
                 finish_reason="tool_use",
@@ -372,7 +523,7 @@ class TestTask:
         )
         # Second: LLM confirms by calling terminal tool again
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed",
                 tool_calls=[ToolCall(id="call_2", name="finish", arguments={})],
                 finish_reason="tool_use",
@@ -412,7 +563,7 @@ class TestTask:
 
         # LLM calls both a work tool and terminal tool in same batch
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Done",
                 tool_calls=[
                     ToolCall(id="call_1", name="search", arguments={"query": "test"}),
@@ -423,7 +574,7 @@ class TestTask:
         )
         # LLM confirms terminal tool
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed",
                 tool_calls=[ToolCall(id="call_3", name="finish", arguments={})],
                 finish_reason="tool_use",
@@ -465,7 +616,7 @@ class TestTask:
 
         # First: LLM prematurely calls terminal tool
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Done",
                 tool_calls=[ToolCall(id="call_1", name="finish", arguments={})],
                 finish_reason="tool_use",
@@ -473,7 +624,7 @@ class TestTask:
         )
         # Second: After seeing confirmation prompt, LLM decides to continue working
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Actually, let me search first",
                 tool_calls=[ToolCall(id="call_2", name="search", arguments={"query": "more"})],
                 finish_reason="tool_use",
@@ -481,7 +632,7 @@ class TestTask:
         )
         # Third: Now LLM calls terminal tool again
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Now done",
                 tool_calls=[ToolCall(id="call_3", name="finish", arguments={})],
                 finish_reason="tool_use",
@@ -489,7 +640,7 @@ class TestTask:
         )
         # Fourth: LLM confirms
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed",
                 tool_calls=[ToolCall(id="call_4", name="finish", arguments={})],
                 finish_reason="tool_use",
@@ -517,7 +668,7 @@ class TestTask:
         )
 
         mock_backend.queue_tool_response(
-            AgentResponse(content="Task done!", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Task done!", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult,
@@ -555,7 +706,7 @@ class TestTask:
 
         # First: LLM calls terminal tool with non-serializable args
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Done",
                 tool_calls=[ToolCall(id="call_1", name="finish", arguments=non_serializable_args)],
                 finish_reason="tool_use",
@@ -563,7 +714,7 @@ class TestTask:
         )
         # Second: LLM confirms
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed",
                 tool_calls=[ToolCall(id="call_2", name="finish", arguments=non_serializable_args)],
                 finish_reason="tool_use",
@@ -596,7 +747,7 @@ class TestTask:
 
         # First: LLM calls only the terminal tool (triggers INSTRUCT confirmation)
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Done",
                 tool_calls=[ToolCall(id="call_1", name="finish", arguments={"output": "ok"})],
                 finish_reason="tool_use",
@@ -604,7 +755,7 @@ class TestTask:
         )
         # Second: LLM confirms
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed",
                 tool_calls=[ToolCall(id="call_2", name="finish", arguments={"output": "ok"})],
                 finish_reason="tool_use",
@@ -643,11 +794,11 @@ class TestTask:
         )
 
         config = Config(
+            lg=NullLogger(),
             backend=mock_backend,
             tools=sample_tools + [terminal_tool_def],
             executor=dummy_executor,
             terminal=TerminalConfig(tool="finish", failure_values=("stuck", "failed")),
-            call=CallOptions(max_retries=0),  # No failure retries
         )
         from llm_saia import SAIA
 
@@ -655,7 +806,7 @@ class TestTask:
 
         # First: LLM calls terminal with failure status
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="I'm stuck",
                 tool_calls=[
                     ToolCall(
@@ -667,7 +818,7 @@ class TestTask:
         )
         # Confirmation: same failure
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="Confirmed stuck",
                 tool_calls=[
                     ToolCall(
@@ -688,30 +839,11 @@ class TestTask:
 class TestDefaultController:
     """Tests for DefaultController."""
 
-    def test_has_contradiction_detects_continuation_signals(
-        self, mock_backend: MockBackend
-    ) -> None:
-        """Controller detects continuation signals in confirmation."""
-        from llm_saia.core.controller import ControllerConfig, DefaultController
-
-        config = Config(backend=mock_backend, tools=[], executor=None)
-        controller = DefaultController(config=ControllerConfig(llm_config=config))
-
-        # Should detect contradiction
-        assert controller._has_contradiction("Let me check one more thing")
-        assert controller._has_contradiction("I will continue")
-        assert controller._has_contradiction("Let's proceed")
-
-        # Clean confirmation - no contradiction
-        assert not controller._has_contradiction("Confirmed")
-        assert not controller._has_contradiction("Yes, done")
-        assert not controller._has_contradiction("")
-
     def test_backoff_default_is_three(self, mock_backend: MockBackend) -> None:
         """Default backoff iterations is 3."""
         from llm_saia.core.controller import ControllerConfig
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config)
         assert ctrl_config.backoff_iterations == 3
 
@@ -719,21 +851,21 @@ class TestDefaultController:
         """Empty response detected when no content and no tool calls."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         # No content, no tool calls → empty
         assert controller._is_empty_response(
-            AgentResponse(content="", tool_calls=[], output_tokens=0)
+            ChatResponse(content="", tool_calls=[], output_tokens=0)
         )
-        assert controller._is_empty_response(AgentResponse(content="", tool_calls=[]))
+        assert controller._is_empty_response(ChatResponse(content="", tool_calls=[]))
         # Has content → not empty
         assert not controller._is_empty_response(
-            AgentResponse(content="hello", tool_calls=[], output_tokens=3)
+            ChatResponse(content="hello", tool_calls=[], output_tokens=3)
         )
         # Has tool calls → not empty
         assert not controller._is_empty_response(
-            AgentResponse(
+            ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="c1", name="search", arguments={})],
             )
@@ -743,7 +875,7 @@ class TestDefaultController:
         """Text tool pattern detected when LLM writes tool names as text."""
         from llm_saia.core.controller import ControllerConfig, DefaultController
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
 
         tools = ["read_file", "run_command", "execute", "search"]
@@ -770,14 +902,14 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
         controller.reset()
         # Set last nudge to current iteration (normally would cause backoff)
         controller._last_nudge_iteration = 5
 
         obs = Observation(
-            response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+            response=ChatResponse(content="", tool_calls=[], output_tokens=0),
             messages=[],
             iteration=6,  # Only 1 since last nudge — would normally be in backoff
             task="do something",
@@ -799,13 +931,13 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         controller = DefaultController(config=ControllerConfig(llm_config=config))
         controller.reset()
         controller._last_nudge_iteration = 5
 
         obs = Observation(
-            response=AgentResponse(
+            response=ChatResponse(
                 content="I'll use read_file to check the config",
                 tool_calls=[],
                 output_tokens=20,
@@ -831,14 +963,14 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=2)
         controller = DefaultController(config=ctrl_config)
         controller.reset()
 
         def make_obs(iteration: int) -> Observation:
             return Observation(
-                response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+                response=ChatResponse(content="", tool_calls=[], output_tokens=0),
                 messages=[],
                 iteration=iteration,
                 task="do something",
@@ -871,14 +1003,14 @@ class TestDefaultController:
             Observation,
         )
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         ctrl_config = ControllerConfig(llm_config=config, backoff_iterations=1)
         controller = DefaultController(config=ctrl_config)
         controller.reset()
 
         # 1 degenerate nudge (at the limit)
         obs_empty = Observation(
-            response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+            response=ChatResponse(content="", tool_calls=[], output_tokens=0),
             messages=[],
             iteration=1,
             task="do something",
@@ -891,7 +1023,7 @@ class TestDefaultController:
 
         # LLM recovers — makes a tool call
         obs_tools = Observation(
-            response=AgentResponse(
+            response=ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="c1", name="search", arguments={})],
                 output_tokens=5,
@@ -907,7 +1039,7 @@ class TestDefaultController:
 
         # Another degenerate — counter was reset, so should nudge again (not fall through)
         obs_empty2 = Observation(
-            response=AgentResponse(content="", tool_calls=[], output_tokens=0),
+            response=ChatResponse(content="", tool_calls=[], output_tokens=0),
             messages=[],
             iteration=3,
             task="do something",
@@ -926,7 +1058,7 @@ class TestTaskStateClassifier:
         """Classifier returns COMPLETED when LLM classifies as completed."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -943,7 +1075,7 @@ class TestTaskStateClassifier:
         """Classifier returns STUCK when LLM classifies as stuck."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -961,7 +1093,7 @@ class TestTaskStateClassifier:
         """Classifier falls back to WANTS_CONTINUE on invalid category."""
         from llm_saia.core.classifier import LLMTaskStateClassifier, TaskState
 
-        config = Config(backend=mock_backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
         classifier = LLMTaskStateClassifier(config)
 
         mock_backend.set_structured_response(
@@ -983,14 +1115,14 @@ class TestLoopScore:
         """Score reflects perfect quality when no nudges needed."""
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "x"})],
                 finish_reason="tool_use",
             )
         )
         mock_backend.queue_tool_response(
-            AgentResponse(content="Done.", tool_calls=[], finish_reason="end_turn")
+            ChatResponse(content="Done.", tool_calls=[], finish_reason="end_turn")
         )
         mock_backend.set_structured_response(
             ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
@@ -1011,7 +1143,7 @@ class TestLoopScore:
         saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
         saia = saia.with_call_options(CallOptions(max_iterations=1))
         mock_backend.queue_tool_response(
-            AgentResponse(
+            ChatResponse(
                 content="",
                 tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "x"})],
                 finish_reason="tool_use",
@@ -1068,3 +1200,220 @@ class TestLoopScore:
             wasted_tokens=100,
         )
         assert repr(score) == "quality=0.83 token_eff=0.90"
+
+
+class TestPauseResume:
+    """Tests for pause/resume functionality."""
+
+    async def test_pause_returns_paused_result(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """PauseRequested from on_iteration returns result with paused=True."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Let me search",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "test"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        pause_at_iteration = 0
+
+        async def pause_callback(iteration: int, response: ChatResponse) -> None:
+            if iteration == pause_at_iteration:
+                raise PauseRequested()
+
+        result = await saia.complete(task="Do something", on_iteration=pause_callback)
+
+        assert result.paused is True
+        assert result.completed is False
+        assert result.iterations == 0
+        assert len(result.history) >= 1
+
+    async def test_pause_preserves_conversation_state(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Paused result history contains state at pause point."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching...",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "x"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        async def pause_immediately(iteration: int, response: ChatResponse) -> None:
+            raise PauseRequested()
+
+        result = await saia.complete(task="Search for x", on_iteration=pause_immediately)
+
+        assert result.paused is True
+        # Pause happens before response is added to history
+        # History should have at least the initial user message
+        assert len(result.history) >= 1
+        assert result.history[0].role == "user"
+        # Messages can be serialized
+        for msg in result.history:
+            d = msg.to_dict()
+            restored = Message.from_dict(d)
+            assert restored == msg
+
+    async def test_resume_continues_from_conversation(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Resume with conversation continues without adding new user message."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        # Pre-populate conversation as if paused after tool call
+        conv = ListConversation()
+        conv.append(Message(role="user", content="Original task"))
+        conv.append(
+            Message(
+                role="assistant",
+                content="Searching...",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"q": "test"})],
+            )
+        )
+        conv.append(Message(role="tool", content="Search results", tool_call_id="c1"))
+
+        # Queue completion response
+        mock_backend.queue_tool_response(
+            ChatResponse(content="All done!", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        result = await saia.complete(task="ignored", conversation=conv, resume=True)
+
+        assert result.completed is True
+        # Should NOT have added another user message
+        user_messages = [m for m in result.history if m.role == "user"]
+        assert len(user_messages) == 1  # Only the original one
+
+    async def test_resume_requires_conversation(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """resume=True without conversation raises ValueError."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        with pytest.raises(ValueError, match="conversation is required"):
+            await saia.complete(task="task", resume=True)
+
+    async def test_pause_after_tool_execution(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Pause after iteration 1 includes tool results in history."""
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Result of {name}"
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        # First iteration: tool call
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+        # Second iteration: another tool (we'll pause here)
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Reading file",
+                tool_calls=[ToolCall(id="c2", name="read_file", arguments={"path": "/x"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        async def pause_at_one(iteration: int, response: ChatResponse) -> None:
+            if iteration == 1:
+                raise PauseRequested()
+
+        result = await saia.complete(task="Do work", on_iteration=pause_at_one)
+
+        assert result.paused is True
+        assert result.iterations == 1
+        assert "search" in executed_tools  # First tool executed
+        # History should include tool result
+        tool_messages = [m for m in result.history if m.role == "tool"]
+        assert len(tool_messages) >= 1
+
+    async def test_pause_check_between_tool_calls(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """pause_check is called between tool calls in a batch."""
+        executed_tools: list[str] = []
+        pause_after_first = True
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Result of {name}"
+
+        async def check_pause() -> bool:
+            # Pause after first tool in batch
+            return pause_after_first and len(executed_tools) >= 1
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        # LLM requests multiple tools at once
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Let me do both",
+                tool_calls=[
+                    ToolCall(id="c1", name="search", arguments={"query": "q"}),
+                    ToolCall(id="c2", name="read_file", arguments={"path": "/x"}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do multiple things", pause_check=check_pause)
+
+        assert result.paused is True
+        assert executed_tools == ["search"]  # Only first tool executed
+        # Second tool should be acknowledged as "Paused."
+        tool_messages = [m for m in result.history if m.role == "tool"]
+        assert len(tool_messages) == 2
+        assert tool_messages[0].content == "Result of search"
+        assert tool_messages[1].content == "Paused."
+
+    async def test_pause_check_not_called_for_single_tool(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """pause_check is not called when there's only one tool in the batch."""
+        check_count = 0
+
+        async def count_checks() -> bool:
+            nonlocal check_count
+            check_count += 1
+            return False  # Don't pause
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        # Single tool call
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+        mock_backend.queue_tool_response(
+            ChatResponse(content="Done!", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        result = await saia.complete(task="Search", pause_check=count_checks)
+
+        assert result.completed is True
+        assert check_count == 0  # No check between single-tool batches

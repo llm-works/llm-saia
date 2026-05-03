@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-02
+
+### Added
+- **Pause/Resume support** for long-running tool loops via `PauseRequested` exception, `pause_check`
+  callback, and `resume=True` parameter. Includes `abort_signal` for fast streaming abort and
+  serialization helpers (`Message.to_dict()`, `ToolCall.to_dict()`).
+- `CallOptions.context` — optional dict passed through to backend for callback tracking (e.g., cost
+  tracking, request correlation). Requires backend support (llm-infer 0.x+).
+- Per-step logging for structured output retries: TRACE logs all steps, DEBUG logs errors only.
+- `JsonParser` protocol and `json_parser` config option for custom JSON parsing in structured
+  output. Default is `json.loads`. Override to handle malformed JSON from some backends or to
+  use alternative parsers (orjson, json-repair, etc.). Set via `SAIA.builder().json_parser(fn)`
+  or `saia.with_json_parser(fn)`.
+- `IterationGuard.blocking` parameter (default `True`). When `False`, tools execute before feedback
+  is injected (advisory mode). `GuardOutcome.blocking` field added to trace records.
+- `ChatResponse.model` — resolved model name for cost attribution (also propagated to `LLMCall.model`
+  in trace records).
+- `ChatResponse.raw` — unmodified backend-native response for vendor-specific fields (cache tokens,
+  thinking blocks, etc.).
+- `AsyncConversationLike` protocol for non-blocking conversation append. Extends `ConversationLike`
+  with `append_async()` method. All verbs use `append_async()` when the conversation supports it,
+  allowing compaction strategies that involve I/O (e.g., LLM-based summarization) to run without
+  blocking the event loop.
+- `Complete` verb now accepts optional `conversation: ConversationLike` parameter. When provided,
+  messages are appended to both an internal history (returned in `TaskResult.history`) and the
+  external conversation. The LLM sees `conversation.as_messages()` which may be compacted,
+  enabling long-running tool loops without unbounded context growth. `TaskResult.history` always
+  contains the complete uncompacted history.
+- `IterationContext` passed to `IterationGuard` validators, providing access to `response`,
+  `iteration`, `max_iterations`, and `remaining` property. Enables guards that adapt behavior
+  based on loop progress (e.g., force terminal tool when iterations are running low).
+- `require_confirmation` parameter for terminal tools. Set to `False` to complete immediately
+  on first terminal tool call without requiring a confirmation call. Many models respond to
+  confirmation prompts with text instead of a tool call, causing `terminal_data` to be `None`.
+  Use `.terminal_tool("name", require_confirmation=False)` to avoid this issue.
+- `with_tracer()` fluent API for per-call tracer override (consistent with other `with_*` methods)
+- Built-in iteration guards in `llm_saia.guards`:
+  - `terminal_status(tool, status_field, failure_values)` - reject terminal calls with failure status
+  - `terminal_schema(tools, terminal_tool)` - validate terminal args against JSON schema
+  - `contradiction(terminal_tool)` - detect hedging language when terminal tool is called
+- `IterationContext.parse_error` field for detecting parse retry context. When set, the guard is
+  running in parse retry mode (structured output failed to parse).
+- `IterationGuard.parse_max_retries` field. Guards with `parse_max_retries > 0` participate in
+  parse retry (retrying when structured output JSON parsing fails). When multiple guards have
+  `parse_max_retries > 0`, their retry budgets are summed (e.g., two guards with 2 retries each
+  allow up to 5 attempts). All participating guards are evaluated on each attempt; their feedback
+  is combined.
+- Built-in `schema_retry(max_retries=2)` guard - retry with escalating feedback when JSON
+  parsing fails. Migration from `with_parse_retries(n)`: use `.with_guard(schema_retry(n))`
+- **Trace-level observability** for debugging stuck loops. Logs tool results (bounded to 50KB),
+  guard triggers, message assembly, and controller decisions.
+
+### Fixed
+- Per-invocation `CallOptions` overrides for `system` and `context` now work correctly. Previously,
+  `run=CallOptions(system="...", context=...)` was ignored; `_chat()` always used instance defaults.
+
+### Changed
+- **BREAKING**: Renamed `AgentResponse` → `ChatResponse` to match the `Backend.chat()` method
+  name and align with `LLMCall` already used in `trace.py`. The old name is removed; update
+  imports and type hints to `ChatResponse`.
+  Migration: `s/AgentResponse/ChatResponse/g` on imports and type hints (e.g.,
+  `from llm_saia.core.backend import AgentResponse` → `ChatResponse`).
+- **BREAKING**: `IterationGuard.validator` signature changed from `Callable[[ChatResponse], str | None]`
+  to `Callable[[IterationContext], str | None]`. Access response via `ctx.response`.
+- **BREAKING**: `lg: Logger` is now the first field in `Config` (was after `backend`). This
+  follows the project convention that logger is always the first parameter.
+- Logger is now required in `Config` (defaults to `NullLogger()` via builder). Removed all
+  internal `if self._lg:` checks.
+
+### Removed
+- **BREAKING**: `retries()` / `with_retries()` removed. Terminal failure retry behavior
+  should be implemented via `IterationGuard` instead.
+- **BREAKING**: `parse_retries()` / `with_parse_retries()` removed. Use the built-in
+  `schema_retry()` guard instead: `.with_guard(schema_retry(2))`
+- **BREAKING**: `CallOptions.max_retries`, `CallOptions.retry_escalation`,
+  `CallOptions.parse_retries` removed.
+- Controller no longer handles terminal failure retries or confirmation contradiction
+  detection internally. These behaviors can be implemented via guards for opt-in use.
+
 ## [0.3.0] - 2026-04-13
 
 ### Added
@@ -122,7 +201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/llm-works/llm-saia/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/llm-works/llm-saia/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/llm-works/llm-saia/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/llm-works/llm-saia/releases/tag/v0.1.0

@@ -1,12 +1,19 @@
-"""Pre-built output guards with sensible default instructions.
+"""Pre-built guards for LLM output validation and iteration control.
 
-Example:
+Output guards validate final results and retry on failure:
     >>> from llm_saia.guards import english_only, max_length
+    >>> result = await saia.with_guard(english_only()).summarize(article)
+
+Parse guards retry when structured output parsing fails:
+    >>> from llm_saia.guards import schema_retry
+    >>> result = await saia.with_guard(schema_retry()).summarize(article)
+
+Iteration guards run during tool loops and inject feedback:
+    >>> from llm_saia.guards import terminal_status, terminal_schema
     >>> result = await (
     ...     saia
-    ...     .with_guard(english_only())
-    ...     .with_guard(max_length(500))
-    ...     .summarize(article)
+    ...     .with_guard(terminal_status("done", "status", ("stuck",)))
+    ...     .complete(task)
     ... )
 """
 
@@ -14,17 +21,28 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .core.guard import OutputGuard
+from .core.guard import IterationContext, IterationGuard, OutputGuard
+
+if TYPE_CHECKING:
+    from .core.backend import ChatResponse
+    from .core.types import ToolDef
 
 __all__ = [
+    # Output guards
     "ascii_only",
     "english_only",
     "max_length",
     "no_emoji",
     "no_markdown",
     "no_preamble",
+    # Parse guards
+    "schema_retry",
+    # Iteration guards
+    "contradiction",
+    "terminal_schema",
+    "terminal_status",
 ]
 
 
@@ -378,3 +396,321 @@ def _has_no_emoji(result: Any) -> str | None:
         if _is_emoji(cp):
             return f"Contains emoji: '{char}' (U+{cp:04X})"
     return None
+
+
+# ---------------------------------------------------------------------------
+# Parse guards - retry on structured output parse failure
+# ---------------------------------------------------------------------------
+
+
+def schema_retry(max_retries: int = 2, *, escalate: bool = True) -> IterationGuard:
+    """Retry when structured output parsing fails (malformed JSON, schema mismatch).
+
+    This guard only activates in parse retry context (when ``ctx.parse_error`` is set).
+    It does not affect tool loop behavior.
+
+    Args:
+        max_retries: Max retry attempts. Default 2.
+        escalate: Use increasingly forceful retry instructions. Default True.
+
+    Example:
+        >>> from llm_saia.guards import schema_retry
+        >>> result = await saia.with_guard(schema_retry()).extract(Article, text)
+    """
+
+    def check(ctx: IterationContext) -> str | None:
+        if ctx.parse_error is None:
+            return None  # Not a parse error context (tool loop)
+        return _schema_retry_feedback(ctx, escalate)
+
+    return IterationGuard(validator=check, name="schema_retry", parse_max_retries=max_retries)
+
+
+def _schema_retry_feedback(ctx: IterationContext, escalate: bool) -> str:
+    """Generate feedback message for schema retry."""
+    parse_err = getattr(ctx.parse_error, "parse_error", None)
+    if ctx.iteration == 0 or not escalate:
+        msg = "Your response was not valid JSON. Please respond with valid JSON."
+        return f"{msg}\n\nParse error: {parse_err}" if parse_err else msg
+    return (
+        f"YOU HAVE FAILED TO PRODUCE VALID JSON {ctx.iteration + 1} TIMES. "
+        f"Parse error: {parse_err or 'unknown'}. "
+        f"Respond with VALID JSON ONLY. No markdown, no explanation, just the JSON."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Iteration guards - run during tool loops
+# ---------------------------------------------------------------------------
+
+# Phrases that indicate the LLM is hedging or unable to complete
+_CONTINUATION_SIGNALS = frozenset(
+    {
+        "however",
+        "but",
+        "although",
+        "unfortunately",
+        "i can't",
+        "i cannot",
+        "i'm unable",
+        "i am unable",
+        "not possible",
+        "isn't possible",
+        "unable to",
+        "cannot complete",
+        "can't complete",
+    }
+)
+
+
+def terminal_status(
+    tool: str,
+    status_field: str,
+    failure_values: tuple[str, ...],
+    max_retries: int = 3,
+    *,
+    escalate: bool = True,
+) -> IterationGuard:
+    """Reject terminal tool calls with failure status and ask to retry.
+
+    Args:
+        tool: Name of the terminal tool.
+        status_field: Field in tool arguments containing the status.
+        failure_values: Status values that indicate failure.
+        max_retries: Max retry attempts before giving up. Default 3.
+        escalate: Use increasingly forceful retry instructions. Default True.
+    """
+    failure_set = frozenset(failure_values)
+    state = _GuardState(max_retries)
+
+    def check(ctx: IterationContext) -> str | None:
+        state.reset_if_new(ctx.iteration)
+        status = _find_failure_status(ctx.response, tool, status_field, failure_set)
+        if status is None:
+            return None
+        return state.feedback(_status_feedback, escalate, status=status)
+
+    return IterationGuard(validator=check, name="terminal_status")
+
+
+def terminal_schema(
+    tools: list[ToolDef],
+    terminal_tool: str,
+    max_retries: int = 2,
+    *,
+    escalate: bool = True,
+) -> IterationGuard:
+    """Validate terminal tool arguments against its JSON schema.
+
+    Args:
+        tools: List of tool definitions (used to find the terminal tool's schema).
+        terminal_tool: Name of the terminal tool.
+        max_retries: Max retry attempts before giving up. Default 2.
+        escalate: Use increasingly forceful retry instructions. Default True.
+    """
+    schema = _find_tool_schema(tools, terminal_tool)
+    if schema is None:
+        return IterationGuard(validator=lambda ctx: None, name="terminal_schema")
+
+    state = _GuardState(max_retries)
+
+    def check(ctx: IterationContext) -> str | None:
+        state.reset_if_new(ctx.iteration)
+        errors = _find_schema_errors(ctx.response, terminal_tool, schema)
+        if not errors:
+            return None
+        return state.feedback(_schema_feedback, escalate, tool=terminal_tool, errors=errors)
+
+    return IterationGuard(validator=check, name="terminal_schema")
+
+
+def contradiction(
+    terminal_tool: str,
+    max_retries: int = 2,
+    *,
+    escalate: bool = True,
+) -> IterationGuard:
+    """Detect when the LLM contradicts itself after calling the terminal tool.
+
+    Detects when the LLM calls the terminal tool but includes hedging language
+    (e.g., "however", "I can't", "unfortunately").
+
+    Args:
+        terminal_tool: Name of the terminal tool.
+        max_retries: Max retry attempts before giving up. Default 2.
+        escalate: Use increasingly forceful retry instructions. Default True.
+    """
+    state = _GuardState(max_retries)
+
+    def check(ctx: IterationContext) -> str | None:
+        state.reset_if_new(ctx.iteration)
+        signal = _find_contradiction(ctx.response, terminal_tool)
+        if signal is None:
+            return None
+        return state.feedback(_contradiction_feedback, escalate, tool=terminal_tool, signal=signal)
+
+    return IterationGuard(validator=check, name="contradiction")
+
+
+# --- Iteration guard state and helpers ---
+
+
+class _GuardState:
+    """Tracks retry count for iteration guards.
+
+    Automatically resets when a new task starts (iteration 0).
+    """
+
+    __slots__ = ("max_retries", "count")
+
+    def __init__(self, max_retries: int) -> None:
+        self.max_retries = max_retries
+        self.count = 0
+
+    def reset_if_new(self, iteration: int) -> None:
+        """Reset counter if this is the start of a new task."""
+        if iteration == 0:
+            self.count = 0
+
+    def feedback(
+        self, fn: Callable[..., tuple[str, str]], escalate: bool, **kwargs: Any
+    ) -> str | None:
+        """Increment counter and return feedback if under limit."""
+        self.count += 1
+        if self.count > self.max_retries:
+            return None
+        base, forceful = fn(self.count, **kwargs)
+        return forceful if escalate and self.count > 1 else base
+
+
+def _find_failure_status(
+    response: ChatResponse, tool: str, field: str, failures: frozenset[str]
+) -> str | None:
+    """Find failure status in terminal tool call, or None."""
+    for tc in response.tool_calls or []:
+        if tc.name == tool and isinstance(tc.arguments, dict):
+            status = tc.arguments.get(field)
+            if status in failures:
+                return str(status)
+    return None
+
+
+def _status_feedback(count: int, *, status: str) -> tuple[str, str]:
+    """Generate feedback for terminal status failure."""
+    base = f"You reported status='{status}' but the task is not complete. Try a different approach."
+    forceful = (
+        f"You have reported '{status}' {count} times. "
+        f"You MUST complete the task. Try a completely different approach."
+    )
+    return base, forceful
+
+
+def _find_tool_schema(tools: list[ToolDef], name: str) -> dict[str, Any] | None:
+    """Find schema for a tool by name."""
+    for t in tools:
+        if t.name == name:
+            return t.parameters
+    return None
+
+
+def _find_schema_errors(response: ChatResponse, tool: str, schema: dict[str, Any]) -> list[str]:
+    """Find schema errors in terminal tool call."""
+    for tc in response.tool_calls or []:
+        if tc.name == tool:
+            return _validate_schema(tc.arguments, schema)
+    return []
+
+
+def _schema_feedback(count: int, *, tool: str, errors: list[str]) -> tuple[str, str]:
+    """Generate feedback for schema validation failure."""
+    error_list = "\n".join(f"- {e}" for e in errors)
+    base = (
+        f"Your `{tool}` call has schema errors:\n{error_list}\n\n"
+        f"Please try again with valid arguments."
+    )
+    forceful = (
+        f"Your `{tool}` call STILL has schema errors (attempt {count}):\n{error_list}\n\n"
+        f"You MUST call `{tool}` with VALID arguments."
+    )
+    return base, forceful
+
+
+def _find_contradiction(response: ChatResponse, tool: str) -> str | None:
+    """Find contradiction signal when terminal tool is called."""
+    has_terminal = any(tc.name == tool for tc in (response.tool_calls or []))
+    if not has_terminal:
+        return None
+    content = (response.content or "").lower()
+    for signal in _CONTINUATION_SIGNALS:
+        if signal in content:
+            return signal
+    return None
+
+
+def _contradiction_feedback(count: int, *, tool: str, signal: str) -> tuple[str, str]:
+    """Generate feedback for contradiction detection."""
+    base = (
+        f"You called `{tool}` but your response contains contradictory language ('{signal}'). "
+        f"Complete the task confidently or do not call `{tool}`."
+    )
+    forceful = (
+        f"You called `{tool}` but your response suggests you cannot complete ('{signal}'). "
+        f"This is the {_ordinal(count)} contradiction. Complete confidently or explain the blocker."
+    )
+    return base, forceful
+
+
+def _ordinal(n: int) -> str:
+    """Return ordinal string for a number (1st, 2nd, 3rd, etc.)."""
+    if 11 <= (n % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+# Type mapping for JSON schema validation
+_JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
+    "string": str,
+    "number": (int, float),
+    "integer": int,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+    "null": type(None),
+}
+
+
+def _validate_schema(data: Any, schema: dict[str, Any]) -> list[str]:
+    """Basic JSON schema validation for terminal tool arguments.
+
+    Returns list of error messages. Only validates:
+    - Data is a dict
+    - Required top-level fields are present
+    - Top-level field types match (via _type_matches)
+
+    Does NOT validate: nested objects, array item types, enums, patterns,
+    additionalProperties, or other JSON Schema features. For full validation,
+    use a dedicated JSON Schema library like jsonschema.
+    """
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return [f"expected object, got {type(data).__name__}"]
+
+    for field in schema.get("required", []):
+        if field not in data:
+            errors.append(f"missing required field: {field}")
+
+    properties = schema.get("properties", {})
+    for field, value in data.items():
+        if field in properties:
+            expected = properties[field].get("type")
+            if expected and not _type_matches(value, expected):
+                errors.append(f"field '{field}': expected {expected}, got {type(value).__name__}")
+    return errors
+
+
+def _type_matches(value: Any, json_type: str) -> bool:
+    """Check if a Python value matches a JSON schema type."""
+    type_class = _JSON_TYPE_MAP.get(json_type)
+    return type_class is None or isinstance(value, type_class)

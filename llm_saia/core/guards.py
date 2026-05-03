@@ -17,6 +17,7 @@ from typing import (
 )
 
 from .guard import Guarded, OutputGuard, OutputGuardError
+from .logging import VerbLoggingMixin
 
 if TYPE_CHECKING:
     from .config import CallOptions
@@ -27,8 +28,10 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-class OutputGuardMixin:
+class OutputGuardMixin(VerbLoggingMixin):
     """Mixin providing output guard application and retry logic.
+
+    Inherits from VerbLoggingMixin to access logging methods directly.
 
     Expects the host class to provide:
       - ``_get_call_options(run)`` -> CallOptions
@@ -43,7 +46,7 @@ class OutputGuardMixin:
 
     # Stubs for attributes/methods provided by the host class (Verb).
 
-    _lg: Logger | None
+    _lg: Logger
 
     def _get_call_options(self, override: CallOptions | None = None) -> CallOptions:
         raise NotImplementedError
@@ -92,6 +95,13 @@ class OutputGuardMixin:
         instance_guards = config.output_guards
         field_guards = self._extract_field_guards(schema)
 
+        guard_names = [g.name for g in instance_guards]
+        field_guard_names = list(field_guards.keys())
+        self._lg.trace(
+            "applying output guards",
+            extra={"instance_guards": guard_names, "field_guards": field_guard_names},
+        )
+
         for _round in range(self._MAX_REVALIDATION_ROUNDS):
             original_result = result
 
@@ -103,6 +113,7 @@ class OutputGuardMixin:
                     prompt, result, original_result, schema, field_guards, run, conversation, _trace
                 )
             if not changed:
+                self._lg.trace("all output guards passed")
                 return result
 
         raise OutputGuardError(
@@ -196,11 +207,14 @@ class OutputGuardMixin:
     ) -> T:
         """Apply a guard to a specific field of the result."""
         gname = f"{field_name}.{guard.name}" if guard.name else field_name
+        last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
             field_value = getattr(result, field_name, None)
             error = self._run_validator(guard, field_value)
             if error is None:
+                self._log_guard_retry_outcome(last_step_num, _trace, gname)
                 return result
+            self._log_guard_retry_outcome(last_step_num, _trace, gname, error=error)
             if attempt >= guard.max_retries:
                 raise OutputGuardError(gname, error, attempt + 1)
             self._log_guard_retry(gname, attempt + 1, guard.max_retries, error)
@@ -215,6 +229,7 @@ class OutputGuardMixin:
                 _trace=_trace,
                 _phase="guard_retry",
             )
+            last_step_num = len(_trace.steps) if _trace else None
         return result  # Unreachable, satisfies type checker
 
     @staticmethod
@@ -272,11 +287,15 @@ class OutputGuardMixin:
         parse_retries. This is intentional - guards run after parsing succeeds,
         so JSON structure is expected to be stable on retry.
         """
+        self._lg.trace("checking guard", extra={"guard": guard.name})
+        last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
             error = self._run_validator(guard, result)
             if error is None:
-                return result  # Passed
-
+                self._lg.trace("guard passed", extra={"guard": guard.name, "attempt": attempt})
+                self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard")
+                return result
+            self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard", error=error)
             if attempt < guard.max_retries:
                 self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error, attempt)
@@ -288,9 +307,9 @@ class OutputGuardMixin:
                     _trace=_trace,
                     _phase="guard_retry",
                 )
+                last_step_num = len(_trace.steps) if _trace else None
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
-
         return result  # Unreachable, satisfies type checker
 
     # -- Text guards --
@@ -313,6 +332,9 @@ class OutputGuardMixin:
         if not guards:
             return text
 
+        guard_names = [g.name for g in guards]
+        self._lg.trace("applying text guards", extra={"guards": guard_names})
+
         for _round in range(self._MAX_REVALIDATION_ROUNDS):
             original_text = text
             for guard in guards:
@@ -322,6 +344,7 @@ class OutputGuardMixin:
                 if text != original_text:
                     break
             else:
+                self._lg.trace("all text guards passed")
                 return text
 
         raise OutputGuardError(
@@ -338,11 +361,15 @@ class OutputGuardMixin:
         _trace: VerbTrace | None = None,
     ) -> str:
         """Apply one guard to text with retries."""
+        self._lg.trace("checking text guard", extra={"guard": guard.name})
+        last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
             error = self._run_validator(guard, text)
             if error is None:
-                return text  # Passed
-
+                self._lg.trace("text guard passed", extra={"guard": guard.name, "attempt": attempt})
+                self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard")
+                return text
+            self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard", error=error)
             if attempt < guard.max_retries:
                 self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error, attempt)
@@ -353,9 +380,9 @@ class OutputGuardMixin:
                     conversation=conversation,
                     _trace=_trace,
                 )
+                last_step_num = len(_trace.steps) if _trace else None
             else:
                 raise OutputGuardError(guard.name, error, attempt + 1)
-
         return text  # Unreachable, satisfies type checker
 
     # -- Shared helpers --
@@ -387,13 +414,12 @@ class OutputGuardMixin:
         self, name: str | None, attempt: int, max_retries: int, error: str
     ) -> None:
         """Log guard retry attempt."""
-        if self._lg:
-            self._lg.debug(
-                "guard retry",
-                extra={
-                    "guard": name,
-                    "attempt": attempt,
-                    "max_retries": max_retries,
-                    "error": error,
-                },
-            )
+        self._lg.debug(
+            "guard retry",
+            extra={
+                "guard": name,
+                "attempt": attempt,
+                "max_retries": max_retries,
+                "error": error,
+            },
+        )

@@ -8,7 +8,7 @@ method - you provide the implementation that talks to your LLM of choice.
 ```python
 from typing import Any
 
-from llm_saia import Backend, Message, ToolDef, AgentResponse
+from llm_saia import Backend, Message, ToolDef, ChatResponse
 
 class MyBackend(Backend):
     async def chat(
@@ -19,7 +19,7 @@ class MyBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         # Your implementation here
         ...
 ```
@@ -69,18 +69,30 @@ class ToolCall:
     arguments: dict[str, Any]
 ```
 
-### AgentResponse
+### ChatResponse
 
 ```python
 @dataclass
-class AgentResponse:
+class ChatResponse:
     content: str
     tool_calls: list[ToolCall]
     finish_reason: str | None = None  # "end_turn", "tool_use", etc.
     input_tokens: int = 0
     output_tokens: int = 0
-    call_id: str = ""  # Set by SAIA per chat() call for tracing
+    call_id: str = ""          # Set by SAIA per chat() call for tracing
+    model: str | None = None   # Resolved model name returned by the backend
+    raw: Any = None            # Backend-native response object (escape hatch)
 ```
+
+`model` is the concrete model identifier that produced the response. Populate it when the backend
+resolves a placeholder (e.g. `"auto"`) to a specific model — downstream consumers need this for
+per-model cost attribution.
+
+`raw` carries the unmodified backend-native response object. Consumers that read from it couple
+themselves to that specific backend; SAIA makes no stability guarantees about its shape. Use it as
+an escape hatch when you need a field SAIA doesn't surface directly (cache tokens,
+thinking/reasoning
+blocks, vendor-specific metadata).
 
 ## Example: OpenAI-Compatible Backend
 
@@ -89,7 +101,7 @@ Here's a minimal backend for OpenAI-compatible APIs (works with OpenAI, Ollama, 
 ```python
 import json
 import httpx
-from llm_saia import Backend, Message, ToolDef, ToolCall, AgentResponse
+from llm_saia import Backend, Message, ToolDef, ToolCall, ChatResponse
 
 class OpenAIBackend(Backend):
     def __init__(self, model: str, api_key: str | None = None, base_url: str = "https://api.openai.com/v1"):
@@ -106,7 +118,7 @@ class OpenAIBackend(Backend):
         response_schema: dict[str, Any] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> AgentResponse:
+    ) -> ChatResponse:
         # Build API messages
         api_messages = []
         if system:
@@ -156,12 +168,14 @@ class OpenAIBackend(Backend):
                     arguments=json.loads(tc["function"]["arguments"]),
                 ))
 
-        return AgentResponse(
+        return ChatResponse(
             content=message.get("content") or "",
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
+            model=data.get("model") or self._model,
+            raw=data,
         )
 
     def _convert_message(self, msg: Message) -> dict:
@@ -232,6 +246,25 @@ The schema is a JSON Schema dict. How you request this depends on your LLM:
 
 SAIA parses the JSON response and validates it against the schema.
 
+### Custom JSON Parser
+
+Default is `json.loads`. Override to handle malformed JSON from some backends or to use
+alternative parsers (orjson, json-repair, etc.):
+
+```python
+import json
+
+def my_json_parser(content: str) -> dict:
+    """Custom parser that fixes newlines then parses."""
+    return json.loads(content.replace("\n", "\\n"))
+
+# Via builder
+saia = SAIA.builder().backend(backend).json_parser(my_json_parser).build()
+
+# Via fluent API (per-call override)
+result = await saia.with_json_parser(my_json_parser).extract(Schema, text)
+```
+
 ## Tool Calling
 
 When `tools` is passed, the backend should register them with the LLM for function calling. The
@@ -240,7 +273,7 @@ response should populate `tool_calls` when the LLM wants to call tools.
 If the LLM doesn't support native tool calling, you can:
 1. Include tool descriptions in the system prompt
 2. Parse tool calls from the response text
-3. Return them in `AgentResponse.tool_calls`
+3. Return them in `ChatResponse.tool_calls`
 
 SAIA will execute the tools and continue the conversation.
 

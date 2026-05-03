@@ -10,8 +10,9 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .backend import ToolDef
-    from .config import CallOptions, Config
+    from .config import CallOptions, Config, JsonParser
     from .guard import IterationGuard, OutputGuard
+    from .trace import Tracer
 
 __all__ = ["Configurable"]
 
@@ -49,6 +50,10 @@ class Configurable(ABC):
         return self._with_config(call=new_call)
 
     # --- Config-Level Overrides ---
+
+    def with_tracer(self, tracer: Tracer) -> Self:
+        """Return new instance with specified tracer for iteration tracing."""
+        return self._with_config(tracer=tracer)
 
     def with_tools(
         self,
@@ -101,10 +106,6 @@ class Configurable(ABC):
         """Return new instance with specified per-call token limit."""
         return self._with_call(max_call_tokens=n)
 
-    def with_retries(self, max_retries: int, escalation: str | None = None) -> Self:
-        """Return new instance with retry settings."""
-        return self._with_call(max_retries=max_retries, retry_escalation=escalation)
-
     def with_temperature(self, temp: float | None) -> Self:
         """Return new instance with specified sampling temperature (None to clear)."""
         return self._with_call(temperature=temp)
@@ -113,21 +114,13 @@ class Configurable(ABC):
         """Return new instance with a user-provided correlation ID (None to clear)."""
         return self._with_call(request_id=request_id)
 
+    def with_context(self, context: dict[str, Any] | None) -> Self:
+        """Return new instance with context dict for backend callbacks (None to clear)."""
+        return self._with_call(context=context)
+
     def with_system(self, system: str | None) -> Self:
         """Return new instance with different system prompt (None to clear)."""
         return self._with_call(system=system)
-
-    def with_parse_retries(self, n: int) -> Self:
-        """Return new instance with specified parse retry attempts.
-
-        When structured output parsing fails (StructuredOutputError), SAIA will
-        retry with feedback to the LLM about what went wrong. This is useful
-        for local/smaller LLMs that may produce malformed JSON.
-
-        Args:
-            n: Number of retry attempts. 0 = no retry (default), 1 = one retry, etc.
-        """
-        return self._with_call(parse_retries=n)
 
     def with_guard(self, guard: OutputGuard | IterationGuard) -> Self:
         """Add a guard to this instance.
@@ -137,20 +130,17 @@ class Configurable(ABC):
         - :class:`OutputGuard` — validates the final result and retries if
           invalid (applied after completion).
         - :class:`IterationGuard` — enforces behavioral constraints after each
-          LLM response in a tool-calling loop. On failure the feedback string is
-          injected into the conversation and the loop continues.
+          LLM response in a loop. Runs during tool loops and parse retry loops.
+          On failure the feedback string is injected and the loop continues.
 
         Multiple guards can be chained and are applied in order.
 
         Example:
-            >>> from llm_saia import IterationGuard
-            >>> from llm_saia.guards import english_only
-            >>> result = await (
-            ...     saia
-            ...     .with_guard(english_only())
-            ...     .with_guard(IterationGuard(require_narrative, name="narrative"))
-            ...     .complete(task)
-            ... )
+            >>> from llm_saia.guards import english_only, schema_retry
+            >>> # OutputGuard (english_only) applies to any completion
+            >>> result = await saia.with_guard(english_only()).complete(task)
+            >>> # IterationGuard with parse_max_retries applies to structured output
+            >>> result = await saia.with_guard(schema_retry()).extract(Article, text)
 
         Args:
             guard: OutputGuard or IterationGuard instance.
@@ -175,7 +165,7 @@ class Configurable(ABC):
         See :meth:`with_guard` for details on guard behavior.
 
         Args:
-            *guards: OutputGuard and/or IterationGuard instances to add.
+            *guards: Guard instances to add.
 
         Raises:
             ValueError: If no guards are provided.
@@ -195,3 +185,14 @@ class Configurable(ABC):
             else:
                 new_output = new_output + (g,)
         return self._with_call(output_guards=new_output, iteration_guards=new_iter)
+
+    def with_json_parser(self, parser: JsonParser) -> Self:
+        """Return new instance with custom JSON parser for structured output.
+
+        Default is json.loads. Override to handle malformed JSON from some
+        backends or to use alternative parsers (orjson, json-repair, etc.).
+
+        Args:
+            parser: Function that takes JSON string and returns parsed value.
+        """
+        return self._with_config(json_parser=parser)

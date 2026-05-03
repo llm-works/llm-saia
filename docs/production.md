@@ -119,7 +119,7 @@ SAIA writes JSONL traces for every LLM call. Use traces for debugging, monitorin
 ### Enable Tracing
 
 ```python
-# File-based tracing
+# File-based tracing (at build time)
 saia = (
     SAIA.builder()
     .backend(backend)
@@ -138,6 +138,15 @@ def handle_trace(record: dict) -> None:
         alerts.send(record)
 
 saia = SAIA.builder().backend(backend).tracing.callback(handle_trace).build()
+
+# Per-call tracer override (fluent API)
+from llm_saia.core.trace import FileTracer
+
+tracer = FileTracer("/tmp/debug.jsonl")
+try:
+    result = await saia.with_tracer(tracer).complete(task)
+finally:
+    tracer.close()
 ```
 
 ### Trace Record Fields
@@ -274,11 +283,11 @@ Enforce behavioral constraints *during* tool-calling loops. Unlike output guards
 run after each LLM response — not at the end.
 
 ```python
-from llm_saia import IterationGuard
+from llm_saia import IterationContext, IterationGuard
 
-def require_narrative(response):
+def require_narrative(ctx: IterationContext) -> str | None:
     """Require the LLM to explain its actions, not just call tools silently."""
-    if response.tool_calls and not (response.content or "").strip():
+    if ctx.response.tool_calls and not (ctx.response.content or "").strip():
         return "Explain what you're doing and why."
     return None
 
@@ -289,15 +298,199 @@ result = await (
 )
 ```
 
+`IterationContext` provides:
+- `response` — the current `ChatResponse`
+- `iteration` — current iteration number (0-indexed)
+- `max_iterations` — maximum iterations configured
+- `remaining` — iterations remaining (including current)
+
+Use iteration info for adaptive guards:
+
+```python
+from llm_saia import UNLIMITED
+
+def force_terminal(ctx: IterationContext) -> str | None:
+    """Force terminal tool call when iterations are running low."""
+    # Skip if unlimited iterations
+    if ctx.remaining == UNLIMITED:
+        return None
+    # Check if response already calls the terminal tool
+    has_terminal = any(
+        tc.name == "report_findings" for tc in (ctx.response.tool_calls or [])
+    )
+    if ctx.remaining <= 3 and not has_terminal:
+        return "You must call report_findings now to complete the task."
+    return None
+```
+
 When a guard fires:
 1. Pending tool calls are acknowledged (keeping the conversation valid)
 2. The feedback string is injected as a user message
 3. The loop continues — no retry, just a course correction
 
+#### Blocking vs Advisory Guards
+
+By default, guards **block** tool execution when they fire — tools are acknowledged but not run.
+This is correct for guards that reject invalid tool calls:
+
+```python
+# Blocking (default): reject terminal tool with bad status
+guard = IterationGuard(validator=check_status, blocking=True)
+```
+
+For guards that want to shape behavior without blocking progress, use `blocking=False`. Tools
+execute first, then feedback is injected:
+
+```python
+# Advisory: execute tools, then ask for explanation
+def require_narrative(ctx: IterationContext) -> str | None:
+    if ctx.response.tool_calls and not (ctx.response.content or "").strip():
+        return "Explain what you're doing and why."
+    return None
+
+guard = IterationGuard(require_narrative, name="narrative", blocking=False)
+```
+
+With `blocking=False`, the LLM gets tool results AND the feedback in the same iteration,
+preventing deadlocks where it can't explain without seeing results.
+
 Guard outcomes are recorded in trace steps (`Step.guards`) for observability. If a validator
 raises an exception, the error message becomes the feedback string.
 
 `with_guard()` and `with_guards()` accept both guard types and route them automatically.
+
+## Terminal Tools
+
+A terminal tool signals task completion. When the model calls the terminal tool, SAIA extracts
+the result and stops the loop.
+
+```python
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal_tool("report_findings")
+    .build()
+)
+
+result = await saia.complete(task)
+print(result.terminal_data)  # Arguments from the terminal tool call
+```
+
+### Confirmation Behavior
+
+By default, SAIA asks the model to call the terminal tool twice to confirm completion. This
+prevents accidental termination but can cause issues: many models respond to "call again to
+confirm" with text like "Confirming..." instead of a second tool call.
+
+When confirmation fails, `terminal_data` is `None` even though the model called the terminal
+tool with valid data. The data is still accessible via `result.history`, but this is
+inconvenient.
+
+**Recommendation:** Disable confirmation unless you specifically need it:
+
+```python
+# Recommended: complete immediately on first terminal call
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal_tool("report_findings", require_confirmation=False)
+    .build()
+)
+
+# Legacy: require confirmation (default)
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal_tool("report_findings")  # require_confirmation=True by default
+    .build()
+)
+```
+
+### Terminal Tool Configuration
+
+For advanced control, use `.terminal()` instead of `.terminal_tool()`:
+
+```python
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal(
+        tool="complete_task",
+        output_field="summary",        # Field to use for result.output
+        status_field="status",         # Field containing completion status
+        failure_values=("stuck", "failed"),  # Status values that indicate failure
+        require_confirmation=False,
+    )
+    .build()
+)
+```
+
+### Terminal Iteration Guards
+
+SAIA provides built-in iteration guards for common terminal tool behaviors. These are opt-in
+and run during each iteration of the tool loop.
+
+**Reject Failure Status:**
+
+```python
+from llm_saia.guards import terminal_status
+
+# Reject terminal calls with "stuck" or "failed" status, ask to retry
+guard = terminal_status(
+    tool="complete_task",
+    status_field="status",
+    failure_values=("stuck", "failed"),
+    max_retries=3,
+    escalate=True,  # Increasingly forceful retry messages
+)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+**Validate Schema:**
+
+```python
+from llm_saia.guards import terminal_schema
+
+# Validate terminal tool arguments against JSON schema
+guard = terminal_schema(tools, "report_findings", max_retries=2)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+**Detect Contradictions:**
+
+```python
+from llm_saia.guards import contradiction
+
+# Detect hedging language ("however", "unfortunately", "I can't")
+# when the terminal tool is called
+guard = contradiction("complete_task", max_retries=2)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+### Extracting Data from History
+
+If `terminal_data` is `None` (due to confirmation failure), you can extract the terminal tool
+call from `result.history`:
+
+```python
+result = await saia.complete(task)
+
+if result.terminal_data is None:
+    # Fallback: scan history for terminal tool call
+    for msg in reversed(result.history):
+        if msg.tool_calls:
+            for call in msg.tool_calls:
+                if call.name == "report_findings":
+                    findings = call.arguments
+                    break
+```
 
 ## Timeouts and Limits
 
@@ -326,6 +519,164 @@ For simple operations without tool loops:
 ```python
 # No iteration, no timeout - just one LLM call
 result = await saia.with_single_call().verify(code, predicate)
+```
+
+## Pause and Resume
+
+For long-running tool loops, you may want to pause execution and resume later — for example, when a
+user requests to stop, or to serialize state for later continuation.
+
+### Pausing a Loop
+
+Use the `on_iteration` callback to pause at iteration boundaries (after LLM call, before tools):
+
+```python
+from llm_saia import PauseRequested
+
+should_pause = asyncio.Event()
+
+async def on_iteration(iteration: int, response: ChatResponse) -> None:
+    if should_pause.is_set():
+        raise PauseRequested()
+
+result = await saia.complete(task, on_iteration=on_iteration)
+
+if result.paused:
+    # Loop was paused — save state for later
+    save_conversation(result.history)
+```
+
+For finer-grained control, use `pause_check` to pause between tool calls in a multi-tool batch:
+
+```python
+async def check_pause() -> bool:
+    return should_pause.is_set()
+
+result = await saia.complete(
+    task,
+    on_iteration=on_iteration,  # Checked per iteration
+    pause_check=check_pause,     # Checked between tools in a batch
+)
+```
+
+When `pause_check` returns `True`:
+- The current tool completes (we don't interrupt external calls)
+- Remaining tools in the batch are acknowledged as "Paused." but not executed
+- The loop exits with `result.paused = True`
+
+### Pause Latency
+
+Pause is cooperative — it cannot interrupt a running tool execution:
+
+| Signal Location | What Happens |
+|-----------------|--------------|
+| During LLM call | With `abort_signal`: abort within ~100ms. Without: wait for full response |
+| Between tools in batch | Check `pause_check`, pause if True |
+| During tool execution | Wait for tool to finish, then check `pause_check` |
+
+Without `abort_signal`, worst-case latency = LLM response time + longest tool execution time.
+
+### Fast Abort with Streaming
+
+For sub-second pause latency during LLM calls, pass an `abort_signal`:
+
+```python
+abort_event = asyncio.Event()
+
+result = await saia.complete(
+    task,
+    pause_check=lambda: abort_event.is_set(),
+    abort_signal=abort_event,  # Enables fast abort during streaming
+)
+
+# From another task (e.g., API handler):
+abort_event.set()  # Triggers abort within ~100ms
+```
+
+When `abort_signal` is set during an LLM call:
+- Backends that support streaming (SAIAAdapter with llm-infer 0.x+) check between chunks
+- The partial response is discarded (not added to conversation)
+- `PauseRequested` is raised, loop exits with `result.paused = True`
+- On resume, the same prompt is re-sent to the LLM
+
+This requires backend support. Backends that don't support streaming ignore `abort_signal`.
+
+### Serializing Conversation State
+
+`Message` and `ToolCall` provide `to_dict()` / `from_dict()` for serialization:
+
+```python
+import json
+
+# Serialize
+history_data = [msg.to_dict() for msg in result.history]
+json.dump(history_data, open("conversation.json", "w"))
+
+# Deserialize
+history_data = json.load(open("conversation.json"))
+messages = [Message.from_dict(d) for d in history_data]
+```
+
+The `to_dict()` methods omit `None` fields, producing clean JSON compatible with LLM APIs.
+
+### Resuming a Loop
+
+To resume, pass the restored conversation with `resume=True`:
+
+```python
+from llm_saia import ListConversation, Message
+
+# Restore conversation from storage
+history_data = load_conversation()
+conv = ListConversation()
+for d in history_data:
+    conv.append(Message.from_dict(d))
+
+# Resume — task is ignored, history has the original context
+result = await saia.complete(
+    task="",  # Ignored when resuming
+    conversation=conv,
+    resume=True,
+)
+```
+
+When `resume=True`:
+- No new user message is added (the conversation already has the original task)
+- The LLM sees the full history and continues naturally
+- `max_iterations` counts from zero (fresh budget for the resumed run)
+
+### Example: User-Controlled Pause
+
+```python
+import asyncio
+import signal
+
+pause_event = asyncio.Event()
+
+def handle_signal(signum, frame):
+    pause_event.set()
+
+async def main():
+    signal.signal(signal.SIGINT, handle_signal)
+
+    async def on_iteration(iteration: int, response: ChatResponse) -> None:
+        if pause_event.is_set():
+            raise PauseRequested()
+
+    async def pause_check() -> bool:
+        return pause_event.is_set()
+
+    result = await saia.complete(
+        task="Research and summarize topic X",
+        on_iteration=on_iteration,
+        pause_check=pause_check,
+    )
+
+    if result.paused:
+        print("Paused. Saving state...")
+        save_state(result.history)
+    else:
+        print(f"Completed: {result.output}")
 ```
 
 ## Logging
@@ -366,6 +717,51 @@ class StructlogAdapter:
         self._log.error(msg, **(extra or {}))
 
 saia = SAIA.builder().backend(backend).logger(StructlogAdapter()).build()
+```
+
+### Trace-Level Observability
+
+Enable trace-level logging to see detailed execution flow. This is invaluable for debugging stuck
+loops, understanding why the LLM repeated an action, or verifying that guards fired correctly.
+
+> **Privacy Warning:** Trace logs may contain sensitive information including user messages,
+> tool results, and LLM responses. Apply appropriate redaction, retention policies, and access
+> controls before enabling trace-level logging in production environments.
+
+**What trace logs show:**
+
+| Log Message | What It Contains |
+|-------------|------------------|
+| `"verb started"` | Verb name, trace_id |
+| `"verb completed"` | Duration, step count |
+| `"sending messages to llm"` | Message count by role, last user message preview, recent tool results |
+| `"tool result returned to llm"` | Tool name, result length, result (up to 50k chars) |
+| `"running iteration guards"` | List of guard names being checked |
+| `"iteration guards triggered feedback"` | Which guards fired, feedback (up to 50k chars) |
+| `"guard feedback injected into conversation"` | Feedback content (up to 50k chars), acknowledged tool names |
+| `"controller decision details"` | Action, reason, terminal_tool, terminal_data |
+| `"checking guard"` / `"guard passed"` | Output guard validation progress |
+
+**Debugging stuck loops:**
+
+When a loop gets stuck (LLM repeats the same action), trace logs answer:
+
+1. **Did the LLM receive the tool result?** Check `"tool result returned to llm"` — shows the
+   exact string (e.g., "BLOCKED" or "WRAP UP") that was sent back.
+
+2. **Did guards fire and inject feedback?** Check `"guard feedback injected into conversation"` —
+   shows the feedback message and which tool calls were acknowledged.
+
+3. **What context did it see before repeating?** Check `"sending messages to llm"` — shows
+   message counts and the last user message (often a guard nudge or tool result).
+
+**Example trace session:**
+
+```
+TRACE sending messages to llm {"call_id": "abc123", "msg_count": 8, "by_role": {"user": 3, "assistant": 3, "tool": 2}, "last_user_msg": "You reported status='stuck' but the task is not complete..."}
+TRACE tool result returned to llm {"tool": "read_file", "result_len": 2500, "result": "def process_data(x):..."}
+TRACE iteration guards triggered feedback {"guards_fired": ["terminal_status"], "feedback": "You reported status='stuck' but the task is not complete. Try a different approach."}
+TRACE guard feedback injected into conversation {"feedback_len": 85, "feedback": "You reported status='stuck' but the task is not complete. Try a different approach.", "acked_tools": ["complete_task"]}
 ```
 
 ## Monitoring Checklist

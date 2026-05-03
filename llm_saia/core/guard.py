@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .errors import Error
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-__all__ = ["Guarded", "IterationGuard", "OutputGuard", "OutputGuardError"]
+__all__ = [
+    "Guarded",
+    "IterationContext",
+    "IterationGuard",
+    "OutputGuard",
+    "OutputGuardError",
+    "UNLIMITED",
+]
 
 
 @dataclass(frozen=True)
@@ -57,36 +62,113 @@ class OutputGuard:
         return self.retry_instruction
 
 
+# Sentinel for unlimited iterations (avoids sys.maxsize import in hot path)
+UNLIMITED = 2**63 - 1
+
+
+@dataclass(frozen=True)
+class IterationContext:
+    """Context passed to iteration guard validators.
+
+    Provides access to the current response and loop state, enabling guards
+    that adapt behavior based on iteration progress (e.g., force terminal
+    tool near the end of the loop).
+
+    This context is used in two scenarios:
+
+    1. **Tool loop**: Guards run after each LLM response during tool calling.
+       ``response`` contains the LLM response, ``parse_error`` is ``None``.
+
+    2. **Parse retry**: Guards run when structured output parsing fails.
+       ``response`` contains the response that failed to parse,
+       ``parse_error`` contains the :class:`StructuredOutputError`.
+
+    Guards can check ``parse_error`` to determine which scenario they're in.
+
+    Attributes:
+        response: The current LLM response to validate.
+        iteration: Current iteration/attempt number (0-indexed).
+        max_iterations: Maximum iterations/attempts configured.
+        parse_error: If set, indicates this is a parse retry context.
+    """
+
+    response: Any  # ChatResponse, but Any to avoid circular import
+    iteration: int
+    max_iterations: int
+    parse_error: Any = None  # StructuredOutputError, but Any to avoid circular import
+
+    @property
+    def remaining(self) -> int:
+        """Iterations remaining (including current).
+
+        Returns :const:`UNLIMITED` when ``max_iterations=0`` (unlimited).
+        """
+        if self.max_iterations == 0:
+            return UNLIMITED
+        return max(0, self.max_iterations - self.iteration)
+
+
 @dataclass(frozen=True)
 class IterationGuard:
-    """Behavioral constraint enforced after each LLM response in a tool-calling loop.
+    """Behavioral constraint enforced after each LLM response in a loop.
 
-    Unlike :class:`OutputGuard` (which validates the final result and retries the
-    whole completion), an ``IterationGuard`` runs *during* the loop.  When its
-    validator returns a feedback string the message is injected into the
-    conversation and the loop continues — no retry, just a nudge.
+    Runs in two contexts:
 
-    The validator receives an :class:`~llm_saia.core.backend.AgentResponse` so it
-    can inspect both ``content`` and ``tool_calls``.
+    1. **Tool loop**: After each LLM response during tool calling. When the
+       validator returns a feedback string, it's injected into the conversation
+       and the loop continues.
+
+    2. **Parse retry**: When structured output parsing fails (``ctx.parse_error``
+       is set). Guards with ``parse_max_retries > 0`` participate in parse retry.
+       Return feedback to retry, or ``None`` to stop retrying.
+
+    The validator receives an :class:`IterationContext` with the response and
+    loop state. Check ``ctx.parse_error`` to detect parse retry context.
+
+    When multiple guards have ``parse_max_retries > 0``, their retry budgets are
+    **summed** to determine total attempts. For example, two guards with
+    ``parse_max_retries=2`` each allow up to 5 attempts (1 initial + 2 + 2).
+    Each attempt evaluates all participating guards; their feedback is combined.
 
     Args:
-        validator: Receives the current ``AgentResponse``. Return ``None`` when
-            the response is acceptable, or a feedback string to inject.
+        validator: Receives :class:`IterationContext`. Return ``None`` when
+            the response is acceptable, or a feedback string to inject/retry.
         name: Optional name for logging and trace records.
+        parse_max_retries: Retry budget for parse retry context. Guards with
+            ``parse_max_retries > 0`` participate when structured output parsing
+            fails. Default 0 (tool loop only, no parse retry).
+        blocking: If ``True`` (default), tool calls are skipped when the guard
+            fires - use for guards that reject bad tool calls (e.g., terminal
+            tool with invalid status). If ``False``, tools execute first and
+            feedback is injected afterward - use for advisory guards that want
+            to shape behavior without blocking progress (e.g., narrative guards).
 
     Example:
+        >>> # Tool loop guard - require explanation with tool calls (advisory)
         >>> guard = IterationGuard(
-        ...     validator=lambda r: (
-        ...         "Explain what you're doing and why."
-        ...         if r.tool_calls and not (r.content or "").strip()
+        ...     validator=lambda ctx: (
+        ...         "Explain what you're doing."
+        ...         if ctx.response.tool_calls and not ctx.parse_error
         ...         else None
         ...     ),
         ...     name="narrative",
+        ...     blocking=False,  # Advisory: tools run, then feedback injected
         ... )
+
+        >>> # Parse retry guard - retry on JSON errors
+        >>> from llm_saia.guards import schema_retry
+        >>> saia.with_guard(schema_retry(max_retries=2))
     """
 
-    validator: Callable[[Any], str | None]
+    validator: Callable[[IterationContext], str | None]
     name: str | None = None
+    parse_max_retries: int = 0  # >0 enables parse retry participation
+    blocking: bool = True  # False = execute tools, then inject feedback (advisory mode)
+
+    def __post_init__(self) -> None:
+        """Validate parse_max_retries is non-negative."""
+        if self.parse_max_retries < 0:
+            raise ValueError(f"parse_max_retries must be >= 0, got {self.parse_max_retries}")
 
 
 class Guarded:

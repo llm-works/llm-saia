@@ -55,6 +55,7 @@ class LLMCall:
     output_tokens: int = 0
     finish_reason: str | None = None
     duration_ms: int = 0
+    model: str | None = None
 
 
 @dataclass
@@ -65,6 +66,7 @@ class GuardOutcome:
     passed: bool = True
     attempts: int = 1
     error: str | None = None
+    blocking: bool = True  # Whether the guard blocks tool execution when it fires
 
 
 @dataclass
@@ -201,10 +203,10 @@ def build_step_from_response(
     trace_id: str = "",
     verb: str = "",
 ) -> Step:
-    """Build a Step from an AgentResponse (non-Complete verbs).
+    """Build a Step from a ChatResponse (non-Complete verbs).
 
     Args:
-        response: AgentResponse from backend.chat().
+        response: ChatResponse from backend.chat().
         phase: Step phase (attempt, parse_retry, guard_retry, iteration, finalize).
         trace_id: Trace ID for correlation.
         verb: Verb class name.
@@ -222,6 +224,7 @@ def build_step_from_response(
             output_tokens=getattr(response, "output_tokens", 0),
             finish_reason=getattr(response, "finish_reason", None),
             duration_ms=call_duration,
+            model=getattr(response, "model", None),
         ),
         tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
     )

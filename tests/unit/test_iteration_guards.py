@@ -1,4 +1,4 @@
-"""Tests for IterationGuard feature."""
+"""Tests for IterationGuard feature and built-in iteration guards."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ from typing import Any
 
 import pytest
 
-from llm_saia import IterationGuard, OutputGuard
-from llm_saia.core.backend import AgentResponse
+from llm_saia import IterationContext, IterationGuard, OutputGuard
+from llm_saia.core.backend import ChatResponse
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.conversation import Message, ToolCall
+from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import ToolDef
+from llm_saia.guards import _ordinal, contradiction, terminal_schema, terminal_status
 from llm_saia.verbs import Ask, Instruct
 from llm_saia.verbs.complete import Complete
 from tests.unit.conftest import MockBackend
@@ -23,9 +25,9 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _tool_response(content: str = "", tool_calls: list[ToolCall] | None = None) -> AgentResponse:
-    """Create an AgentResponse with optional tool calls."""
-    return AgentResponse(
+def _tool_response(content: str = "", tool_calls: list[ToolCall] | None = None) -> ChatResponse:
+    """Create an ChatResponse with optional tool calls."""
+    return ChatResponse(
         content=content,
         tool_calls=tool_calls or [],
         finish_reason="tool_use" if tool_calls else "end_turn",
@@ -67,6 +69,7 @@ def _make_config_with_tools(
         return f"result for {name}"
 
     return Config(
+        lg=NullLogger(),
         backend=backend,
         tools=tools,
         executor=executor,
@@ -84,17 +87,17 @@ class TestIterationGuardDataclass:
     """Tests for IterationGuard construction."""
 
     def test_create_guard(self) -> None:
-        guard = IterationGuard(validator=lambda r: None, name="test")
+        guard = IterationGuard(validator=lambda ctx: None, name="test")
         assert guard.name == "test"
         assert guard.validator is not None
 
     def test_guard_frozen(self) -> None:
-        guard = IterationGuard(validator=lambda r: None)
+        guard = IterationGuard(validator=lambda ctx: None)
         with pytest.raises(AttributeError):
             guard.name = "changed"  # type: ignore[misc]
 
     def test_guard_default_name_is_none(self) -> None:
-        guard = IterationGuard(validator=lambda r: None)
+        guard = IterationGuard(validator=lambda ctx: None)
         assert guard.name is None
 
 
@@ -108,7 +111,7 @@ class TestGuardDispatch:
 
     def test_with_guard_routes_output_guard(self) -> None:
         backend = MockBackend()
-        config = Config(backend=backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
         verb = Ask(config)
         out_guard = OutputGuard(validator=lambda x: None, retry_instruction="Fix.")
         result = verb.with_guard(out_guard)
@@ -117,19 +120,19 @@ class TestGuardDispatch:
 
     def test_with_guard_routes_iteration_guard(self) -> None:
         backend = MockBackend()
-        config = Config(backend=backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
         verb = Ask(config)
-        iter_guard = IterationGuard(validator=lambda r: None, name="test")
+        iter_guard = IterationGuard(validator=lambda ctx: None, name="test")
         result = verb.with_guard(iter_guard)
         assert iter_guard in result._call.iteration_guards
         assert len(result._call.output_guards) == 0
 
     def test_with_guards_mixed(self) -> None:
         backend = MockBackend()
-        config = Config(backend=backend, tools=[], executor=None)
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
         verb = Ask(config)
         out_guard = OutputGuard(validator=lambda x: None, retry_instruction="Fix.")
-        iter_guard = IterationGuard(validator=lambda r: None, name="test")
+        iter_guard = IterationGuard(validator=lambda ctx: None, name="test")
         result = verb.with_guards(out_guard, iter_guard)
         assert out_guard in result._call.output_guards
         assert iter_guard in result._call.iteration_guards
@@ -152,7 +155,7 @@ class TestIterationGuardInLoop:
         )
         backend.queue_response(_tool_response("Here are the results"))
 
-        guard = IterationGuard(validator=lambda r: None, name="always_pass")
+        guard = IterationGuard(validator=lambda ctx: None, name="always_pass")
         call = CallOptions(iteration_guards=(guard,), max_iterations=5)
         config = _make_config_with_tools(backend, call=call)
         verb = Instruct(config)
@@ -167,7 +170,7 @@ class TestIterationGuardInLoop:
 
         original_chat = backend.chat
 
-        async def tracking_chat(messages: list[Message], **kwargs: Any) -> AgentResponse:
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> ChatResponse:
             nonlocal call_count
             call_count += 1
             captured_messages.append(list(messages))
@@ -187,8 +190,8 @@ class TestIterationGuardInLoop:
         # Third: final response
         backend.queue_response(_tool_response("Done"))
 
-        def require_narrative(resp: AgentResponse) -> str | None:
-            if resp.tool_calls and not (resp.content or "").strip():
+        def require_narrative(ctx: IterationContext) -> str | None:
+            if ctx.response.tool_calls and not (ctx.response.content or "").strip():
                 return "Explain what you're doing and why."
             return None
 
@@ -219,11 +222,13 @@ class TestIterationGuardInLoop:
         backend.queue_response(_tool_response("All done with results"))
 
         guard1 = IterationGuard(
-            validator=lambda r: "Need explanation." if not (r.content or "").strip() else None,
+            validator=lambda ctx: (
+                "Need explanation." if not (ctx.response.content or "").strip() else None
+            ),
             name="explain",
         )
         guard2 = IterationGuard(
-            validator=lambda r: "Be verbose." if len(r.content or "") < 5 else None,
+            validator=lambda ctx: "Be verbose." if len(ctx.response.content or "") < 5 else None,
             name="verbose",
         )
 
@@ -241,7 +246,7 @@ class TestIterationGuardInLoop:
         backend.queue_response(_tool_response("Done"))
 
         guard = IterationGuard(
-            validator=lambda r: "Explain." if not (r.content or "").strip() else None,
+            validator=lambda ctx: "Explain." if not (ctx.response.content or "").strip() else None,
             name="narrative",
         )
         call = CallOptions(iteration_guards=(guard,), max_iterations=10)
@@ -267,7 +272,7 @@ class TestIterationGuardInLoop:
 
         calls = 0
 
-        def bad_once_validator(r: AgentResponse) -> str | None:
+        def bad_once_validator(ctx: IterationContext) -> str | None:
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -298,7 +303,7 @@ class TestIterationGuardInComplete:
 
         original_chat = backend.chat
 
-        async def tracking_chat(messages: list[Message], **kwargs: Any) -> AgentResponse:
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> ChatResponse:
             nonlocal call_count
             call_count += 1
             return await original_chat(messages, **kwargs)
@@ -318,12 +323,12 @@ class TestIterationGuardInComplete:
         )
         backend.queue_response(_tool_response("Confirming", [done_confirm]))
 
-        guard = IterationGuard(
-            validator=lambda r: (
-                "Explain." if r.tool_calls and not (r.content or "").strip() else None
-            ),
-            name="narrative",
-        )
+        def require_narrative(ctx: IterationContext) -> str | None:
+            if ctx.response.tool_calls and not (ctx.response.content or "").strip():
+                return "Explain."
+            return None
+
+        guard = IterationGuard(validator=require_narrative, name="narrative")
         call = CallOptions(iteration_guards=(guard,), max_iterations=10)
         config = _make_config_with_tools(backend, call=call, terminal_tool="done")
         verb = Complete(config)
@@ -342,7 +347,7 @@ class TestIterationGuardInComplete:
         backend.queue_response(_tool_response("Explained", [done_call]))
 
         guard = IterationGuard(
-            validator=lambda r: "Explain." if not (r.content or "").strip() else None,
+            validator=lambda ctx: "Explain." if not (ctx.response.content or "").strip() else None,
             name="narrative",
         )
         call = CallOptions(iteration_guards=(guard,), max_iterations=10)
@@ -362,7 +367,7 @@ class TestIterationGuardInComplete:
         backend.queue_response(_tool_response("Explained", [done_call]))
 
         guard = IterationGuard(
-            validator=lambda r: "Explain." if not (r.content or "").strip() else None,
+            validator=lambda ctx: "Explain." if not (ctx.response.content or "").strip() else None,
             name="narrative",
         )
         call = CallOptions(iteration_guards=(guard,), max_iterations=10)
@@ -374,3 +379,706 @@ class TestIterationGuardInComplete:
         guard_steps = [s for s in result.trace.steps if s.reason == "iteration_guard"]
         assert len(guard_steps) >= 1
         assert guard_steps[0].nudge_preview == "Explain."
+
+
+# ---------------------------------------------------------------------------
+# Complete verb conversation support
+# ---------------------------------------------------------------------------
+
+
+class CompactingConversation:
+    """Mock conversation that tracks appends and can return compacted view."""
+
+    def __init__(self) -> None:
+        self._messages: list[Message] = []
+        self._compacted_view: list[Message] | None = None
+
+    def append(self, msg: Message) -> None:
+        self._messages.append(msg)
+
+    def as_messages(self) -> list[Message]:
+        """Return compacted view if set, otherwise full messages."""
+        return self._compacted_view if self._compacted_view is not None else self._messages
+
+    def set_compacted_view(self, messages: list[Message]) -> None:
+        """Set what as_messages() returns (simulates compaction)."""
+        self._compacted_view = messages
+
+    @property
+    def full_history(self) -> list[Message]:
+        """Access to full internal history for assertions."""
+        return self._messages
+
+
+class TestCompleteConversationSupport:
+    """Tests for Complete verb conversation parameter."""
+
+    async def test_messages_appended_to_conversation(self) -> None:
+        """Complete appends messages to provided conversation."""
+        backend = MockBackend()
+        # Done call + confirmation (terminal requires confirmation by default)
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # Conversation should have initial user message + assistant responses
+        assert len(conv.full_history) >= 2
+        assert conv.full_history[0].role == "user"
+        assert conv.full_history[0].content == "test task"
+
+    async def test_history_contains_full_messages(self) -> None:
+        """TaskResult.history contains full history even if conv compacts."""
+        backend = MockBackend()
+        # First: tool call
+        backend.queue_response(_tool_response("Searching", [_make_tool_call("search")]))
+        # Second: done + confirmation
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        # Result history should be complete (multiple messages)
+        assert len(result.history) >= 3
+        # Conversation also has full history (no compaction triggered in this test)
+        assert len(conv.full_history) == len(result.history)
+
+    async def test_llm_sees_conversation_view(self) -> None:
+        """LLM receives conv.as_messages() which may be compacted."""
+        backend = MockBackend()
+        messages_sent_to_llm: list[list[Message]] = []
+
+        original_chat = backend.chat
+
+        async def tracking_chat(messages: list[Message], **kwargs: Any) -> ChatResponse:
+            messages_sent_to_llm.append(list(messages))
+            return await original_chat(messages, **kwargs)
+
+        backend.chat = tracking_chat  # type: ignore[assignment]
+
+        # Queue: search tool, then done + confirmation
+        backend.queue_response(_tool_response("Searching", [_make_tool_call("search")]))
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()
+        # After a few messages, simulate compaction
+        original_append = conv.append
+
+        def compacting_append(msg: Message) -> None:
+            original_append(msg)
+            # After 4 messages, set compacted view (only latest 2 messages)
+            if len(conv._messages) >= 4:
+                conv.set_compacted_view(conv._messages[-2:])
+
+        conv.append = compacting_append  # type: ignore[method-assign]
+
+        await verb("test task", conversation=conv)
+
+        # Should have 3 LLM calls (search, done, confirm)
+        assert len(messages_sent_to_llm) == 3
+        # First call sees just the initial message
+        assert len(messages_sent_to_llm[0]) == 1
+        # Third call sees compacted view (exactly 2 messages after threshold)
+        assert len(messages_sent_to_llm[2]) == 2
+
+    async def test_no_conversation_works_as_before(self) -> None:
+        """Complete works without conversation parameter (backward compatible)."""
+        backend = MockBackend()
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        # No conversation parameter
+        result = await verb("test task")
+
+        assert result.completed
+        assert len(result.history) >= 2
+
+
+class AsyncCompactingConversation:
+    """Mock async conversation that tracks which append method is called."""
+
+    def __init__(self) -> None:
+        self._messages: list[Message] = []
+        self.sync_append_count = 0
+        self.async_append_count = 0
+
+    def append(self, msg: Message) -> None:
+        self._messages.append(msg)
+        self.sync_append_count += 1
+
+    async def append_async(self, msg: Message) -> None:
+        self._messages.append(msg)
+        self.async_append_count += 1
+
+    def as_messages(self) -> list[Message]:
+        return self._messages
+
+    @property
+    def full_history(self) -> list[Message]:
+        return self._messages
+
+
+class TestAsyncConversationLikeSupport:
+    """Tests for AsyncConversationLike protocol support."""
+
+    async def test_async_append_used_for_async_conversation(self) -> None:
+        """Complete uses append_async when conversation supports it."""
+        backend = MockBackend()
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        assert len(conv.full_history) == conv.async_append_count
+
+    async def test_sync_append_used_for_sync_conversation(self) -> None:
+        """Complete uses sync append when conversation doesn't support async."""
+        backend = MockBackend()
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = CompactingConversation()  # Sync-only conversation
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        assert len(conv.full_history) >= 2
+
+    async def test_non_complete_verb_uses_async_append(self) -> None:
+        """Non-Complete verbs (Ask, etc.) use append_async when conversation supports it."""
+        backend = MockBackend()
+        backend.queue_response(_tool_response("The answer is 42."))
+
+        config = Config(lg=NullLogger(), backend=backend, tools=[], executor=None)
+        verb = Ask(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("some artifact", "what is the answer?", conversation=conv)
+
+        assert result.value == "The answer is 42."
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        assert len(conv.full_history) == conv.async_append_count
+
+    async def test_tool_execution_syncs_via_async_append(self) -> None:
+        """Tool execution results are synced to async conversation via append_async."""
+        backend = MockBackend()
+        # First response: non-terminal tool call (search)
+        search_call = ToolCall(id="tc_search", name="search", arguments={"q": "test"})
+        backend.queue_response(_tool_response("Searching...", [search_call]))
+        # Second response: terminal tool call (done)
+        done_call = ToolCall(id="tc_done", name="done", arguments={"output": "ok", "status": "ok"})
+        backend.queue_response(_tool_response("Done", [done_call]))
+        # Third response: confirmation
+        done_confirm = ToolCall(
+            id="tc_done2", name="done", arguments={"output": "ok", "status": "ok"}
+        )
+        backend.queue_response(_tool_response("Confirming", [done_confirm]))
+
+        config = _make_config_with_tools(backend, terminal_tool="done")
+        verb = Complete(config)
+
+        conv = AsyncCompactingConversation()
+        result = await verb("test task", conversation=conv)
+
+        assert result.completed
+        # All appends should use async method, none should use sync
+        assert conv.async_append_count > 0
+        assert conv.sync_append_count == 0
+        # Verify tool result message was synced (Role.TOOL in history)
+        tool_messages = [m for m in conv.full_history if m.role == "tool"]
+        assert len(tool_messages) >= 1, "Tool result should be synced to async conversation"
+
+
+# ---------------------------------------------------------------------------
+# Built-in iteration guard factories
+# ---------------------------------------------------------------------------
+
+
+def _make_response(
+    content: str = "",
+    tool_calls: list[ToolCall] | None = None,
+) -> ChatResponse:
+    """Create a minimal ChatResponse for testing."""
+    return ChatResponse(
+        content=content,
+        tool_calls=tool_calls,
+        input_tokens=10,
+        output_tokens=10,
+        call_id="test-call",
+        finish_reason="stop",
+    )
+
+
+def _make_ctx(
+    response: ChatResponse,
+    iteration: int = 0,
+    max_iterations: int = 10,
+) -> IterationContext:
+    """Wrap ChatResponse in IterationContext for guard testing."""
+    return IterationContext(response=response, iteration=iteration, max_iterations=max_iterations)
+
+
+class TestTerminalStatusGuard:
+    """Tests for terminal_status guard factory."""
+
+    def test_no_tool_calls_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response("Just some text")
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_non_terminal_tool_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="other_tool", arguments={"status": "stuck"})]
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_success_status_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "complete"})]
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_failure_status_returns_feedback(self) -> None:
+        guard = terminal_status("done", "status", ("stuck", "failed"))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "stuck" in feedback
+
+    def test_escalation_on_repeated_failures(self) -> None:
+        guard = terminal_status("done", "status", ("stuck",), max_retries=3, escalate=True)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        # Use incrementing iterations to simulate consecutive failures within same task
+        feedback1 = guard.validator(_make_ctx(response, iteration=0))
+        assert feedback1 is not None
+        assert "MUST" not in feedback1
+
+        feedback2 = guard.validator(_make_ctx(response, iteration=1))
+        assert feedback2 is not None
+        assert "MUST" in feedback2
+
+    def test_exhausted_retries_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck",), max_retries=2)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        # Use incrementing iterations to simulate consecutive failures within same task
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None
+
+    def test_state_resets_on_new_task(self) -> None:
+        """Guard state resets when iteration=0 (new task starts)."""
+        guard = terminal_status("done", "status", ("stuck",), max_retries=2)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"status": "stuck"})]
+        )
+        # First task: exhaust retries
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None  # exhausted
+
+        # Second task: iteration=0 resets state, guard fires again
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None  # exhausted again
+
+    def test_non_dict_arguments_passes(self) -> None:
+        guard = terminal_status("done", "status", ("stuck",))
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments="not a dict")]  # type: ignore
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+
+class TestTerminalSchemaGuard:
+    """Tests for terminal_schema guard factory."""
+
+    @pytest.fixture
+    def tools(self) -> list[ToolDef]:
+        return [
+            ToolDef(
+                name="report",
+                description="Report findings",
+                parameters={
+                    "type": "object",
+                    "required": ["summary", "score"],
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "score": {"type": "integer"},
+                    },
+                },
+            ),
+        ]
+
+    def test_no_tool_calls_passes(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response("Just some text")
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_valid_arguments_passes(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done", "score": 5})]
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_missing_required_field_returns_feedback(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done"})]
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "schema errors" in feedback
+        assert "score" in feedback
+
+    def test_wrong_type_returns_feedback(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report")
+        response = _make_response(
+            tool_calls=[
+                ToolCall(id="1", name="report", arguments={"summary": "done", "score": "five"})
+            ]
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "expected integer" in feedback
+
+    def test_escalation_on_repeated_failures(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report", max_retries=3, escalate=True)
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done"})]
+        )
+        # Use incrementing iterations to simulate consecutive failures within same task
+        feedback1 = guard.validator(_make_ctx(response, iteration=0))
+        assert feedback1 is not None
+        assert "STILL" not in feedback1
+
+        feedback2 = guard.validator(_make_ctx(response, iteration=1))
+        assert feedback2 is not None
+        assert "STILL" in feedback2
+
+    def test_exhausted_retries_passes(self, tools: list[ToolDef]) -> None:
+        guard = terminal_schema(tools, "report", max_retries=2)
+        response = _make_response(tool_calls=[ToolCall(id="1", name="report", arguments={})])
+        # Use incrementing iterations to simulate consecutive failures within same task
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None
+
+    def test_unknown_tool_creates_noop_guard(self) -> None:
+        guard = terminal_schema([], "nonexistent")
+        response = _make_response(tool_calls=[ToolCall(id="1", name="nonexistent", arguments={})])
+        assert guard.validator(_make_ctx(response)) is None
+
+
+class TestContradictionGuard:
+    """Tests for contradiction guard factory."""
+
+    def test_no_tool_calls_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response("I can't do this")
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_non_terminal_tool_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="However, I can't do this",
+            tool_calls=[ToolCall(id="1", name="other_tool", arguments={})],
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_terminal_without_contradiction_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="Task completed successfully!",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_terminal_with_empty_content_passes(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_contradiction_detected(self) -> None:
+        guard = contradiction("done")
+        response = _make_response(
+            content="However, I wasn't able to complete everything",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "contradictory" in feedback
+
+    def test_detects_various_signals(self) -> None:
+        signals = ["unfortunately", "i can't", "i cannot", "not possible", "unable to"]
+        for signal in signals:
+            guard = contradiction("done")
+            response = _make_response(
+                content=f"Task done, {signal} verify everything",
+                tool_calls=[ToolCall(id="1", name="done", arguments={})],
+            )
+            feedback = guard.validator(_make_ctx(response))
+            assert feedback is not None, f"Should detect signal: {signal}"
+
+    def test_escalation_on_repeated_contradictions(self) -> None:
+        guard = contradiction("done", max_retries=3, escalate=True)
+        response = _make_response(
+            content="However, something went wrong",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        # Use incrementing iterations to simulate consecutive failures within same task
+        feedback1 = guard.validator(_make_ctx(response, iteration=0))
+        assert feedback1 is not None
+        assert "2nd" not in feedback1
+
+        feedback2 = guard.validator(_make_ctx(response, iteration=1))
+        assert feedback2 is not None
+        assert "2nd" in feedback2
+
+    def test_exhausted_retries_passes(self) -> None:
+        guard = contradiction("done", max_retries=2)
+        response = _make_response(
+            content="Unfortunately this failed",
+            tool_calls=[ToolCall(id="1", name="done", arguments={})],
+        )
+        # Use incrementing iterations to simulate consecutive failures within same task
+        assert guard.validator(_make_ctx(response, iteration=0)) is not None
+        assert guard.validator(_make_ctx(response, iteration=1)) is not None
+        assert guard.validator(_make_ctx(response, iteration=2)) is None
+
+
+class TestOrdinalHelper:
+    """Tests for _ordinal helper."""
+
+    def test_ordinals(self) -> None:
+        assert _ordinal(1) == "1st"
+        assert _ordinal(2) == "2nd"
+        assert _ordinal(3) == "3rd"
+        assert _ordinal(4) == "4th"
+        assert _ordinal(11) == "11th"
+        assert _ordinal(12) == "12th"
+        assert _ordinal(13) == "13th"
+        assert _ordinal(21) == "21st"
+        assert _ordinal(22) == "22nd"
+        assert _ordinal(23) == "23rd"
+
+
+# ---------------------------------------------------------------------------
+# Non-blocking (advisory) guards
+# ---------------------------------------------------------------------------
+
+
+class TestNonBlockingGuards:
+    """Tests for non-blocking (advisory) iteration guards."""
+
+    async def test_advisory_guard_executes_tools_then_injects_feedback(self) -> None:
+        """Non-blocking guard allows tool execution, then injects feedback."""
+        backend = MockBackend()
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"result for {name}"
+
+        # First: tool call without explanation
+        backend.queue_response(_tool_response("", [_make_tool_call("search", {"q": "test"})]))
+        # Second: final response (after tool result + advisory feedback)
+        backend.queue_response(_tool_response("Done with results"))
+
+        guard = IterationGuard(
+            validator=lambda ctx: "Explain what you're doing." if ctx.response.tool_calls else None,
+            name="narrative",
+            blocking=False,  # Advisory mode
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = Config(
+            lg=NullLogger(),
+            backend=backend,
+            tools=[SEARCH_TOOL],
+            executor=tracking_executor,
+            call=call,
+        )
+        verb = Instruct(config)
+        result = await verb("do something")
+
+        # Tool was executed despite guard firing
+        assert "search" in executed_tools
+        assert result.value == "Done with results"
+
+        # Verify message ordering: tool result comes before advisory feedback
+        messages = backend.last_messages
+        tool_msg_idx = next(i for i, m in enumerate(messages) if m.role == "tool")
+        feedback_idx = next(
+            i for i, m in enumerate(messages) if m.role == "user" and "Explain" in m.content
+        )
+        assert tool_msg_idx < feedback_idx, "Tool result must precede advisory feedback"
+
+    async def test_blocking_guard_takes_precedence(self) -> None:
+        """When both blocking and advisory guards fire, blocking wins."""
+        backend = MockBackend()
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"result for {name}"
+
+        # First: tool call → blocking guard fires → no execution
+        backend.queue_response(_tool_response("", [_make_tool_call("search", {"q": "test"})]))
+        # Second: retry with explanation → guards pass
+        backend.queue_response(
+            _tool_response("Searching now", [_make_tool_call("search", {"q": "test2"})])
+        )
+        # Third: final response
+        backend.queue_response(_tool_response("Done"))
+
+        blocking_guard = IterationGuard(
+            validator=lambda ctx: (
+                "STOP: Explain first." if not (ctx.response.content or "").strip() else None
+            ),
+            name="require_content",
+            blocking=True,
+        )
+        advisory_guard = IterationGuard(
+            validator=lambda ctx: "Also be verbose." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(blocking_guard, advisory_guard), max_iterations=10)
+        config = Config(
+            lg=NullLogger(),
+            backend=backend,
+            tools=[SEARCH_TOOL],
+            executor=tracking_executor,
+            call=call,
+        )
+        verb = Instruct(config)
+        result = await verb("do something")
+
+        # First tool call was blocked (no execution), second one succeeded
+        assert executed_tools == ["search"]
+        assert result.value == "Done"
+
+    async def test_advisory_guard_outcome_records_blocking_false(self) -> None:
+        """Guard outcome records blocking=False for advisory guards."""
+        backend = MockBackend()
+        backend.queue_response(_tool_response("", [_make_tool_call("search")]))
+        backend.queue_response(_tool_response("Done"))
+
+        guard = IterationGuard(
+            validator=lambda ctx: "Be verbose." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = _make_config_with_tools(backend, call=call)
+        verb = Instruct(config)
+        result = await verb("do something")
+
+        trace = result.trace
+        assert trace is not None
+        first_step = trace.steps[0]
+        assert len(first_step.guards) > 0
+        assert first_step.guards[0].blocking is False
+
+    async def test_advisory_feedback_skipped_on_task_completion(self) -> None:
+        """Advisory feedback is NOT injected when task completes in same iteration."""
+        backend = MockBackend()
+
+        # First: initial done call → controller asks for confirmation
+        done1 = ToolCall(id="tc_done1", name="done", arguments={"output": "result", "status": "ok"})
+        backend.queue_response(_tool_response("Here's my answer", [done1]))
+        # Second: confirmation → task completes (advisory guard fires but shouldn't inject)
+        done2 = ToolCall(id="tc_done2", name="done", arguments={"output": "result", "status": "ok"})
+        backend.queue_response(_tool_response("Confirming", [done2]))
+
+        # Advisory guard that fires when there are tool calls
+        guard = IterationGuard(
+            validator=lambda ctx: "Explain more." if ctx.response.tool_calls else None,
+            name="verbose",
+            blocking=False,
+        )
+
+        call = CallOptions(iteration_guards=(guard,), max_iterations=10)
+        config = _make_config_with_tools(backend, call=call, terminal_tool="done")
+        verb = Complete(config)
+        result = await verb("do something")
+
+        # Task completed
+        assert result.completed
+        assert result.output == "result"
+
+        # Verify advisory feedback was NOT injected after completion.
+        # The final messages should be: assistant (confirm) -> tool (ack)
+        # NOT: assistant (confirm) -> tool (ack) -> user (Explain more.)
+        last_msg = result.history[-1]
+        assert last_msg.role.value == "tool", (
+            "Last message should be tool ack, not advisory feedback"
+        )
+        second_last = result.history[-2]
+        assert second_last.role.value == "assistant", "Second-to-last should be assistant confirm"

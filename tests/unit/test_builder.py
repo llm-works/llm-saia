@@ -56,6 +56,20 @@ class TestSAIABuilder:
 
         assert saia._config.terminal is not None
         assert saia._config.terminal.tool == "finish"
+        assert saia._config.terminal.require_confirmation is True  # Default
+
+    def test_build_with_terminal_tool_no_confirmation(self, mock_backend: MockBackend) -> None:
+        """Build with terminal tool and require_confirmation=False."""
+        saia = (
+            SAIA.builder()
+            .backend(mock_backend)
+            .terminal_tool("finish", require_confirmation=False)
+            .build()
+        )
+
+        assert saia._config.terminal is not None
+        assert saia._config.terminal.tool == "finish"
+        assert saia._config.terminal.require_confirmation is False
 
     def test_build_with_logger(self, mock_backend: MockBackend) -> None:
         """Build with logger."""
@@ -96,12 +110,16 @@ class TestSAIABuilder:
 
         assert saia.call_options.timeout_secs == 30.0
 
-    def test_build_with_retries(self, mock_backend: MockBackend) -> None:
-        """Build with retries."""
-        saia = SAIA.builder().backend(mock_backend).retries(3, "Try harder").build()
+    def test_build_with_json_parser(self, mock_backend: MockBackend) -> None:
+        """Build with json_parser."""
+        import json
 
-        assert saia.call_options.max_retries == 3
-        assert saia.call_options.retry_escalation == "Try harder"
+        def parser(content: str) -> dict:
+            return json.loads(content)
+
+        saia = SAIA.builder().backend(mock_backend).json_parser(parser).build()
+
+        assert saia._config.json_parser is parser
 
     def test_fluent_chaining(self, mock_backend: MockBackend) -> None:
         """All methods return self for chaining."""
@@ -120,7 +138,6 @@ class TestSAIABuilder:
             .max_call_tokens(2048)
             .max_tokens(8000)
             .timeout(60.0)
-            .retries(2, "Be more careful")
             .build()
         )
 
@@ -133,5 +150,3 @@ class TestSAIABuilder:
         assert saia.call_options.max_call_tokens == 2048
         assert saia.call_options.max_total_tokens == 8000
         assert saia.call_options.timeout_secs == 60.0
-        assert saia.call_options.max_retries == 2
-        assert saia.call_options.retry_escalation == "Be more careful"
