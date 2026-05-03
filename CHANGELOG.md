@@ -7,21 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-02
+
 ### Added
-- **Pause/Resume support** for long-running tool loops. Allows interrupting a `Complete` loop and
-  resuming later from serialized conversation state.
-  - `PauseRequested` exception — raise from `on_iteration` callback to pause after current iteration
-  - `pause_check` parameter — async callback checked between tool calls in a batch; return `True` to
-    pause after current tool completes (remaining tools acknowledged but not executed)
-  - `abort_signal` parameter — `asyncio.Event` for fast abort during LLM streaming. When set,
-    backends that support streaming can abort within ~100ms instead of waiting for full response.
-    Requires backend support (SAIAAdapter in llm-infer 0.x+).
-  - `resume=True` parameter — continue from existing conversation state instead of starting fresh
-  - `TaskResult.paused` — indicates the result is from a paused loop (vs completed/failed)
-  - `Message.to_dict()` / `Message.from_dict()` — serialize conversation history for persistence
-  - `ToolCall.to_dict()` / `ToolCall.from_dict()` — serialize tool calls for persistence
-- `Backend.chat()` now accepts optional `abort_signal: asyncio.Event` parameter for streaming abort.
-- "verb completed" trace log now includes `reason` field ("completed", "paused", "limit_reached").
+- **Pause/Resume support** for long-running tool loops via `PauseRequested` exception, `pause_check`
+  callback, and `resume=True` parameter. Includes `abort_signal` for fast streaming abort and
+  serialization helpers (`Message.to_dict()`, `ToolCall.to_dict()`).
 - `CallOptions.context` — optional dict passed through to backend for callback tracking (e.g., cost
   tracking, request correlation). Requires backend support (llm-infer 0.x+).
 - Per-step logging for structured output retries: TRACE logs all steps, DEBUG logs errors only.
@@ -29,25 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output. Default is `json.loads`. Override to handle malformed JSON from some backends or to
   use alternative parsers (orjson, json-repair, etc.). Set via `SAIA.builder().json_parser(fn)`
   or `saia.with_json_parser(fn)`.
-- `IterationGuard.blocking` parameter (default `True`). Controls whether a guard blocks tool
-  execution or allows it to proceed:
-  - `blocking=True` (default): Tool calls are acknowledged but not executed; feedback is injected
-    and the loop retries. Use for guards that reject invalid tool calls (e.g., terminal tool with
-    bad status).
-  - `blocking=False`: Tools execute first, then feedback is injected. Use for advisory guards that
-    shape behavior without blocking progress (e.g., requiring narrative explanation alongside tool
-    calls).
-- `GuardOutcome.blocking` field in trace records, reflecting the guard's blocking mode.
-- `ChatResponse.model` — resolved model name returned by the backend. Populated when a backend
-  resolves a placeholder like `"auto"` to a concrete model; closes the cost-attribution gap where
-  downstream consumers had no way to know which model actually ran.
-- `LLMCall.model` — resolved model name propagated from `ChatResponse.model` into each trace
-  step, so cost attribution can be computed from `VerbTrace` alone without holding onto the
-  raw response.
-- `ChatResponse.raw` — escape hatch carrying the unmodified backend-native response object.
-  Consumers reading from it accept coupling to a specific backend in exchange for access to
-  vendor-specific fields (cache tokens, thinking/reasoning blocks, adapter metadata, etc.) that
-  SAIA intentionally does not surface at the language-layer level.
+- `IterationGuard.blocking` parameter (default `True`). When `False`, tools execute before feedback
+  is injected (advisory mode). `GuardOutcome.blocking` field added to trace records.
+- `ChatResponse.model` — resolved model name for cost attribution (also propagated to `LLMCall.model`
+  in trace records).
+- `ChatResponse.raw` — unmodified backend-native response for vendor-specific fields (cache tokens,
+  thinking blocks, etc.).
 - `AsyncConversationLike` protocol for non-blocking conversation append. Extends `ConversationLike`
   with `append_async()` method. All verbs use `append_async()` when the conversation supports it,
   allowing compaction strategies that involve I/O (e.g., LLM-based summarization) to run without
@@ -78,14 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is combined.
 - Built-in `schema_retry(max_retries=2)` guard - retry with escalating feedback when JSON
   parsing fails. Migration from `with_parse_retries(n)`: use `.with_guard(schema_retry(n))`
-- **Trace-level observability** for debugging stuck loops and agent behavior. Enable trace logging
-  to see detailed execution flow:
-  - Tool results returned to LLM (up to 50k chars per item)
-  - Guard triggers with feedback content injected into conversation
-  - Message assembly showing what's sent to LLM each iteration (counts by role, last user
-    message, recent tool results)
-  - Verb lifecycle (start, completion with duration and step count)
-  - Controller decisions with terminal tool data
+- **Trace-level observability** for debugging stuck loops. Logs tool results (bounded to 50KB),
+  guard triggers, message assembly, and controller decisions.
 
 ### Fixed
 - Per-invocation `CallOptions` overrides for `system` and `context` now work correctly. Previously,
@@ -229,7 +201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/llm-works/llm-saia/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/llm-works/llm-saia/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/llm-works/llm-saia/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/llm-works/llm-saia/releases/tag/v0.1.0
