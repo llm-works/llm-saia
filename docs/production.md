@@ -655,7 +655,7 @@ and `SerializableConversationLike` protocols:
 from llm_saia import ConversationFactory, SerializableConversationLike
 
 def run_with_checkpoint(factory: ConversationFactory, state: dict | None = None):
-    conv = factory.create_from_state(state) if state else factory.create()
+    conv = factory.create_from_state(state) if state is not None else factory.create()
     # ... run loop with conv ...
     return conv.to_dict()  # Checkpoint for later
 ```
