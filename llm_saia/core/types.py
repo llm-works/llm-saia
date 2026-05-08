@@ -15,11 +15,13 @@ from .config import CallOptions, Config
 # Re-export conversation types for convenience
 from .conversation import (
     AsyncConversationLike,
+    ConversationFactory,
     ConversationLike,
     ListConversation,
     Message,
     MessageAppendable,
     Role,
+    SerializableConversationLike,
     ToolCall,
 )
 from .trace import VerbTrace
@@ -32,11 +34,13 @@ __all__ = [
     "ToolDef",
     # Conversation types (re-exported)
     "AsyncConversationLike",
+    "ConversationFactory",
     "ConversationLike",
     "ListConversation",
     "Message",
     "MessageAppendable",
     "Role",
+    "SerializableConversationLike",
     "ToolCall",
     # Config types (re-exported from config.py)
     "CallOptions",
