@@ -36,6 +36,7 @@ from .core.types import (
     AsyncConversationLike,
     ChooseResult,
     ClassifyResult,
+    ConversationFactory,
     ConversationLike,
     Critique,
     DecisionReason,
@@ -43,6 +44,7 @@ from .core.types import (
     FindResult,
     ListConversation,
     LoopScore,
+    SerializableConversationLike,
     TaskResult,
     VerbResult,
     VerifyResult,
@@ -97,8 +99,10 @@ __all__ = [
     "ToolDef",
     # Conversation protocol
     "AsyncConversationLike",
+    "ConversationFactory",
     "ConversationLike",
     "ListConversation",
+    "SerializableConversationLike",
     # Terminal
     "TerminalConfig",
     # Tracing
