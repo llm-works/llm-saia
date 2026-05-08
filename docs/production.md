@@ -645,6 +645,25 @@ When `resume=True`:
 - The LLM sees the full history and continues naturally
 - `max_iterations` counts from zero (fresh budget for the resumed run)
 
+### Abstracting Conversation Creation (Advanced)
+
+Frameworks that need to work with different conversation implementations can use
+`ConversationFactory`
+and `SerializableConversationLike` protocols:
+
+```python
+from llm_saia import ConversationFactory, SerializableConversationLike
+
+def run_with_checkpoint(factory: ConversationFactory, state: dict | None = None):
+    conv = factory.create_from_state(state) if state else factory.create()
+    # ... run loop with conv ...
+    return conv.to_dict()  # Checkpoint for later
+```
+
+This decouples checkpoint/restore logic from concrete conversation types, allowing the same code to
+work with `ListConversation`, custom compacting conversations, or any
+`SerializableConversationLike`.
+
 ### Example: User-Controlled Pause
 
 ```python

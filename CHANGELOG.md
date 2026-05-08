@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ConversationFactory` protocol for abstracting conversation creation and restoration. Enables
+  frameworks to work with any conversation implementation without importing concrete types.
+- `SerializableConversationLike` protocol extending `ConversationLike` with `to_dict()` for
+  checkpoint/restore workflows.
+
 ## [0.4.0] - 2026-05-02
 
 ### Added

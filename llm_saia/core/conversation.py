@@ -165,13 +165,19 @@ class AsyncConversationLike(ConversationLike, Protocol):
 
 @runtime_checkable
 class SerializableConversationLike(ConversationLike, Protocol):
-    """ConversationLike with serialization support for checkpoint/restore."""
+    """ConversationLike with serialization support for checkpoint/restore.
+
+    Defines only ``to_dict()`` for export. Restoring requires a
+    ``ConversationFactory`` since deserialization may need injected
+    dependencies (logger, config, compactor).
+    """
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize conversation state for persistence."""
         ...
 
 
+@runtime_checkable
 class ConversationFactory(Protocol):
     """Factory for creating conversations with optional restore from state.
 
