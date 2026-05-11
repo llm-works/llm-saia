@@ -477,7 +477,8 @@ result = await saia.with_guard(guard).complete(task)
 ### Behavioral Iteration Guards
 
 Guards that shape agent behavior during tool loops. Use these to catch common LLM misbehaviors
-and inject corrective feedback.
+and inject corrective feedback. All behavioral guards support `max_retries` and `escalate`
+parameters for consistent retry handling.
 
 **Require Narrative:**
 
@@ -486,6 +487,9 @@ from llm_saia.guards import narrative
 
 # Nudge LLM to explain tool calls (advisory - tools still execute)
 guard = narrative("report_findings")
+
+# With custom retry behavior
+guard = narrative("report_findings", max_retries=3, escalate=True)
 
 result = await saia.with_guard(guard).complete(task)
 ```
@@ -521,31 +525,15 @@ result = await saia.with_guard(guard).complete(task)
 Detects when the LLM says "Calling report_findings now" but doesn't include the actual tool
 call. Only fires when ≤2 iterations remain.
 
-**Findings as Text:**
-
-```python
-from llm_saia.guards import findings_as_text
-
-# Catch structured output written as prose instead of tool call
-guard = findings_as_text("report_findings")
-
-result = await saia.with_guard(guard).complete(task)
-```
-
-Detects markdown patterns (`**Confidence:`, `**Sources:`) or raw JSON output that indicate
-the LLM wrote findings as narrative instead of calling the terminal tool. Common with models
-like Grok.
-
 **Combining Guards:**
 
 ```python
-from llm_saia.guards import narrative, terminal_deadline, terminal_compliance, findings_as_text
+from llm_saia.guards import narrative, terminal_deadline, terminal_compliance
 
 guards = [
     narrative("report_findings"),
     terminal_deadline("report_findings"),
     terminal_compliance("report_findings"),
-    findings_as_text("report_findings"),
 ]
 
 result = await saia.with_guards(*guards).complete(task)

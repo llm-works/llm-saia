@@ -15,7 +15,6 @@ from llm_saia.core.types import ToolDef
 from llm_saia.guards import (
     _ordinal,
     contradiction,
-    findings_as_text,
     narrative,
     terminal_compliance,
     terminal_deadline,
@@ -1160,6 +1159,47 @@ class TestNarrativeGuard:
         guard = narrative("report")
         assert guard.blocking is False
 
+    def test_max_retries_stops_feedback(self) -> None:
+        guard = narrative("report", max_retries=2)
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="search", arguments={})],
+        )
+        ctx = _make_ctx(response, iteration=1)
+        # First two attempts return feedback
+        assert guard.validator(ctx) is not None
+        assert guard.validator(ctx) is not None
+        # Third attempt returns None (max_retries exceeded)
+        assert guard.validator(ctx) is None
+
+    def test_escalate_changes_message(self) -> None:
+        guard = narrative("report", max_retries=3, escalate=True)
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="search", arguments={})],
+        )
+        ctx = _make_ctx(response, iteration=1)
+        first = guard.validator(ctx)
+        second = guard.validator(ctx)
+        assert first is not None
+        assert second is not None
+        assert "REQUIRED" in second  # Escalated message
+        assert "REQUIRED" not in first  # Base message
+
+    def test_state_resets_on_new_task(self) -> None:
+        guard = narrative("report", max_retries=1)
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="search", arguments={})],
+        )
+        # Exhaust retries on iteration 1
+        ctx1 = _make_ctx(response, iteration=1)
+        assert guard.validator(ctx1) is not None
+        assert guard.validator(ctx1) is None  # Exhausted
+        # New task (iteration 0) resets state
+        ctx0 = _make_ctx(response, iteration=0)
+        assert guard.validator(ctx0) is not None  # Feedback again
+
 
 class TestTerminalDeadlineGuard:
     """Tests for terminal_deadline guard factory."""
@@ -1221,6 +1261,50 @@ class TestTerminalDeadlineGuard:
         assert feedback is not None
         assert "1 iteration(s) remaining" in feedback
 
+    def test_max_retries_stops_feedback(self) -> None:
+        guard = terminal_deadline("done", max_retries=2)
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        ctx = _make_ctx(response, iteration=7, max_iterations=10)  # 3 remaining
+        # First two attempts return feedback
+        assert guard.validator(ctx) is not None
+        assert guard.validator(ctx) is not None
+        # Third attempt returns None (max_retries exceeded)
+        assert guard.validator(ctx) is None
+
+    def test_escalate_changes_message(self) -> None:
+        guard = terminal_deadline("done", max_retries=3, escalate=True)
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        ctx = _make_ctx(response, iteration=7, max_iterations=10)  # 3 remaining
+        first = guard.validator(ctx)
+        second = guard.validator(ctx)
+        assert first is not None
+        assert second is not None
+        assert "CRITICAL" in second  # Escalated message
+        assert "CRITICAL" not in first  # Base message
+
+    def test_custom_threshold(self) -> None:
+        """Custom threshold changes when guard fires."""
+        guard = terminal_deadline("done", threshold=5)
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        # 4 remaining - would pass with default threshold=3, but fails with threshold=5
+        ctx = _make_ctx(response, iteration=6, max_iterations=10)
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        # 6 remaining - passes even with threshold=5
+        ctx_high = _make_ctx(response, iteration=4, max_iterations=10)
+        guard2 = terminal_deadline("done", threshold=5)  # Fresh guard
+        assert guard2.validator(ctx_high) is None
+
+    def test_unlimited_iterations_never_fires(self) -> None:
+        """Guard never fires when max_iterations=0 (UNLIMITED)."""
+        guard = terminal_deadline("done")
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        # max_iterations=0 means unlimited - remaining becomes UNLIMITED (2^63-1)
+        # Guard should never fire regardless of iteration count
+        for iteration in [0, 1, 10, 100, 1000]:
+            ctx = _make_ctx(response, iteration=iteration, max_iterations=0)
+            assert guard.validator(ctx) is None, f"Should not fire at iteration {iteration}"
+
 
 class TestTerminalComplianceGuard:
     """Tests for terminal_compliance guard factory."""
@@ -1247,7 +1331,7 @@ class TestTerminalComplianceGuard:
         feedback = guard.validator(ctx)
         assert feedback is not None
         assert "DID NOT" in feedback
-        assert "LAST chance" in feedback
+        assert "MUST" in feedback
 
     def test_mentions_report_word_boundary(self) -> None:
         guard = terminal_compliance("report_findings")
@@ -1280,58 +1364,46 @@ class TestTerminalComplianceGuard:
         ctx = _make_ctx(response, iteration=8, max_iterations=10)
         assert guard.validator(ctx) is None
 
+    def test_max_retries_stops_feedback(self) -> None:
+        guard = terminal_compliance("report_findings", max_retries=2)
+        response = _make_response("I will call report_findings")
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)  # 2 remaining
+        # First two attempts return feedback
+        assert guard.validator(ctx) is not None
+        assert guard.validator(ctx) is not None
+        # Third attempt returns None (max_retries exceeded)
+        assert guard.validator(ctx) is None
 
-class TestFindingsAsTextGuard:
-    """Tests for findings_as_text guard factory."""
+    def test_escalate_changes_message(self) -> None:
+        guard = terminal_compliance("report_findings", max_retries=3, escalate=True)
+        response = _make_response("I will call report_findings")
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)  # 2 remaining
+        first = guard.validator(ctx)
+        second = guard.validator(ctx)
+        assert first is not None
+        assert second is not None
+        assert "FAILURE" in second  # Escalated message
+        assert "FAILURE" not in first  # Base message
 
-    def test_tool_calls_present_passes(self) -> None:
-        guard = findings_as_text("report_findings")
-        response = _make_response(
-            content="**Confidence: 5\n**Sources: [http://...\n**Summary: ...",
-            tool_calls=[ToolCall(id="1", name="search", arguments={})],
-        )
-        assert guard.validator(_make_ctx(response)) is None
-
-    def test_normal_text_passes(self) -> None:
-        guard = findings_as_text("report_findings")
-        response = _make_response("This is just regular text without structured patterns")
-        assert guard.validator(_make_ctx(response)) is None
-
-    def test_markdown_findings_detected(self) -> None:
-        guard = findings_as_text("report_findings")
-        response = _make_response(
-            "**Confidence: 5\n"
-            "**Sources: [http://example.com\n"
-            "**Evidence: blah\n"
-            "**Summary: Here are my findings"
-        )
-        feedback = guard.validator(_make_ctx(response))
+    def test_custom_threshold(self) -> None:
+        """Custom threshold changes when guard fires."""
+        guard = terminal_compliance("report_findings", threshold=4)
+        response = _make_response("I will call report_findings")
+        # 3 remaining - would pass with default threshold=2, but fails with threshold=4
+        ctx = _make_ctx(response, iteration=7, max_iterations=10)
+        feedback = guard.validator(ctx)
         assert feedback is not None
-        assert "text instead of calling" in feedback
-        assert "report_findings" in feedback
+        # 5 remaining - passes even with threshold=4
+        ctx_high = _make_ctx(response, iteration=5, max_iterations=10)
+        guard2 = terminal_compliance("report_findings", threshold=4)  # Fresh guard
+        assert guard2.validator(ctx_high) is None
 
-    def test_json_findings_detected(self) -> None:
-        guard = findings_as_text("report_findings")
-        response = _make_response(
-            '{"claims": [\n  {"content": "' + "x" * 60 + '", "confidence": 4, "sources": []}\n]}'
-        )
-        feedback = guard.validator(_make_ctx(response))
-        assert feedback is not None
-        assert "raw JSON" in feedback
-
-    def test_partial_markdown_passes(self) -> None:
-        """Only 2 markdown matches - below threshold of 3."""
-        guard = findings_as_text("report_findings")
-        response = _make_response("**Confidence: 3\n**Summary: Just a partial structure")
-        assert guard.validator(_make_ctx(response)) is None
-
-    def test_partial_json_passes(self) -> None:
-        """Only 1 JSON match - below threshold of 2."""
-        guard = findings_as_text("report_findings")
-        response = _make_response('I found {"claims": [] but nothing else')
-        assert guard.validator(_make_ctx(response)) is None
-
-    def test_empty_content_passes(self) -> None:
-        guard = findings_as_text("report_findings")
-        response = _make_response("")
-        assert guard.validator(_make_ctx(response)) is None
+    def test_unlimited_iterations_never_fires(self) -> None:
+        """Guard never fires when max_iterations=0 (UNLIMITED)."""
+        guard = terminal_compliance("report_findings")
+        response = _make_response("I will call report_findings")
+        # max_iterations=0 means unlimited - remaining becomes UNLIMITED (2^63-1)
+        # Guard should never fire regardless of iteration count
+        for iteration in [0, 1, 10, 100, 1000]:
+            ctx = _make_ctx(response, iteration=iteration, max_iterations=0)
+            assert guard.validator(ctx) is None, f"Should not fire at iteration {iteration}"
