@@ -505,6 +505,9 @@ from llm_saia.guards import terminal_deadline
 # When ≤3 iterations remain, require ONLY the terminal tool
 guard = terminal_deadline("report_findings")
 
+# Custom threshold for shorter/longer loops
+guard = terminal_deadline("report_findings", threshold=5)
+
 result = await saia.with_guard(guard).complete(task)
 ```
 
@@ -518,6 +521,9 @@ from llm_saia.guards import terminal_compliance
 
 # Catch "said but didn't call" pattern at low iterations
 guard = terminal_compliance("report_findings")
+
+# Custom threshold for shorter/longer loops (default: 2)
+guard = terminal_compliance("report_findings", threshold=4)
 
 result = await saia.with_guard(guard).complete(task)
 ```
