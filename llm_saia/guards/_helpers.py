@@ -86,5 +86,8 @@ def validate_schema(data: Any, schema: dict[str, Any]) -> list[str]:
 
 def _type_matches(value: Any, json_type: str) -> bool:
     """Check if a Python value matches a JSON schema type."""
+    # bool is a subclass of int in Python, but JSON treats them distinctly
+    if isinstance(value, bool) and json_type in ("integer", "number"):
+        return False
     type_class = JSON_TYPE_MAP.get(json_type)
     return type_class is None or isinstance(value, type_class)

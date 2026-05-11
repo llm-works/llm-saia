@@ -7,6 +7,7 @@ constraints on the loop.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from ..core.guard import IterationContext, IterationGuard
@@ -31,22 +32,26 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 # Phrases that indicate the LLM is hedging or unable to complete
-_CONTINUATION_SIGNALS = frozenset(
-    {
-        "however",
-        "but",
-        "although",
-        "unfortunately",
-        "i can't",
-        "i cannot",
-        "i'm unable",
-        "i am unable",
-        "not possible",
-        "isn't possible",
-        "unable to",
-        "cannot complete",
-        "can't complete",
-    }
+_CONTINUATION_SIGNALS = (
+    "however",
+    "but",
+    "although",
+    "unfortunately",
+    "i can't",
+    "i cannot",
+    "i'm unable",
+    "i am unable",
+    "not possible",
+    "isn't possible",
+    "unable to",
+    "cannot complete",
+    "can't complete",
+)
+
+# Pre-compiled patterns with word boundaries to avoid false positives
+_CONTINUATION_PATTERNS = tuple(
+    (signal, re.compile(rf"\b{re.escape(signal)}\b", re.IGNORECASE))
+    for signal in _CONTINUATION_SIGNALS
 )
 
 
@@ -334,9 +339,9 @@ def _find_contradiction(response: ChatResponse, tool: str) -> str | None:
     has_terminal = any(tc.name == tool for tc in (response.tool_calls or []))
     if not has_terminal:
         return None
-    content = (response.content or "").lower()
-    for signal in _CONTINUATION_SIGNALS:
-        if signal in content:
+    content = response.content or ""
+    for signal, pattern in _CONTINUATION_PATTERNS:
+        if pattern.search(content):
             return signal
     return None
 
