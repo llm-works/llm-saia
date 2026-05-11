@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frameworks to work with any conversation implementation without importing concrete types.
 - `SerializableConversationLike` protocol extending `ConversationLike` with `to_dict()` for
   checkpoint/restore workflows.
+- Built-in behavioral iteration guards in `llm_saia.guards`:
+  - `narrative(terminal_tool)` - nudge LLM to explain tool calls (advisory, non-blocking)
+  - `terminal_deadline(terminal_tool, threshold=3)` - enforce terminal tool when iterations running low
+  - `terminal_compliance(terminal_tool, threshold=2)` - catch "said but didn't call" pattern
+  - All behavioral guards support `max_retries` and `escalate` parameters for consistent retry handling
+
+### Changed
+- Code coverage threshold increased from 90% to 95%.
+- Refactored `llm_saia.guards` from single file to package (no API changes).
 
 ## [0.4.0] - 2026-05-02
 

@@ -309,7 +309,7 @@ Use iteration info for adaptive guards:
 ```python
 from llm_saia import UNLIMITED
 
-def force_terminal(ctx: IterationContext) -> str | None:
+def terminal_deadline(ctx: IterationContext) -> str | None:
     """Force terminal tool call when iterations are running low."""
     # Skip if unlimited iterations
     if ctx.remaining == UNLIMITED:
@@ -472,6 +472,77 @@ from llm_saia.guards import contradiction
 guard = contradiction("complete_task", max_retries=2)
 
 result = await saia.with_guard(guard).complete(task)
+```
+
+### Behavioral Iteration Guards
+
+Guards that shape agent behavior during tool loops. Use these to catch common LLM misbehaviors
+and inject corrective feedback. All behavioral guards support `max_retries` and `escalate`
+parameters for consistent retry handling.
+
+**Require Narrative:**
+
+```python
+from llm_saia.guards import narrative
+
+# Nudge LLM to explain tool calls (advisory - tools still execute)
+guard = narrative("report_findings")
+
+# With custom retry behavior
+guard = narrative("report_findings", max_retries=3, escalate=True)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+The `narrative` guard is non-blocking (`blocking=False`). Tools execute first, then feedback
+is injected. Skips check for terminal tool calls.
+
+**Terminal Deadline:**
+
+```python
+from llm_saia.guards import terminal_deadline
+
+# When ≤3 iterations remain, require ONLY the terminal tool
+guard = terminal_deadline("report_findings")
+
+# Custom threshold for shorter/longer loops
+guard = terminal_deadline("report_findings", threshold=5)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+Prevents agents from continuing to search when they should wrap up. Rejects responses that
+mix the terminal tool with other tools when iterations are low.
+
+**Terminal Compliance:**
+
+```python
+from llm_saia.guards import terminal_compliance
+
+# Catch "said but didn't call" pattern at low iterations
+guard = terminal_compliance("report_findings")
+
+# Custom threshold for shorter/longer loops (default: 2)
+guard = terminal_compliance("report_findings", threshold=4)
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+Detects when the LLM says "Calling report_findings now" but doesn't include the actual tool
+call. Only fires when ≤2 iterations remain.
+
+**Combining Guards:**
+
+```python
+from llm_saia.guards import narrative, terminal_deadline, terminal_compliance
+
+guards = [
+    narrative("report_findings"),
+    terminal_deadline("report_findings"),
+    terminal_compliance("report_findings"),
+]
+
+result = await saia.with_guards(*guards).complete(task)
 ```
 
 ### Extracting Data from History

@@ -9,7 +9,7 @@ INFRA_DEV_PKG_NAME := llm_saia
 INFRA_DEV_CQ_STRICT := true
 
 # Test coverage threshold (percentage)
-INFRA_PYTEST_COVERAGE_THRESHOLD := 90
+INFRA_PYTEST_COVERAGE_THRESHOLD := 95
 
 # Docstring coverage threshold (percentage)
 INFRA_DEV_DOCSTRING_THRESHOLD := 90
