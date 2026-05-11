@@ -309,7 +309,7 @@ Use iteration info for adaptive guards:
 ```python
 from llm_saia import UNLIMITED
 
-def force_terminal(ctx: IterationContext) -> str | None:
+def terminal_deadline(ctx: IterationContext) -> str | None:
     """Force terminal tool call when iterations are running low."""
     # Skip if unlimited iterations
     if ctx.remaining == UNLIMITED:
@@ -493,13 +493,13 @@ result = await saia.with_guard(guard).complete(task)
 The `narrative` guard is non-blocking (`blocking=False`). Tools execute first, then feedback
 is injected. Skips check for terminal tool calls.
 
-**Force Terminal Tool:**
+**Terminal Deadline:**
 
 ```python
-from llm_saia.guards import force_terminal
+from llm_saia.guards import terminal_deadline
 
 # When ≤3 iterations remain, require ONLY the terminal tool
-guard = force_terminal("report_findings")
+guard = terminal_deadline("report_findings")
 
 result = await saia.with_guard(guard).complete(task)
 ```
@@ -539,11 +539,11 @@ like Grok.
 **Combining Guards:**
 
 ```python
-from llm_saia.guards import narrative, force_terminal, terminal_compliance, findings_as_text
+from llm_saia.guards import narrative, terminal_deadline, terminal_compliance, findings_as_text
 
 guards = [
     narrative("report_findings"),
-    force_terminal("report_findings"),
+    terminal_deadline("report_findings"),
     terminal_compliance("report_findings"),
     findings_as_text("report_findings"),
 ]

@@ -16,9 +16,9 @@ from llm_saia.guards import (
     _ordinal,
     contradiction,
     findings_as_text,
-    force_terminal,
     narrative,
     terminal_compliance,
+    terminal_deadline,
     terminal_schema,
     terminal_status,
 )
@@ -1161,18 +1161,18 @@ class TestNarrativeGuard:
         assert guard.blocking is False
 
 
-class TestForceTerminalGuard:
-    """Tests for force_terminal guard factory."""
+class TestTerminalDeadlineGuard:
+    """Tests for terminal_deadline guard factory."""
 
     def test_many_iterations_remaining_passes(self) -> None:
-        guard = force_terminal("done")
+        guard = terminal_deadline("done")
         response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
         # 5 remaining > 3, so no enforcement
         ctx = _make_ctx(response, iteration=5, max_iterations=10)
         assert guard.validator(ctx) is None
 
     def test_low_iterations_no_terminal_returns_feedback(self) -> None:
-        guard = force_terminal("done")
+        guard = terminal_deadline("done")
         response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
         # 3 remaining triggers enforcement
         ctx = _make_ctx(response, iteration=7, max_iterations=10)
@@ -1182,7 +1182,7 @@ class TestForceTerminalGuard:
         assert "done" in feedback
 
     def test_low_iterations_with_terminal_passes(self) -> None:
-        guard = force_terminal("done")
+        guard = terminal_deadline("done")
         response = _make_response(
             tool_calls=[ToolCall(id="1", name="done", arguments={"output": "result"})]
         )
@@ -1190,7 +1190,7 @@ class TestForceTerminalGuard:
         assert guard.validator(ctx) is None
 
     def test_low_iterations_mixed_tools_returns_feedback(self) -> None:
-        guard = force_terminal("done")
+        guard = terminal_deadline("done")
         response = _make_response(
             tool_calls=[
                 ToolCall(id="1", name="done", arguments={"output": "result"}),
@@ -1205,7 +1205,7 @@ class TestForceTerminalGuard:
 
     def test_no_tool_calls_low_iterations_fires(self) -> None:
         """When iterations are low and no tools called, still demands terminal tool."""
-        guard = force_terminal("done")
+        guard = terminal_deadline("done")
         response = _make_response("Just thinking")
         ctx = _make_ctx(response, iteration=9, max_iterations=10)
         # Low iterations + no terminal tool = guard fires
@@ -1214,7 +1214,7 @@ class TestForceTerminalGuard:
         assert "MUST call done" in feedback
 
     def test_remaining_one_enforces(self) -> None:
-        guard = force_terminal("done")
+        guard = terminal_deadline("done")
         response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
         ctx = _make_ctx(response, iteration=9, max_iterations=10)
         feedback = guard.validator(ctx)

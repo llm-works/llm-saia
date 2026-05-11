@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint/restore workflows.
 - Built-in behavioral iteration guards in `llm_saia.guards`:
   - `narrative(terminal_tool)` - nudge LLM to explain tool calls (advisory, non-blocking)
-  - `force_terminal(terminal_tool)` - enforce terminal tool when iterations running low (≤3)
+  - `terminal_deadline(terminal_tool)` - enforce terminal tool when iterations running low (≤3)
   - `terminal_compliance(terminal_tool)` - catch "said but didn't call" pattern
   - `findings_as_text(terminal_tool)` - detect structured output written as prose/JSON
 

@@ -45,7 +45,7 @@ __all__ = [
     "terminal_status",
     # Iteration guards - behavioral
     "findings_as_text",
-    "force_terminal",
+    "terminal_deadline",
     "narrative",
     "terminal_compliance",
 ]
@@ -759,11 +759,12 @@ def narrative(terminal_tool: str = "report_findings") -> IterationGuard:
     return IterationGuard(validator=check, name="narrative", blocking=False)
 
 
-def force_terminal(terminal_tool: str) -> IterationGuard:
-    """Force terminal tool call when iterations are running low.
+def terminal_deadline(terminal_tool: str) -> IterationGuard:
+    """Enforce terminal tool call when iterations are running low.
 
     When only a few iterations remain (<=3), requires the agent to call
-    ONLY the terminal tool - no mixing with other tools.
+    ONLY the terminal tool - no mixing with other tools. Prevents agents
+    from continuing to explore when they should wrap up.
 
     Args:
         terminal_tool: Name of the terminal tool that signals completion.
@@ -791,7 +792,7 @@ def force_terminal(terminal_tool: str) -> IterationGuard:
                 )
         return None
 
-    return IterationGuard(validator=check, name="force_terminal")
+    return IterationGuard(validator=check, name="terminal_deadline")
 
 
 # Regex for word-boundary match on "report" (used by terminal_compliance)
