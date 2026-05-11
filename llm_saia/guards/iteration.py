@@ -7,7 +7,6 @@ constraints on the loop.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from ..core.guard import IterationContext, IterationGuard
@@ -146,7 +145,7 @@ def contradiction(
 
 
 def narrative(
-    terminal_tool: str = "report_findings",
+    terminal_tool: str,
     *,
     max_retries: int = 2,
     escalate: bool = True,
@@ -161,7 +160,7 @@ def narrative(
 
     Args:
         terminal_tool: Name of the terminal tool. Calls to this tool
-            do not trigger the narrative requirement. Default "report_findings".
+            do not trigger the narrative requirement.
         max_retries: Max retry attempts before giving up. Default 2.
         escalate: Use increasingly forceful retry instructions. Default True.
     """
@@ -235,10 +234,6 @@ def terminal_deadline(
     return IterationGuard(validator=check, name="terminal_deadline")
 
 
-# Regex for word-boundary match on "report" (used by terminal_compliance)
-_REPORT_PATTERN = re.compile(r"\breport\b")
-
-
 def terminal_compliance(
     terminal_tool: str,
     *,
@@ -267,9 +262,7 @@ def terminal_compliance(
         calls_terminal = any(tc.name == terminal_tool for tc in tool_calls)
 
         # Detect: mentions terminal tool in text but didn't call it
-        mentions_terminal = (
-            terminal_tool.lower() in content or _REPORT_PATTERN.search(content) is not None
-        )
+        mentions_terminal = terminal_tool.lower() in content
         said_but_didnt = mentions_terminal and not calls_terminal and len(tool_calls) == 0
 
         if said_but_didnt and ctx.remaining <= threshold:

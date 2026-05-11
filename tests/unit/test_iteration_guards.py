@@ -1333,21 +1333,6 @@ class TestTerminalComplianceGuard:
         assert "DID NOT" in feedback
         assert "MUST" in feedback
 
-    def test_mentions_report_word_boundary(self) -> None:
-        guard = terminal_compliance("report_findings")
-        response = _make_response("I'll report my findings now")
-        ctx = _make_ctx(response, iteration=9, max_iterations=10)  # 1 remaining
-        feedback = guard.validator(ctx)
-        assert feedback is not None
-
-    def test_reported_past_tense_no_match(self) -> None:
-        """'reported' should not trigger the guard (word boundary check)."""
-        guard = terminal_compliance("report_findings")
-        response = _make_response("I reported the issue earlier")
-        ctx = _make_ctx(response, iteration=9, max_iterations=10)
-        # 'reported' doesn't match word boundary for 'report'
-        assert guard.validator(ctx) is None
-
     def test_high_iterations_remaining_passes(self) -> None:
         guard = terminal_compliance("report_findings")
         response = _make_response("I'll call report_findings soon")
