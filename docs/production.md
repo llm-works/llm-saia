@@ -474,6 +474,83 @@ guard = contradiction("complete_task", max_retries=2)
 result = await saia.with_guard(guard).complete(task)
 ```
 
+### Behavioral Iteration Guards
+
+Guards that shape agent behavior during tool loops. Use these to catch common LLM misbehaviors
+and inject corrective feedback.
+
+**Require Narrative:**
+
+```python
+from llm_saia.guards import narrative
+
+# Nudge LLM to explain tool calls (advisory - tools still execute)
+guard = narrative("report_findings")
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+The `narrative` guard is non-blocking (`blocking=False`). Tools execute first, then feedback
+is injected. Skips check for terminal tool calls.
+
+**Force Terminal Tool:**
+
+```python
+from llm_saia.guards import force_terminal
+
+# When ≤3 iterations remain, require ONLY the terminal tool
+guard = force_terminal("report_findings")
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+Prevents agents from continuing to search when they should wrap up. Rejects responses that
+mix the terminal tool with other tools when iterations are low.
+
+**Terminal Compliance:**
+
+```python
+from llm_saia.guards import terminal_compliance
+
+# Catch "said but didn't call" pattern at low iterations
+guard = terminal_compliance("report_findings")
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+Detects when the LLM says "Calling report_findings now" but doesn't include the actual tool
+call. Only fires when ≤2 iterations remain.
+
+**Findings as Text:**
+
+```python
+from llm_saia.guards import findings_as_text
+
+# Catch structured output written as prose instead of tool call
+guard = findings_as_text("report_findings")
+
+result = await saia.with_guard(guard).complete(task)
+```
+
+Detects markdown patterns (`**Confidence:`, `**Sources:`) or raw JSON output that indicate
+the LLM wrote findings as narrative instead of calling the terminal tool. Common with models
+like Grok.
+
+**Combining Guards:**
+
+```python
+from llm_saia.guards import narrative, force_terminal, terminal_compliance, findings_as_text
+
+guards = [
+    narrative("report_findings"),
+    force_terminal("report_findings"),
+    terminal_compliance("report_findings"),
+    findings_as_text("report_findings"),
+]
+
+result = await saia.with_guards(*guards).complete(task)
+```
+
 ### Extracting Data from History
 
 If `terminal_data` is `None` (due to confirmation failure), you can extract the terminal tool

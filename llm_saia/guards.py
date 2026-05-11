@@ -39,10 +39,15 @@ __all__ = [
     "no_preamble",
     # Parse guards
     "schema_retry",
-    # Iteration guards
+    # Iteration guards - terminal tool validation
     "contradiction",
     "terminal_schema",
     "terminal_status",
+    # Iteration guards - behavioral
+    "findings_as_text",
+    "force_terminal",
+    "narrative",
+    "terminal_compliance",
 ]
 
 
@@ -714,3 +719,173 @@ def _type_matches(value: Any, json_type: str) -> bool:
     """Check if a Python value matches a JSON schema type."""
     type_class = _JSON_TYPE_MAP.get(json_type)
     return type_class is None or isinstance(value, type_class)
+
+
+# ---------------------------------------------------------------------------
+# Behavioral iteration guards
+# ---------------------------------------------------------------------------
+
+
+def narrative(terminal_tool: str = "report_findings") -> IterationGuard:
+    """Nudge the LLM to explain what it's doing when making tool calls.
+
+    Fires when the LLM makes tool calls without any narrative text.
+    Skips check for terminal tool (don't demand explanation at finish).
+
+    This is an advisory guard (blocking=False) - tools execute first,
+    then feedback is injected afterward.
+
+    Args:
+        terminal_tool: Name of the terminal tool. Calls to this tool
+            do not trigger the narrative requirement. Default "report_findings".
+    """
+
+    def check(ctx: IterationContext) -> str | None:
+        response = ctx.response
+        if not response.tool_calls:
+            return None
+        # Don't demand narrative for terminal tool - let it finish
+        if any(tc.name == terminal_tool for tc in response.tool_calls):
+            return None
+        # Only nudge if there are tool calls but no explanation
+        if not (response.content or "").strip():
+            tool_names = [tc.name for tc in response.tool_calls]
+            return (
+                f"You called {', '.join(tool_names)} without explaining why. "
+                "In one sentence, explain what you're doing and why."
+            )
+        return None
+
+    return IterationGuard(validator=check, name="narrative", blocking=False)
+
+
+def force_terminal(terminal_tool: str) -> IterationGuard:
+    """Force terminal tool call when iterations are running low.
+
+    When only a few iterations remain (<=3), requires the agent to call
+    ONLY the terminal tool - no mixing with other tools.
+
+    Args:
+        terminal_tool: Name of the terminal tool that signals completion.
+    """
+
+    def check(ctx: IterationContext) -> str | None:
+        tool_calls = ctx.response.tool_calls or []
+        tool_names = {tc.name for tc in tool_calls}
+        calls_terminal = terminal_tool in tool_names
+
+        # When low on iterations, require ONLY the terminal tool
+        if ctx.remaining <= 3:
+            if not calls_terminal:
+                return (
+                    f"Only {ctx.remaining} iteration(s) remaining. "
+                    f"You MUST call {terminal_tool} now with your findings. "
+                    f"Do not call any other tool."
+                )
+            if len(tool_names) > 1:
+                other_tools = tool_names - {terminal_tool}
+                return (
+                    f"Only {ctx.remaining} iteration(s) remaining. "
+                    f"Do not mix {terminal_tool} with other tools ({', '.join(other_tools)}). "
+                    f"Call ONLY {terminal_tool}."
+                )
+        return None
+
+    return IterationGuard(validator=check, name="force_terminal")
+
+
+# Regex for word-boundary match on "report" (used by terminal_compliance)
+_REPORT_PATTERN = re.compile(r"\breport\b")
+
+
+def terminal_compliance(terminal_tool: str) -> IterationGuard:
+    """Catch LLM saying it will call terminal tool but not actually doing it.
+
+    Detects the "said but didn't call" pattern where the LLM says something
+    like "Calling report_findings now" in text but doesn't include the actual
+    tool call. Only fires when iterations are low (<=2 remaining).
+
+    Args:
+        terminal_tool: Name of the terminal tool.
+    """
+
+    def check(ctx: IterationContext) -> str | None:
+        content = (ctx.response.content or "").lower()
+        tool_calls = ctx.response.tool_calls or []
+        calls_terminal = any(tc.name == terminal_tool for tc in tool_calls)
+
+        # Detect: mentions terminal tool in text but didn't call it
+        mentions_terminal = (
+            terminal_tool.lower() in content or _REPORT_PATTERN.search(content) is not None
+        )
+        said_but_didnt = mentions_terminal and not calls_terminal and len(tool_calls) == 0
+
+        if said_but_didnt and ctx.remaining <= 2:
+            return (
+                f"You said you would call {terminal_tool} but you DID NOT include the tool call. "
+                f"This is your LAST chance. You MUST include the actual {terminal_tool} tool call "
+                f"with claims and summary. Do not just say you will - actually call the tool."
+            )
+        return None
+
+    return IterationGuard(validator=check, name="terminal_compliance")
+
+
+# Patterns for findings_as_text guard
+_MARKDOWN_FINDINGS_PATTERNS = [
+    re.compile(r"\*\*confidence[:\s]*\d", re.IGNORECASE),
+    re.compile(r"\*\*sources[:\s]*\[?\s*http", re.IGNORECASE),
+    re.compile(r"\*\*evidence[:\s]", re.IGNORECASE),
+    re.compile(r"\*\*summary[:\s]", re.IGNORECASE),
+    re.compile(r"\*\*entities[:\s]", re.IGNORECASE),
+    re.compile(r"\*\*open questions[:\s]", re.IGNORECASE),
+]
+
+_JSON_FINDINGS_PATTERNS = [
+    re.compile(r'\{\s*"claims"\s*:\s*\['),
+    re.compile(r'"content"\s*:\s*"[^"]{50,}'),
+    re.compile(r'"confidence"\s*:\s*[1-5]'),
+    re.compile(r'"sources"\s*:\s*\['),
+]
+
+
+def _detect_findings_as_text(content: str, terminal_tool: str) -> str | None:
+    """Check if content contains structured findings written as text."""
+    # Check markdown patterns (3+ matches = structured findings)
+    markdown_matches = sum(1 for p in _MARKDOWN_FINDINGS_PATTERNS if p.search(content))
+    if markdown_matches >= 3:
+        return (
+            f"You wrote your findings as text instead of calling {terminal_tool}. "
+            f"DO NOT write findings in your response text. "
+            f"You MUST call the {terminal_tool} tool with your claims and summary. "
+            f"Call the tool now."
+        )
+    # Check JSON patterns (2+ matches = raw JSON findings)
+    json_matches = sum(1 for p in _JSON_FINDINGS_PATTERNS if p.search(content))
+    if json_matches >= 2:
+        return (
+            f"You output findings as raw JSON text instead of calling {terminal_tool}. "
+            f"DO NOT write JSON in your response. "
+            f"You MUST call the {terminal_tool} tool properly. Call it now."
+        )
+    return None
+
+
+def findings_as_text(terminal_tool: str) -> IterationGuard:
+    """Catch LLM writing findings as text instead of calling the terminal tool.
+
+    Detects structured findings patterns (Confidence:, Sources:, Evidence:, etc.)
+    written as markdown text without an actual tool call. Also detects raw JSON
+    findings output. Common with models like Grok that may write report structure
+    as narrative.
+
+    Args:
+        terminal_tool: Name of the terminal tool for reporting findings.
+    """
+
+    def check(ctx: IterationContext) -> str | None:
+        if ctx.response.tool_calls:
+            return None
+        return _detect_findings_as_text(ctx.response.content or "", terminal_tool)
+
+    return IterationGuard(validator=check, name="findings_as_text")

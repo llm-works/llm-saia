@@ -12,7 +12,16 @@ from llm_saia.core.config import CallOptions, Config, TerminalConfig
 from llm_saia.core.conversation import Message, ToolCall
 from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import ToolDef
-from llm_saia.guards import _ordinal, contradiction, terminal_schema, terminal_status
+from llm_saia.guards import (
+    _ordinal,
+    contradiction,
+    findings_as_text,
+    force_terminal,
+    narrative,
+    terminal_compliance,
+    terminal_schema,
+    terminal_status,
+)
 from llm_saia.verbs import Ask, Instruct
 from llm_saia.verbs.complete import Complete
 from tests.unit.conftest import MockBackend
@@ -1082,3 +1091,247 @@ class TestNonBlockingGuards:
         )
         second_last = result.history[-2]
         assert second_last.role.value == "assistant", "Second-to-last should be assistant confirm"
+
+
+# ---------------------------------------------------------------------------
+# Behavioral iteration guards
+# ---------------------------------------------------------------------------
+
+
+class TestNarrativeGuard:
+    """Tests for narrative guard factory."""
+
+    def test_no_tool_calls_passes(self) -> None:
+        guard = narrative("report")
+        response = _make_response("Just explaining something")
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_tool_call_with_explanation_passes(self) -> None:
+        guard = narrative("report")
+        response = _make_response(
+            content="Searching for relevant data",
+            tool_calls=[ToolCall(id="1", name="search", arguments={"q": "test"})],
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_tool_call_without_explanation_returns_feedback(self) -> None:
+        guard = narrative("report")
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="search", arguments={"q": "test"})],
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "search" in feedback
+        assert "explain" in feedback.lower()
+
+    def test_whitespace_only_counts_as_no_explanation(self) -> None:
+        guard = narrative("report")
+        response = _make_response(
+            content="   \n  ",
+            tool_calls=[ToolCall(id="1", name="search", arguments={})],
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+
+    def test_terminal_tool_skipped(self) -> None:
+        guard = narrative("report")
+        response = _make_response(
+            content="",
+            tool_calls=[ToolCall(id="1", name="report", arguments={"summary": "done"})],
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_multiple_tool_names_in_feedback(self) -> None:
+        guard = narrative("report")
+        response = _make_response(
+            content="",
+            tool_calls=[
+                ToolCall(id="1", name="search", arguments={}),
+                ToolCall(id="2", name="fetch", arguments={}),
+            ],
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "search" in feedback
+        assert "fetch" in feedback
+
+    def test_is_non_blocking(self) -> None:
+        guard = narrative("report")
+        assert guard.blocking is False
+
+
+class TestForceTerminalGuard:
+    """Tests for force_terminal guard factory."""
+
+    def test_many_iterations_remaining_passes(self) -> None:
+        guard = force_terminal("done")
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        # 5 remaining > 3, so no enforcement
+        ctx = _make_ctx(response, iteration=5, max_iterations=10)
+        assert guard.validator(ctx) is None
+
+    def test_low_iterations_no_terminal_returns_feedback(self) -> None:
+        guard = force_terminal("done")
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        # 3 remaining triggers enforcement
+        ctx = _make_ctx(response, iteration=7, max_iterations=10)
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        assert "3 iteration(s) remaining" in feedback
+        assert "done" in feedback
+
+    def test_low_iterations_with_terminal_passes(self) -> None:
+        guard = force_terminal("done")
+        response = _make_response(
+            tool_calls=[ToolCall(id="1", name="done", arguments={"output": "result"})]
+        )
+        ctx = _make_ctx(response, iteration=7, max_iterations=10)
+        assert guard.validator(ctx) is None
+
+    def test_low_iterations_mixed_tools_returns_feedback(self) -> None:
+        guard = force_terminal("done")
+        response = _make_response(
+            tool_calls=[
+                ToolCall(id="1", name="done", arguments={"output": "result"}),
+                ToolCall(id="2", name="search", arguments={}),
+            ]
+        )
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        assert "mix" in feedback.lower()
+        assert "search" in feedback
+
+    def test_no_tool_calls_low_iterations_fires(self) -> None:
+        """When iterations are low and no tools called, still demands terminal tool."""
+        guard = force_terminal("done")
+        response = _make_response("Just thinking")
+        ctx = _make_ctx(response, iteration=9, max_iterations=10)
+        # Low iterations + no terminal tool = guard fires
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        assert "MUST call done" in feedback
+
+    def test_remaining_one_enforces(self) -> None:
+        guard = force_terminal("done")
+        response = _make_response(tool_calls=[ToolCall(id="1", name="search", arguments={})])
+        ctx = _make_ctx(response, iteration=9, max_iterations=10)
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        assert "1 iteration(s) remaining" in feedback
+
+
+class TestTerminalComplianceGuard:
+    """Tests for terminal_compliance guard factory."""
+
+    def test_no_mention_passes(self) -> None:
+        guard = terminal_compliance("report_findings")
+        response = _make_response("I'm going to search for more data")
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)
+        assert guard.validator(ctx) is None
+
+    def test_mentions_and_calls_passes(self) -> None:
+        guard = terminal_compliance("report_findings")
+        response = _make_response(
+            content="Calling report_findings now",
+            tool_calls=[ToolCall(id="1", name="report_findings", arguments={})],
+        )
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)
+        assert guard.validator(ctx) is None
+
+    def test_mentions_but_doesnt_call_low_iterations(self) -> None:
+        guard = terminal_compliance("report_findings")
+        response = _make_response("I will call report_findings")
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)  # 2 remaining
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+        assert "DID NOT" in feedback
+        assert "LAST chance" in feedback
+
+    def test_mentions_report_word_boundary(self) -> None:
+        guard = terminal_compliance("report_findings")
+        response = _make_response("I'll report my findings now")
+        ctx = _make_ctx(response, iteration=9, max_iterations=10)  # 1 remaining
+        feedback = guard.validator(ctx)
+        assert feedback is not None
+
+    def test_reported_past_tense_no_match(self) -> None:
+        """'reported' should not trigger the guard (word boundary check)."""
+        guard = terminal_compliance("report_findings")
+        response = _make_response("I reported the issue earlier")
+        ctx = _make_ctx(response, iteration=9, max_iterations=10)
+        # 'reported' doesn't match word boundary for 'report'
+        assert guard.validator(ctx) is None
+
+    def test_high_iterations_remaining_passes(self) -> None:
+        guard = terminal_compliance("report_findings")
+        response = _make_response("I'll call report_findings soon")
+        ctx = _make_ctx(response, iteration=5, max_iterations=10)  # 5 remaining > 2
+        assert guard.validator(ctx) is None
+
+    def test_has_other_tool_calls_passes(self) -> None:
+        """If there are other tool calls, this pattern doesn't apply."""
+        guard = terminal_compliance("report_findings")
+        response = _make_response(
+            content="I'll report_findings after this search",
+            tool_calls=[ToolCall(id="1", name="search", arguments={})],
+        )
+        ctx = _make_ctx(response, iteration=8, max_iterations=10)
+        assert guard.validator(ctx) is None
+
+
+class TestFindingsAsTextGuard:
+    """Tests for findings_as_text guard factory."""
+
+    def test_tool_calls_present_passes(self) -> None:
+        guard = findings_as_text("report_findings")
+        response = _make_response(
+            content="**Confidence: 5\n**Sources: [http://...\n**Summary: ...",
+            tool_calls=[ToolCall(id="1", name="search", arguments={})],
+        )
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_normal_text_passes(self) -> None:
+        guard = findings_as_text("report_findings")
+        response = _make_response("This is just regular text without structured patterns")
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_markdown_findings_detected(self) -> None:
+        guard = findings_as_text("report_findings")
+        response = _make_response(
+            "**Confidence: 5\n"
+            "**Sources: [http://example.com\n"
+            "**Evidence: blah\n"
+            "**Summary: Here are my findings"
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "text instead of calling" in feedback
+        assert "report_findings" in feedback
+
+    def test_json_findings_detected(self) -> None:
+        guard = findings_as_text("report_findings")
+        response = _make_response(
+            '{"claims": [\n  {"content": "' + "x" * 60 + '", "confidence": 4, "sources": []}\n]}'
+        )
+        feedback = guard.validator(_make_ctx(response))
+        assert feedback is not None
+        assert "raw JSON" in feedback
+
+    def test_partial_markdown_passes(self) -> None:
+        """Only 2 markdown matches - below threshold of 3."""
+        guard = findings_as_text("report_findings")
+        response = _make_response("**Confidence: 3\n**Summary: Just a partial structure")
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_partial_json_passes(self) -> None:
+        """Only 1 JSON match - below threshold of 2."""
+        guard = findings_as_text("report_findings")
+        response = _make_response('I found {"claims": [] but nothing else')
+        assert guard.validator(_make_ctx(response)) is None
+
+    def test_empty_content_passes(self) -> None:
+        guard = findings_as_text("report_findings")
+        response = _make_response("")
+        assert guard.validator(_make_ctx(response)) is None
