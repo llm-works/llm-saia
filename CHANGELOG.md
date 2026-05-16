@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code coverage threshold increased from 90% to 95%.
 - Refactored `llm_saia.guards` from single file to package (no API changes).
 
+### Fixed
+- `DefaultController` no longer allows classifier-based completion when a terminal tool is
+  configured. Previously, the LLM could bypass the terminal tool requirement by saying "done"
+  without actually calling the tool, causing early loop termination with no findings.
+
 ## [0.4.0] - 2026-05-02
 
 ### Added

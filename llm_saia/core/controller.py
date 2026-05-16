@@ -375,16 +375,38 @@ class DefaultController:
         self._last_nudge_iteration = obs.iteration
         return Action(ActionType.INSTRUCT, reason, message=message)
 
+    def _handle_classified_complete(self, obs: Observation) -> Action:
+        """Handle classifier returning COMPLETED state.
+
+        If a terminal tool is configured, completion must happen via that tool,
+        not via classifier. This prevents the LLM from bypassing the terminal
+        tool by simply saying "done" without actually calling it.
+        """
+        if obs.terminal_tool:
+            self._last_nudge_iteration = obs.iteration
+            msg = (
+                f"You indicated the task is complete, but you must call "
+                f"`{obs.terminal_tool}` to submit your findings. "
+                f"Please call `{obs.terminal_tool}` now."
+            )
+            return Action(
+                ActionType.INSTRUCT,
+                DecisionReason.NUDGE_CLASSIFIED,
+                message=msg,
+                reason_details="completed_without_terminal",
+            )
+        return Action(
+            ActionType.COMPLETE,
+            DecisionReason.CLASSIFIED_COMPLETE,
+            output=obs.response.content,
+        )
+
     async def _classify_and_nudge(self, obs: Observation) -> Action:
         """Classify the response state and decide whether to nudge or backoff."""
         result = await self._classifier.classify(obs.task, obs.response.content, obs.tool_names)
 
         if result.state == TaskState.COMPLETED:
-            return Action(
-                ActionType.COMPLETE,
-                DecisionReason.CLASSIFIED_COMPLETE,
-                output=obs.response.content,
-            )
+            return self._handle_classified_complete(obs)
 
         # Check backoff
         iterations_since_nudge = obs.iteration - self._last_nudge_iteration
