@@ -1050,6 +1050,88 @@ class TestDefaultController:
         assert a3.kind == ActionType.INSTRUCT
         assert a3.reason == DecisionReason.EMPTY_RESPONSE
 
+    async def test_classifier_complete_with_terminal_tool_nudges(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Classifier returning COMPLETED with terminal_tool configured sends nudge.
+
+        When a terminal tool is configured, completion must happen via that tool,
+        not via classifier. This prevents LLM from bypassing terminal tool by just
+        saying "done" without actually calling it.
+        """
+        from llm_saia.core.controller import (
+            ActionType,
+            ControllerConfig,
+            DefaultController,
+            Observation,
+        )
+
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
+        controller = DefaultController(config=ControllerConfig(llm_config=config))
+        controller.reset()
+
+        # Mock classifier returning COMPLETED
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        obs = Observation(
+            response=ChatResponse(
+                content="Reporting findings now as I found everything.",
+                tool_calls=[],
+                output_tokens=20,
+            ),
+            messages=[],
+            iteration=3,
+            task="Find some information",
+            tool_names=["search", "report_findings"],
+            terminal_tool="report_findings",  # Terminal tool is configured
+        )
+        action = await controller.decide(obs)
+
+        # Should nudge to call terminal tool, not complete via classifier
+        assert action.kind == ActionType.INSTRUCT
+        assert action.reason == DecisionReason.NUDGE_CLASSIFIED
+        assert "report_findings" in action.message
+        assert action.reason_details == "completed_without_terminal"
+
+    async def test_classifier_complete_without_terminal_tool_completes(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Classifier returning COMPLETED without terminal_tool configured completes normally."""
+        from llm_saia.core.controller import (
+            ActionType,
+            ControllerConfig,
+            DefaultController,
+            Observation,
+        )
+
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
+        controller = DefaultController(config=ControllerConfig(llm_config=config))
+        controller.reset()
+
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        obs = Observation(
+            response=ChatResponse(
+                content="Task is done!",
+                tool_calls=[],
+                output_tokens=10,
+            ),
+            messages=[],
+            iteration=3,
+            task="Do something",
+            tool_names=["search"],
+            terminal_tool=None,  # No terminal tool configured
+        )
+        action = await controller.decide(obs)
+
+        # Should complete normally via classifier
+        assert action.kind == ActionType.COMPLETE
+        assert action.reason == DecisionReason.CLASSIFIED_COMPLETE
+
 
 class TestTaskStateClassifier:
     """Tests for TaskStateClassifier."""
