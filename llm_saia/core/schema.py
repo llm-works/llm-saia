@@ -224,6 +224,11 @@ def _validate_enum_type_consistency(
 def _build_object_schema(schema: type, seen: set[type]) -> dict[str, Any]:
     """Build JSON schema object type from a dataclass with cycle detection.
 
+    All fields are marked required regardless of Python defaults, and
+    additionalProperties is set to false. This is required for OpenAI strict
+    mode; the parser (parse_json_to_dataclass) handles missing fields via
+    dataclass defaults.
+
     Args:
         schema: The dataclass type to convert.
         seen: Set of types already being processed (for cycle detection).
