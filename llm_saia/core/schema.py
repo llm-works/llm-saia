@@ -246,17 +246,14 @@ def _build_object_schema(schema: type, seen: set[type]) -> dict[str, Any]:
     for field in dataclasses.fields(schema):
         field_type = hints[field.name]
         properties[field.name] = python_type_to_json_schema(field_type, _seen=seen)
-
-        if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
-            required.append(field.name)
+        required.append(field.name)
 
     result: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "additionalProperties": False,
+        "required": required,
     }
-    if required:
-        result["required"] = required
     return result
 
 
