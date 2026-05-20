@@ -250,7 +250,11 @@ def _build_object_schema(schema: type, seen: set[type]) -> dict[str, Any]:
         if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
             required.append(field.name)
 
-    result: dict[str, Any] = {"type": "object", "properties": properties}
+    result: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
     if required:
         result["required"] = required
     return result
