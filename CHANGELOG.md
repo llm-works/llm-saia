@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DefaultController` no longer allows classifier-based completion when a terminal tool is
   configured. Previously, the LLM could bypass the terminal tool requirement by saying "done"
   without actually calling the tool, causing early loop termination with no findings.
+- JSON schema generation now includes `additionalProperties: false` and lists all properties in
+  `required` array. Required for OpenAI structured output strict mode; compatible with Gemini.
 
 ## [0.4.0] - 2026-05-02
 
