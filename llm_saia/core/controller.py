@@ -180,6 +180,8 @@ class DefaultController:
         """Handle terminal tool flow (first call, confirmation, etc.)."""
         if not obs.terminal_tool:
             return None
+        if obs.terminal_tool not in obs.tool_names:
+            return None
 
         terminal_call = self._find_terminal_call(obs.response.tool_calls, obs.terminal_tool)
 
@@ -378,11 +380,11 @@ class DefaultController:
     def _handle_classified_complete(self, obs: Observation) -> Action:
         """Handle classifier returning COMPLETED state.
 
-        If a terminal tool is configured, completion must happen via that tool,
-        not via classifier. This prevents the LLM from bypassing the terminal
-        tool by simply saying "done" without actually calling it.
+        If a terminal tool is configured AND present in the current tools list,
+        completion must happen via that tool, not via classifier. Prevents the
+        LLM from bypassing the terminal tool by simply saying "done".
         """
-        if obs.terminal_tool:
+        if obs.terminal_tool and obs.terminal_tool in obs.tool_names:
             self._last_nudge_iteration = obs.iteration
             msg = (
                 f"You indicated the task is complete, but you must call "

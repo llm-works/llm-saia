@@ -23,9 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored `llm_saia.guards` from single file to package (no API changes).
 
 ### Fixed
-- `DefaultController` no longer allows classifier-based completion when a terminal tool is
-  configured. Previously, the LLM could bypass the terminal tool requirement by saying "done"
-  without actually calling the tool, causing early loop termination with no findings.
+- `DefaultController` now requires the configured `terminal_tool` to be in the current tools list
+  before honoring it. Prevents stray tool calls matching an inherited terminal name from
+  short-circuiting the loop in derived SAIAs that replaced their tools via `with_tools()`.
+  Classifier-based completion is also gated on this check — blocked only when the terminal tool
+  is both configured and present, otherwise honored normally.
 - JSON schema generation now includes `additionalProperties: false` and lists all properties in
   `required` array. Required for OpenAI structured output strict mode; compatible with Gemini.
 

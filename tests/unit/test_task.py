@@ -489,6 +489,75 @@ class TestTask:
         # contradiction handling kicked in)
         assert result.iterations == 2
 
+    async def test_terminal_tool_ignored_when_not_in_tools_list(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Stray call matching terminal_tool name does not short-circuit when
+        the terminal tool is not in the current tools list (defense against
+        leaked terminal config in derived SAIAs).
+        """
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Executed {name}"
+
+        # sample_tools does NOT include "signal_done", but terminal_tool says it does.
+        saia = make_saia(
+            mock_backend,
+            tools=sample_tools,
+            executor=tracking_executor,
+            terminal_tool="signal_done",
+            require_confirmation=False,
+        )
+
+        # Model emits stray signal_done. Without the membership check the
+        # controller would capture it as terminal_data and end the loop on
+        # iteration 1 with terminal_tool="signal_done".
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_1", name="signal_done", arguments={"output": "done"})
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do something")
+
+        # Call was dispatched to the executor instead of being captured as terminal.
+        assert "signal_done" in executed_tools
+        assert result.terminal_tool is None
+        assert result.terminal_data is None
+
+    async def test_classifier_complete_honored_when_terminal_not_in_tools(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Classifier-reported completion is honored when the configured
+        terminal tool is not in the current tools list — avoids nudging the
+        model to call a tool it cannot see.
+        """
+        saia = make_saia(
+            mock_backend,
+            tools=sample_tools,
+            executor=dummy_executor,
+            terminal_tool="signal_done",  # not in sample_tools
+        )
+
+        mock_backend.queue_tool_response(
+            ChatResponse(content="All done.", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is True
+        assert result.output == "All done."
+        assert result.iterations == 1
+
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
