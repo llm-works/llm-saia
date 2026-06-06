@@ -1202,6 +1202,49 @@ class TestDefaultController:
         assert action.reason == DecisionReason.CLASSIFIED_COMPLETE
 
 
+class TestCompleteDefaultControllerPropagation:
+    """Synthesized classifier CallOptions must carry caller-policy fields."""
+
+    def _make_complete(self, mock_backend: MockBackend, call: CallOptions) -> Any:
+        from llm_saia.core.types import ToolDef
+        from llm_saia.verbs.complete import Complete
+
+        async def executor(name: str, args: dict[str, Any]) -> str:
+            return ""
+
+        tool = ToolDef(name="noop", description="", parameters={"type": "object"})
+        config = Config(
+            lg=NullLogger(),
+            backend=mock_backend,
+            tools=[tool],
+            executor=executor,
+            call=call,
+        )
+        return Complete(config)
+
+    def test_default_controller_forwards_context(self, mock_backend: MockBackend) -> None:
+        """context must propagate so backend callbacks see the caller identity."""
+        ctx = {"trace_id": "abc", "campaign": "x"}
+        verb = self._make_complete(mock_backend, CallOptions(context=ctx))
+        controller = verb._default_controller()
+        assert controller.config.llm_config.call.context == ctx
+
+    def test_default_controller_forwards_request_id(self, mock_backend: MockBackend) -> None:
+        """request_id must propagate for trace correlation across sub-calls."""
+        verb = self._make_complete(mock_backend, CallOptions(request_id="req-42"))
+        controller = verb._default_controller()
+        assert controller.config.llm_config.call.request_id == "req-42"
+
+    def test_default_controller_preserves_system_and_temperature(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Existing forwarded fields must keep working."""
+        verb = self._make_complete(mock_backend, CallOptions(system="be terse", temperature=0.3))
+        controller = verb._default_controller()
+        assert controller.config.llm_config.call.system == "be terse"
+        assert controller.config.llm_config.call.temperature == 0.3
+
+
 class TestTaskStateClassifier:
     """Tests for TaskStateClassifier."""
 
