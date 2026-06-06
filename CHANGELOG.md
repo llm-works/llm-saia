@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is both configured and present, otherwise honored normally.
 - JSON schema generation now includes `additionalProperties: false` and lists all properties in
   `required` array. Required for OpenAI structured output strict mode; compatible with Gemini.
+- `Complete`'s default controller now forwards `CallOptions.context` and `request_id` into
+  classifier sub-calls so backend callbacks (cost tracking, tracing) see the caller's values.
 
 ## [0.4.0] - 2026-05-02
 

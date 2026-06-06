@@ -189,11 +189,13 @@ class Complete(Verb):
         """Create default controller with config from this verb."""
         from ..core.config import Config
 
-        # Controller needs a config for classifier calls (no tools).
-        # Copy call options with system and temperature from current config.
+        # Forward context/request_id so backend callbacks see the same caller
+        # identity on classifier sub-calls as on the verb's own calls.
         call_options = CallOptions(
             system=self._call.system,
             temperature=self._call.temperature,
+            context=self._call.context,
+            request_id=self._call.request_id,
         )
         llm_config = Config(
             lg=self._config.lg,
