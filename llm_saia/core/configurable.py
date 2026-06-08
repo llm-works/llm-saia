@@ -120,10 +120,13 @@ class Configurable(ABC):
         Merge rules (see :func:`llm_saia.core.context.merge_context`):
 
         - Two dict-valued nodes at the same key recurse to arbitrary depth;
-          everything else (scalars, lists, sets, tuples, ``None``) replaces
-          wholesale at its leaf.
-        - Last write wins per leaf. The parent's context is never mutated;
-          two derivations from the same parent are independent.
+          everything else replaces wholesale at its leaf. Last write wins.
+        - Dict structure is independent of the parent: derivations from the
+          same parent don't trample each other's namespaces.
+        - Leaf values are shared by reference, so objects threaded through
+          context (cost trackers, loggers, locks, clients) retain identity
+          across derivations and backend callbacks. Mutating a mutable leaf
+          (e.g. a list) after passing it in is visible on the merged result.
 
         Special inputs:
 

@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Breaking:** `Configurable.with_context()` now deep-merges instead of replacing.
-  Dict-valued nodes recurse; everything else replaces at its leaf; last write wins.
-  `with_context(None)` still clears; `with_context({})` is now a no-op. The merge primitive
-  is exported as `llm_saia.core.merge_context`.
+  Dict nodes recurse; leaves replace and are shared by reference (non-copyable values
+  that previously raised `TypeError` now pass through). `with_context(None)` clears;
+  `with_context({})` is a no-op. Merge primitive: `llm_saia.core.merge_context`.
 - Code coverage threshold increased from 90% to 95%.
 - Refactored `llm_saia.guards` from single file to package (no API changes).
 
