@@ -3,6 +3,7 @@
 from .backend import Backend, ChatResponse, ToolDef
 from .config import CallOptions, Config, JsonParser
 from .configurable import Configurable
+from .context import merge_context
 from .conversation import Message, ToolCall
 from .logger import Logger, NullLogger
 from .types import Critique, Evidence, VerbResult, VerifyResult
@@ -25,4 +26,5 @@ __all__ = [
     "Verb",
     "VerbResult",
     "VerifyResult",
+    "merge_context",
 ]
