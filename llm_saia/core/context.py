@@ -6,7 +6,6 @@ The primitive is exposed so consumers that pre-compose context outside the
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 __all__ = ["merge_context"]
@@ -18,17 +17,22 @@ def merge_context(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, An
     Merge rules:
 
     - Two dict-valued nodes at the same key recurse to arbitrary depth.
-      Scalars, lists, sets, tuples, and ``None`` replace wholesale at their
-      leaf — never concat, union, or merge-as-delete.
+      Everything else replaces wholesale at its leaf — never concat, union,
+      or merge-as-delete.
     - Conflict resolution: last write wins, per leaf.
-    - The result is fully independent of both inputs (deep-copied), so the
-      caller may freely mutate either argument afterwards.
-    - Result container type is plain ``dict`` at every level. Subclass inputs
-      (``OrderedDict``, ``defaultdict``, etc.) recurse correctly but lose
-      their type in the output.
-    - Every value must be deep-copyable. Non-copyable values (locks, open
-      file handles, db connections) raise :class:`TypeError` with the failing
-      key path in the message.
+    - Dict structure is independent of both inputs (every dict node in the
+      result is a fresh dict), so the caller may freely add or remove keys
+      on either argument afterwards without affecting the merged result.
+    - **Leaf values are shared by reference** — not copied. Mutating a list,
+      set, or custom object in either input (or in the merged result) is
+      visible on the other side. This is intentional: callers thread
+      objects like cost trackers, loggers, tracing handles, locks, and
+      clients through context for backend callbacks, and those use cases
+      require shared identity. To isolate a mutable leaf, copy it before
+      passing.
+    - Result container type is plain ``dict`` at every level. Subclass
+      inputs (``OrderedDict``, ``defaultdict``, etc.) recurse correctly but
+      lose their type in the output.
 
     Args:
         base: Starting context. Not mutated.
@@ -36,34 +40,26 @@ def merge_context(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, An
 
     Returns:
         New ``dict`` containing the merged context.
-
-    Raises:
-        TypeError: If any value is not deep-copyable. Message names the key
-            path, e.g. ``context value at key path 'ns.leaf' is not
-            deep-copyable``.
     """
-    return _merge(base, overlay, ())
+    return _merge(base, overlay)
 
 
-def _merge(base: dict[Any, Any], overlay: dict[Any, Any], path: tuple[Any, ...]) -> dict[Any, Any]:
+def _merge(base: dict[Any, Any], overlay: dict[Any, Any]) -> dict[Any, Any]:
     result: dict[Any, Any] = {}
     for k, v in base.items():
-        result[k] = _copy_value(v, path + (k,))
+        result[k] = _copy_dicts(v)
     for k, v in overlay.items():
-        sub_path = path + (k,)
         existing = result.get(k)
         if isinstance(v, dict) and isinstance(existing, dict):
-            result[k] = _merge(existing, v, sub_path)
+            result[k] = _merge(existing, v)
         else:
-            result[k] = _copy_value(v, sub_path)
+            result[k] = _copy_dicts(v)
     return result
 
 
-def _copy_value(v: Any, path: tuple[Any, ...]) -> Any:
+def _copy_dicts(v: Any) -> Any:
+    """Return *v* with every nested dict replaced by a fresh dict; non-dict
+    leaves pass through by reference."""
     if isinstance(v, dict):
-        return {k: _copy_value(vv, path + (k,)) for k, vv in v.items()}
-    try:
-        return copy.deepcopy(v)
-    except TypeError as e:
-        key_path = ".".join(str(p) for p in path)
-        raise TypeError(f"context value at key path '{key_path}' is not deep-copyable: {e}") from e
+        return {k: _copy_dicts(vv) for k, vv in v.items()}
+    return v

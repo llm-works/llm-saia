@@ -3,9 +3,9 @@
 
 Covers the acceptance criteria for the REPLACE → MERGE change:
 disjoint-key merge, last-write-wins, arbitrary-depth recursion, list-replace,
-``None``-as-value, parent immutability, derived independence, non-copyable
-error, verb inheritance, dict-subclass result-type coercion, mixed-container
-tuples.
+``None``-as-value, parent immutability, derived independence, leaf-reference
+semantics, verb inheritance, dict-subclass result-type coercion,
+mixed-container tuples.
 """
 
 from __future__ import annotations
@@ -90,17 +90,36 @@ class TestMergeContextPrimitive:
         assert base == {"a": {"b": 1}}
         assert overlay == {"a": {"c": 2}}
 
-    def test_result_independent_of_base(self) -> None:
-        base = {"a": {"b": [1, 2]}}
-        result = merge_context(base, {})
-        result["a"]["b"].append(99)
-        assert base == {"a": {"b": [1, 2]}}
+    def test_leaf_list_shared_by_reference(self) -> None:
+        # Leaf values are NOT deep-copied: callers expecting to thread shared
+        # objects (cost trackers, loggers) through context need identity.
+        # As a side effect, mutable builtin containers are also aliased —
+        # documented contract, not a bug.
+        tags = ["a", "b"]
+        result = merge_context({}, {"tags": tags})
+        assert result["tags"] is tags
 
-    def test_result_independent_of_overlay(self) -> None:
-        overlay = {"a": {"b": [1, 2]}}
-        result = merge_context({}, overlay)
-        result["a"]["b"].append(99)
-        assert overlay == {"a": {"b": [1, 2]}}
+    def test_custom_object_shared_by_reference(self) -> None:
+        # Critical use case: cost trackers and similar stateful objects must
+        # retain identity across with_context() chains so backend callbacks
+        # see the caller's instance, not a copy.
+        class Tracker:
+            def __init__(self) -> None:
+                self.calls = 0
+
+        tracker = Tracker()
+        result = merge_context({}, {"tracker": tracker})
+        assert result["tracker"] is tracker
+        tracker.calls = 5
+        assert result["tracker"].calls == 5
+
+    def test_non_copyable_object_passes_through(self) -> None:
+        # Locks, file handles, db connections, http clients — none of these
+        # are deep-copyable, but all are legitimate things to thread through
+        # context for backend callbacks. Reference semantics make this work.
+        lock = threading.Lock()
+        result = merge_context({}, {"ns": {"lock": lock}})
+        assert result["ns"]["lock"] is lock
 
     def test_dict_subclass_coerced_to_plain_dict(self) -> None:
         # OrderedDict and defaultdict pass isinstance(x, dict) so they recurse,
@@ -117,19 +136,16 @@ class TestMergeContextPrimitive:
         assert result == {"a": {"b": 1, "c": 2}}
 
     def test_mixed_container_tuple_does_not_recurse(self) -> None:
-        # A tuple containing a dict replaces wholesale — only dicts recurse.
+        # Merge only recurses into dicts; a tuple leaf passes through by
+        # reference, including any dict it contains. The overlay's tuple
+        # wins wholesale; its inner dict is not merged with the base's.
         inner_dict_base = {"x": 1}
         inner_dict_overlay = {"y": 2}
         base = {"t": (inner_dict_base, "a")}
         overlay = {"t": (inner_dict_overlay, "b")}
         result = merge_context(base, overlay)
-        assert result == {"t": ({"y": 2}, "b")}
-
-    def test_non_copyable_value_raises_with_key_path(self) -> None:
-        # threading.Lock cannot be deep-copied.
-        lock = threading.Lock()
-        with pytest.raises(TypeError, match="ns.lock"):
-            merge_context({}, {"ns": {"lock": lock}})
+        assert result["t"] is overlay["t"]
+        assert result["t"][0] is inner_dict_overlay
 
     def test_empty_overlay_returns_copy_of_base(self) -> None:
         base = {"a": {"b": 1}}
@@ -243,3 +259,30 @@ class TestWithContextMerge:
             "ns": {"phase": "exploration", "cost": 0.42},
             "trace_id": "abc",
         }
+
+    async def test_stateful_object_identity_preserved_through_merge(
+        self, mock_backend: MockBackend
+    ) -> None:
+        # The motivating use case for reference-leaf semantics: a cost
+        # tracker (or logger, lock, client) threaded through context retains
+        # identity across with_context() chains. Backend callbacks see the
+        # caller's instance, so mutations propagate.
+        from llm_saia.core.backend import ToolDef
+
+        class CostTracker:
+            def __init__(self) -> None:
+                self.total = 0.0
+
+        tracker = CostTracker()
+        saia = make_saia(
+            mock_backend,
+            tools=[ToolDef(name="noop", description="", parameters={})],
+            executor=lambda n, a: "ok",
+        )
+        # Layer the tracker in, then add another key — second call forces a
+        # merge that must not deep-copy the tracker.
+        saia = saia.with_context({"tracker": tracker}).with_context({"trace_id": "abc"})
+        mock_backend.set_complete_response("done")
+        await saia.complete("hi")
+        assert mock_backend.last_context is not None
+        assert mock_backend.last_context["tracker"] is tracker
