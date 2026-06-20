@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-20
+
+### Added
+- `ConversationFactory` protocol for abstracting conversation creation and restoration. Enables
+  frameworks to work with any conversation implementation without importing concrete types.
+- `SerializableConversationLike` protocol extending `ConversationLike` with `to_dict()` for
+  checkpoint/restore workflows.
+- Built-in behavioral iteration guards in `llm_saia.guards`:
+  - `narrative(terminal_tool)` - nudge LLM to explain tool calls (advisory, non-blocking)
+  - `terminal_deadline(terminal_tool, threshold=3)` - enforce terminal tool when iterations running low
+  - `terminal_compliance(terminal_tool, threshold=2)` - catch "said but didn't call" pattern
+  - All behavioral guards support `max_retries` and `escalate` parameters for consistent retry handling
+
+### Changed
+- **Breaking:** `Configurable.with_context()` now deep-merges instead of replacing.
+  Dict nodes recurse; leaves replace and are shared by reference (non-copyable values
+  that previously raised `TypeError` now pass through). `with_context(None)` clears;
+  `with_context({})` is a no-op. Merge primitive: `llm_saia.core.merge_context`.
+- Code coverage threshold increased from 90% to 95%.
+- Refactored `llm_saia.guards` from single file to package (no API changes).
+
+### Fixed
+- `DefaultController` now requires the configured `terminal_tool` to be in the current tools list
+  before honoring it. Prevents stray tool calls matching an inherited terminal name from
+  short-circuiting the loop in derived SAIAs that replaced their tools via `with_tools()`.
+  Classifier-based completion is also gated on this check — blocked only when the terminal tool
+  is both configured and present, otherwise honored normally.
+- JSON schema generation now includes `additionalProperties: false` and lists all properties in
+  `required` array. Required for OpenAI structured output strict mode; compatible with Gemini.
+- `Complete`'s default controller now forwards `CallOptions.context` and `request_id` into
+  classifier sub-calls so backend callbacks (cost tracking, tracing) see the caller's values.
+
 ## [0.4.0] - 2026-05-02
 
 ### Added
@@ -201,7 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/llm-works/llm-saia/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/llm-works/llm-saia/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/llm-works/llm-saia/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/llm-works/llm-saia/compare/v0.1.0...v0.2.0

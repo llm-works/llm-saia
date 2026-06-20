@@ -489,6 +489,75 @@ class TestTask:
         # contradiction handling kicked in)
         assert result.iterations == 2
 
+    async def test_terminal_tool_ignored_when_not_in_tools_list(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Stray call matching terminal_tool name does not short-circuit when
+        the terminal tool is not in the current tools list (defense against
+        leaked terminal config in derived SAIAs).
+        """
+        executed_tools: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed_tools.append(name)
+            return f"Executed {name}"
+
+        # sample_tools does NOT include "signal_done", but terminal_tool says it does.
+        saia = make_saia(
+            mock_backend,
+            tools=sample_tools,
+            executor=tracking_executor,
+            terminal_tool="signal_done",
+            require_confirmation=False,
+        )
+
+        # Model emits stray signal_done. Without the membership check the
+        # controller would capture it as terminal_data and end the loop on
+        # iteration 1 with terminal_tool="signal_done".
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_1", name="signal_done", arguments={"output": "done"})
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do something")
+
+        # Call was dispatched to the executor instead of being captured as terminal.
+        assert "signal_done" in executed_tools
+        assert result.terminal_tool is None
+        assert result.terminal_data is None
+
+    async def test_classifier_complete_honored_when_terminal_not_in_tools(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Classifier-reported completion is honored when the configured
+        terminal tool is not in the current tools list — avoids nudging the
+        model to call a tool it cannot see.
+        """
+        saia = make_saia(
+            mock_backend,
+            tools=sample_tools,
+            executor=dummy_executor,
+            terminal_tool="signal_done",  # not in sample_tools
+        )
+
+        mock_backend.queue_tool_response(
+            ChatResponse(content="All done.", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        result = await saia.complete(task="Do something")
+
+        assert result.completed is True
+        assert result.output == "All done."
+        assert result.iterations == 1
+
     async def test_task_terminal_tool_not_executed_on_confirm(
         self, mock_backend: MockBackend, sample_tools: list[ToolDef]
     ) -> None:
@@ -1049,6 +1118,131 @@ class TestDefaultController:
         a3 = await controller.decide(obs_empty2)
         assert a3.kind == ActionType.INSTRUCT
         assert a3.reason == DecisionReason.EMPTY_RESPONSE
+
+    async def test_classifier_complete_with_terminal_tool_nudges(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Classifier returning COMPLETED with terminal_tool configured sends nudge.
+
+        When a terminal tool is configured, completion must happen via that tool,
+        not via classifier. This prevents LLM from bypassing terminal tool by just
+        saying "done" without actually calling it.
+        """
+        from llm_saia.core.controller import (
+            ActionType,
+            ControllerConfig,
+            DefaultController,
+            Observation,
+        )
+
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
+        controller = DefaultController(config=ControllerConfig(llm_config=config))
+        controller.reset()
+
+        # Mock classifier returning COMPLETED
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        obs = Observation(
+            response=ChatResponse(
+                content="Reporting findings now as I found everything.",
+                tool_calls=[],
+                output_tokens=20,
+            ),
+            messages=[],
+            iteration=3,
+            task="Find some information",
+            tool_names=["search", "report_findings"],
+            terminal_tool="report_findings",  # Terminal tool is configured
+        )
+        action = await controller.decide(obs)
+
+        # Should nudge to call terminal tool, not complete via classifier
+        assert action.kind == ActionType.INSTRUCT
+        assert action.reason == DecisionReason.NUDGE_CLASSIFIED
+        assert "report_findings" in action.message
+        assert action.reason_details == "completed_without_terminal"
+
+    async def test_classifier_complete_without_terminal_tool_completes(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Classifier returning COMPLETED without terminal_tool configured completes normally."""
+        from llm_saia.core.controller import (
+            ActionType,
+            ControllerConfig,
+            DefaultController,
+            Observation,
+        )
+
+        config = Config(lg=NullLogger(), backend=mock_backend, tools=[], executor=None)
+        controller = DefaultController(config=ControllerConfig(llm_config=config))
+        controller.reset()
+
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        obs = Observation(
+            response=ChatResponse(
+                content="Task is done!",
+                tool_calls=[],
+                output_tokens=10,
+            ),
+            messages=[],
+            iteration=3,
+            task="Do something",
+            tool_names=["search"],
+            terminal_tool=None,  # No terminal tool configured
+        )
+        action = await controller.decide(obs)
+
+        # Should complete normally via classifier
+        assert action.kind == ActionType.COMPLETE
+        assert action.reason == DecisionReason.CLASSIFIED_COMPLETE
+
+
+class TestCompleteDefaultControllerPropagation:
+    """Synthesized classifier CallOptions must carry caller-policy fields."""
+
+    def _make_complete(self, mock_backend: MockBackend, call: CallOptions) -> Any:
+        from llm_saia.core.types import ToolDef
+        from llm_saia.verbs.complete import Complete
+
+        async def executor(name: str, args: dict[str, Any]) -> str:
+            return ""
+
+        tool = ToolDef(name="noop", description="", parameters={"type": "object"})
+        config = Config(
+            lg=NullLogger(),
+            backend=mock_backend,
+            tools=[tool],
+            executor=executor,
+            call=call,
+        )
+        return Complete(config)
+
+    def test_default_controller_forwards_context(self, mock_backend: MockBackend) -> None:
+        """context must propagate so backend callbacks see the caller identity."""
+        ctx = {"trace_id": "abc", "campaign": "x"}
+        verb = self._make_complete(mock_backend, CallOptions(context=ctx))
+        controller = verb._default_controller()
+        assert controller.config.llm_config.call.context == ctx
+
+    def test_default_controller_forwards_request_id(self, mock_backend: MockBackend) -> None:
+        """request_id must propagate for trace correlation across sub-calls."""
+        verb = self._make_complete(mock_backend, CallOptions(request_id="req-42"))
+        controller = verb._default_controller()
+        assert controller.config.llm_config.call.request_id == "req-42"
+
+    def test_default_controller_preserves_system_and_temperature(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Existing forwarded fields must keep working."""
+        verb = self._make_complete(mock_backend, CallOptions(system="be terse", temperature=0.3))
+        controller = verb._default_controller()
+        assert controller.config.llm_config.call.system == "be terse"
+        assert controller.config.llm_config.call.temperature == 0.3
 
 
 class TestTaskStateClassifier:

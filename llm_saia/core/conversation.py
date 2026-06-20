@@ -15,11 +15,13 @@ from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
     "AsyncConversationLike",
+    "ConversationFactory",
     "ConversationLike",
     "ListConversation",
     "Message",
     "MessageAppendable",
     "Role",
+    "SerializableConversationLike",
     "ToolCall",
 ]
 
@@ -157,6 +159,53 @@ class AsyncConversationLike(ConversationLike, Protocol):
         Async variant of ``append()`` that supports non-blocking compaction.
         Use this when the conversation may trigger I/O during append (e.g.,
         LLM-based summarization for compaction).
+        """
+        ...
+
+
+@runtime_checkable
+class SerializableConversationLike(ConversationLike, Protocol):
+    """ConversationLike with serialization support for checkpoint/restore.
+
+    Defines only ``to_dict()`` for export. Restoring requires a
+    ``ConversationFactory`` since deserialization may need injected
+    dependencies (logger, config, compactor).
+    """
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize conversation state for persistence."""
+        ...
+
+
+@runtime_checkable
+class ConversationFactory(Protocol):
+    """Factory for creating conversations with optional restore from state.
+
+    Abstracts conversation creation so frameworks can work with any
+    conversation implementation without importing concrete types.
+
+    Example kelt implementation::
+
+        def conversation_factory(lg, config, compactor) -> ConversationFactory:
+            class Factory:
+                def create(self) -> SerializableConversationLike:
+                    return Conversation(lg, config=config, compactor=compactor)
+
+                def create_from_state(self, state: dict[str, Any]) -> SerializableConversationLike:
+                    return Conversation.from_dict(state, lg=lg, config=config, compactor=compactor)
+
+            return Factory()
+    """
+
+    def create(self) -> SerializableConversationLike:
+        """Create a fresh conversation."""
+        ...
+
+    def create_from_state(self, state: dict[str, Any]) -> SerializableConversationLike:
+        """Restore a conversation from serialized state.
+
+        Args:
+            state: Serialized state from ``to_dict()``.
         """
         ...
 

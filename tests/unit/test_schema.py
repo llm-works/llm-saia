@@ -172,7 +172,30 @@ class TestDataclassToJsonSchema:
         assert "name" in schema["schema"]["required"]
         assert "value" in schema["schema"]["required"]
 
+    def test_additional_properties_false(self) -> None:
+        """OpenAI structured output requires additionalProperties: false."""
+
+        @dataclass
+        class Outer:
+            name: str
+
+        @dataclass
+        class Nested:
+            outer: Outer
+            items: list[Outer]
+
+        schema = dataclass_to_json_schema(Nested)
+
+        # Top-level object
+        assert schema["schema"]["additionalProperties"] is False
+        # Nested object
+        assert schema["schema"]["properties"]["outer"]["additionalProperties"] is False
+        # Items in array
+        assert schema["schema"]["properties"]["items"]["items"]["additionalProperties"] is False
+
     def test_dataclass_with_defaults(self) -> None:
+        """OpenAI strict mode requires all properties in required array."""
+
         @dataclass
         class WithDefaults:
             required_field: str
@@ -181,9 +204,11 @@ class TestDataclassToJsonSchema:
         schema = dataclass_to_json_schema(WithDefaults)
 
         assert "required_field" in schema["schema"]["required"]
-        assert "optional_field" not in schema["schema"]["required"]
+        assert "optional_field" in schema["schema"]["required"]
 
     def test_dataclass_with_default_factory(self) -> None:
+        """OpenAI strict mode requires all properties in required array."""
+
         @dataclass
         class WithFactory:
             required: str
@@ -192,7 +217,7 @@ class TestDataclassToJsonSchema:
         schema = dataclass_to_json_schema(WithFactory)
 
         assert "required" in schema["schema"]["required"]
-        assert "items" not in schema["schema"]["required"]
+        assert "items" in schema["schema"]["required"]
 
     def test_dataclass_with_complex_types(self) -> None:
         @dataclass

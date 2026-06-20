@@ -115,8 +115,38 @@ class Configurable(ABC):
         return self._with_call(request_id=request_id)
 
     def with_context(self, context: dict[str, Any] | None) -> Self:
-        """Return new instance with context dict for backend callbacks (None to clear)."""
-        return self._with_call(context=context)
+        """Return new instance with *context* merged onto the existing context.
+
+        Merge rules (see :func:`llm_saia.core.context.merge_context`):
+
+        - Two dict-valued nodes at the same key recurse to arbitrary depth;
+          everything else replaces wholesale at its leaf. Last write wins.
+        - Dict structure is independent of the parent: derivations from the
+          same parent don't trample each other's namespaces.
+        - Leaf values are shared by reference, so objects threaded through
+          context (cost trackers, loggers, locks, clients) retain identity
+          across derivations and backend callbacks. Mutating a mutable leaf
+          (e.g. a list) after passing it in is visible on the merged result.
+
+        Special inputs:
+
+        - ``None`` clears the context entirely.
+        - ``{}`` is a no-op and returns ``self`` unchanged.
+
+        Args:
+            context: Context to merge onto the existing context, or ``None``
+                to clear.
+        """
+        if context is None:
+            return self._with_call(context=None)
+        if not context:
+            return self
+        from .config import DEFAULT_CALL
+        from .context import merge_context
+
+        base_call = self._config.call or DEFAULT_CALL
+        merged = merge_context(base_call.context or {}, context)
+        return self._with_call(context=merged)
 
     def with_system(self, system: str | None) -> Self:
         """Return new instance with different system prompt (None to clear)."""
