@@ -262,6 +262,7 @@ class Complete(Verb):
             output_tokens=response.output_tokens,
             finish_reason=response.finish_reason,
             model=response.model,
+            llm_request_id=response.llm_request_id,
         )
 
     def _core_result_to_task_result(

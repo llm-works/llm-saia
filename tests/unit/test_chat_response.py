@@ -22,6 +22,11 @@ class TestDefaults:
         assert r.call_id == ""
         assert r.model is None
         assert r.raw is None
+        assert r.llm_request_id is None
+
+    def test_llm_request_id_roundtrip(self) -> None:
+        r = ChatResponse(content="", tool_calls=[], llm_request_id="req-abc12345")
+        assert r.llm_request_id == "req-abc12345"
 
     def test_legacy_kwargs_still_work(self) -> None:
         r = ChatResponse(

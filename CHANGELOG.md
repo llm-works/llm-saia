@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ChatResponse.llm_request_id` — optional backend-assigned request ID, propagated to
+  `Step.llm_call.llm_request_id`. Lets consumers correlate backend callback events to
+  tracer steps without fuzzy joins. `None` when the backend doesn't supply one.
+
 ## [0.5.0] - 2026-06-20
 
 ### Added
