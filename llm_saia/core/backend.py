@@ -64,6 +64,10 @@ class ChatResponse:
     call_id: str = ""  # Set by SAIA per chat() call for tracing
     model: str | None = None  # Resolved model name returned by the backend
     raw: Any = None  # Backend-native response (dict for HTTP, SDK object for SDK backends)
+    # Backend-assigned request ID (e.g. llm-infer ChatRequest.id). Present when the
+    # backend surfaces one; used to correlate SAIA Step records with callback events
+    # observed at the backend layer (cost tracking, per-call telemetry).
+    llm_request_id: str | None = None
 
 
 class Backend(ABC):
