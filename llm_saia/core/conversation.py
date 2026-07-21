@@ -47,20 +47,39 @@ class Role(StrEnum):
 
 @dataclass
 class ToolCall:
-    """A tool invocation from the LLM."""
+    """A tool invocation from the LLM.
+
+    Attributes:
+        id: Tool call ID from the provider.
+        name: Tool name.
+        arguments: Parsed tool arguments.
+        extra_content: Provider round-trip data (e.g. Gemini 3.x
+            ``thought_signature``). When populated, backends must echo it back
+            verbatim on the next turn's assistant tool_call or the provider
+            400s. Whole object; last-writer-wins on updates.
+    """
 
     id: str
     name: str
     arguments: dict[str, Any]
+    extra_content: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for persistence. Does not copy arguments."""
-        return {"id": self.id, "name": self.name, "arguments": self.arguments}
+        d: dict[str, Any] = {"id": self.id, "name": self.name, "arguments": self.arguments}
+        if self.extra_content is not None:
+            d["extra_content"] = self.extra_content
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolCall:
         """Deserialize from dict. Does not copy arguments."""
-        return cls(id=data["id"], name=data["name"], arguments=data["arguments"])
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            arguments=data["arguments"],
+            extra_content=data.get("extra_content"),
+        )
 
 
 @dataclass

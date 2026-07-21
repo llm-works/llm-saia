@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChatResponse.llm_request_id` — optional backend-assigned request ID, propagated to
   `Step.llm_call.llm_request_id`. Lets consumers correlate backend callback events to
   tracer steps without fuzzy joins. `None` when the backend doesn't supply one.
+- `ToolCall.extra_content` — optional round-trip bag preserved through `to_dict`/`from_dict`;
+  required to echo Gemini 3.x `thought_signature` on the next turn, else the follow-up 400s.
+  Whole object, last-writer-wins.
 
 ## [0.5.0] - 2026-06-20
 
