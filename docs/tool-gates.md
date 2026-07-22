@@ -139,7 +139,7 @@ saia = (
 Reveal tools progressively as the task advances:
 
 ```python
-def staged_gate(advanced_tools: set[str], after_iteration: int) -> ToolGate:
+def staged_gate(after_iteration: int) -> ToolGate:
     def gate(ctx: ToolGateContext) -> bool | str:
         if ctx.iteration < after_iteration:
             return f"requires iteration >= {after_iteration}"
@@ -147,7 +147,7 @@ def staged_gate(advanced_tools: set[str], after_iteration: int) -> ToolGate:
     return gate
 
 # Register same gate for multiple tools
-gates = {tool: staged_gate({"summarize", "conclude"}, 2) for tool in ["summarize", "conclude"]}
+gates = {tool: staged_gate(2) for tool in ["summarize", "conclude"]}
 saia = SAIA.builder().tool_gates(gates).build()
 ```
 

@@ -188,10 +188,10 @@ class _LoopRunner:
         h = self._host
         ctx.start_time = time.monotonic()
         while not h._should_stop(ctx.config, ctx.iteration, ctx.start_time, ctx.total_tokens):
-            result, tokens, ctx.last_response = await self._run_iteration(
+            result, tokens, _ = await self._run_iteration(
                 ctx, messages, ctx.iteration, ctx.last_response
             )
-            ctx.total_tokens += tokens
+            # ctx.last_response and ctx.total_tokens updated inside _run_iteration
             if result is not None:
                 return self._finalize_complete(
                     result, ctx.iteration, ctx.start_time, ctx.total_tokens
@@ -241,6 +241,10 @@ class _LoopRunner:
         """Run one loop iteration. Returns (result, tokens, response)."""
         h = self._host
         response, tokens = await self._call_llm(ctx, messages, iteration, last_response)
+
+        # Update context before pause-capable callbacks so PauseRequested has current state
+        ctx.last_response = response
+        ctx.total_tokens += tokens
 
         _, outcomes = h._run_iteration_guards(
             ctx.config.iteration_guards, response, iteration, ctx.config.max_iterations

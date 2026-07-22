@@ -62,9 +62,13 @@ def _run_gate(gate: ToolGate, ctx: ToolGateContext, tool_name: str) -> str | Non
     """Evaluate a single gate; return reason string if blocked, else None.
 
     A blocking ``False`` return produces a synthetic reason so the trace/log
-    always has *something* to attribute the hiding to.
+    always has *something* to attribute the hiding to. Gate exceptions are
+    caught and converted to blocking reasons (matching IterationGuard behavior).
     """
-    verdict = gate(ctx)
+    try:
+        verdict = gate(ctx)
+    except Exception as exc:  # noqa: BLE001 - isolate user callback failures
+        return f"gate for {tool_name!r} raised {type(exc).__name__}: {exc}"
     if verdict is True or verdict is None:
         return None
     if verdict is False:
