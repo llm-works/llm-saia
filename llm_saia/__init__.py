@@ -2,7 +2,15 @@
 
 from .builder import SAIABuilder
 from .core.backend import Backend, ChatResponse, ToolDef
-from .core.config import CallOptions, Config, JsonParser, TerminalConfig
+from .core.config import (
+    CallOptions,
+    Config,
+    JsonParser,
+    TerminalConfig,
+    ToolGate,
+    ToolGateContext,
+    ToolGateContextFactory,
+)
 from .core.conversation import Message, Role, ToolCall
 from .core.errors import (
     BackendError,
@@ -105,6 +113,10 @@ __all__ = [
     "SerializableConversationLike",
     # Terminal
     "TerminalConfig",
+    # Tool visibility gates
+    "ToolGate",
+    "ToolGateContext",
+    "ToolGateContextFactory",
     # Tracing
     "CallbackTracer",
     "GuardOutcome",

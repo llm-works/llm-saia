@@ -191,6 +191,41 @@ result = await (
 `with_guard()` and `with_guards()` accept both `OutputGuard` and `IterationGuard` — each is
 routed to the correct bucket automatically.
 
+### Tool Gates
+
+Tool gates dynamically control which tools are visible to the model per iteration. Blocked tools
+are stripped from the outbound schema — the model never sees them and cannot spend output tokens
+generating a call that would be rejected.
+
+```python
+from llm_saia import ToolGateContext
+
+# Hide terminal tool until iteration 3 (shortcut via TerminalConfig)
+saia = (
+    SAIA.builder()
+    .backend(backend)
+    .tools(tools, executor)
+    .terminal("complete_task", min_iterations=3)
+    .build()
+)
+
+# Custom gate: only allow expensive tool after cheap tool has been called
+def require_cheap_first(ctx: ToolGateContext) -> bool | str:
+    if ctx.tool_call_counts.get("cheap_tool", 0) == 0:
+        return "must call cheap_tool first"
+    return True
+
+result = await (
+    saia
+    .with_tool_gate("expensive_tool", require_cheap_first)
+    .complete(task)
+)
+```
+
+Gates return `True`/`None` to allow, `False` to block silently, or a `str` reason recorded in the
+trace (never surfaced to the model). See [docs/tool-gates.md](docs/tool-gates.md) for advanced
+patterns including context factories for shared computation.
+
 ## Examples
 
 See the [examples/](examples/) directory:

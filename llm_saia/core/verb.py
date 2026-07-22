@@ -29,6 +29,7 @@ from .loop import CoreLoopResult, LoopDecision, LoopStrategy, SimpleStrategy
 from .loop_runner import _LoopRunner
 from .structured_output import _StructuredOutputHandler
 from .tool_executor import _ToolExecutor
+from .tool_gate import apply_tool_gates
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -199,6 +200,8 @@ class Verb(OutputGuardMixin, Configurable):
         response_schema: dict[str, Any] | None = None,
         tools: list[Any] | None = _SENTINEL,
         abort_signal: asyncio.Event | None = None,
+        iteration: int | None = None,
+        last_response: ChatResponse | None = None,
     ) -> ChatResponse:
         """Execute a single chat call.
 
@@ -212,6 +215,13 @@ class Verb(OutputGuardMixin, Configurable):
                 pass ``None`` or ``[]`` to suppress tools.
             abort_signal: Event that signals abort request. Backend may use
                 streaming to enable fast abort between chunks.
+            iteration: 0-indexed loop iteration. When provided and
+                :attr:`Config.tool_gates` (or the
+                :attr:`TerminalConfig.min_iterations` shortcut) are
+                configured, gates are evaluated and blocked tools are
+                stripped from the outbound schema for this call.
+            last_response: Most recent :class:`ChatResponse` — exposed to
+                gate callbacks via :attr:`ToolGateContext.last_response`.
         """
         call_id = self._generate_id()
         self._log_message_assembly(call_id, messages)
@@ -220,6 +230,10 @@ class Verb(OutputGuardMixin, Configurable):
             if tools is _SENTINEL
             else (tools or None)
         )
+        if iteration is not None:
+            resolved_tools = self._gate_tools(
+                iteration, messages, last_response, resolved_tools, call_id
+            )
         call_opts = self._get_call_options(call)
         t0 = time.monotonic()
         response = await self._backend.chat(
@@ -235,6 +249,29 @@ class Verb(OutputGuardMixin, Configurable):
         response.call_id = call_id
         response._duration_ms = int((time.monotonic() - t0) * 1000)  # type: ignore[attr-defined]
         return response
+
+    def _gate_tools(
+        self,
+        iteration: int,
+        messages: list[Message],
+        last_response: ChatResponse | None,
+        resolved_tools: list[Any] | None,
+        call_id: str,
+    ) -> list[Any] | None:
+        """Apply tool-visibility gates. Returns filtered tool list."""
+        filtered, blocked = apply_tool_gates(
+            self._config, iteration, messages, last_response, resolved_tools
+        )
+        if blocked:
+            self._lg.debug(
+                "tool-gate filtered tools",
+                extra={
+                    "call_id": call_id,
+                    "iteration": iteration,
+                    "blocked": blocked,
+                },
+            )
+        return filtered if filtered else None
 
     async def _init_loop(
         self,

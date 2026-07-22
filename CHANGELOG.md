@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ToolCall.extra_content` — optional round-trip bag preserved through `to_dict`/`from_dict`;
   required to echo Gemini 3.x `thought_signature` on the next turn, else the follow-up 400s.
   Whole object, last-writer-wins.
+- Per-iteration tool visibility gates: register `ToolGate` callbacks on
+  `Config.tool_gates` to strip tools from the outbound schema before the LLM call,
+  avoiding wasted output tokens on calls a post-response guard would reject.
+- `TerminalConfig.min_iterations` — hides the terminal tool until iteration `N`.
+  Lowers to a `Config.tool_gates` entry keyed by `terminal.tool`; an explicit gate
+  for the same tool wins.
 
 ## [0.5.0] - 2026-06-20
 
