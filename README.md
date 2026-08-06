@@ -51,17 +51,13 @@ pip install llm-saia
 ```python
 from llm_saia import SAIA
 
+
 async def main():
-    saia = (
-        SAIA.builder()
-        .backend(your_backend)
-        .build()
-    )
+    saia = SAIA.builder().backend(your_backend).build()
 
     # Verify a claim
     result = await saia.verify(
-        "This code handles null input safely",
-        "no null pointer exceptions possible"
+        "This code handles null input safely", "no null pointer exceptions possible"
     )
     print(f"Passed: {result.passed}, Reason: {result.reason}")
 
@@ -107,12 +103,12 @@ async def main():
 ```python
 saia = (
     SAIA.builder()
-    .backend(backend)                    # Required: LLM backend
-    .tools(tool_defs, executor)          # Optional: tool calling
-    .logger(logger)                      # Optional: logging
+    .backend(backend)  # Required: LLM backend
+    .tools(tool_defs, executor)  # Optional: tool calling
+    .logger(logger)  # Optional: logging
     .system("You are a helpful assistant")  # Optional: system prompt
-    .max_iterations(10)                  # Optional: tool loop limit
-    .max_call_tokens(4096)               # Optional: per-call token limit
+    .max_iterations(10)  # Optional: tool loop limit
+    .max_call_tokens(4096)  # Optional: per-call token limit
     .build()
 )
 ```
@@ -141,10 +137,8 @@ Guards validate LLM output and automatically retry with feedback if validation f
 from llm_saia.guards import english_only, max_length, no_preamble
 
 # Apply guards to any verb
-result = await (
-    saia
-    .with_guards(english_only(), no_preamble(), max_length(500))
-    .ask(article, "summarize this")
+result = await saia.with_guards(english_only(), no_preamble(), max_length(500)).ask(
+    article, "summarize this"
 )
 ```
 
@@ -155,10 +149,12 @@ from typing import Annotated
 from llm_saia import Guarded
 from llm_saia.guards import english_only, max_length
 
+
 @dataclass
 class Summary:
     title: Annotated[str, Guarded(english_only(), max_length(100))]
     body: Annotated[str, Guarded(english_only())]
+
 
 result = await saia.extract(article, Summary)
 ```
@@ -175,17 +171,15 @@ and the loop continues.
 ```python
 from llm_saia import IterationGuard
 
+
 # Require the LLM to explain what it's doing before calling tools
 def require_narrative(response):
     if response.tool_calls and not (response.content or "").strip():
         return "Explain what you're doing and why before calling tools."
     return None
 
-result = await (
-    saia
-    .with_guard(IterationGuard(require_narrative, name="narrative"))
-    .complete(task)
-)
+
+result = await saia.with_guard(IterationGuard(require_narrative, name="narrative")).complete(task)
 ```
 
 `with_guard()` and `with_guards()` accept both `OutputGuard` and `IterationGuard` — each is
@@ -209,17 +203,15 @@ saia = (
     .build()
 )
 
+
 # Custom gate: only allow expensive tool after cheap tool has been called
 def require_cheap_first(ctx: ToolGateContext) -> bool | str:
     if ctx.tool_call_counts.get("cheap_tool", 0) == 0:
         return "must call cheap_tool first"
     return True
 
-result = await (
-    saia
-    .with_tool_gate("expensive_tool", require_cheap_first)
-    .complete(task)
-)
+
+result = await saia.with_tool_gate("expensive_tool", require_cheap_first).complete(task)
 ```
 
 Gates return `True`/`None` to allow, `False` to block silently, or a `str` reason recorded in the

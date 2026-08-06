@@ -41,11 +41,11 @@ schema-hiding is to prevent the model from thinking about a tool we've decided t
 ```python
 @dataclass(frozen=True)
 class ToolGateContext:
-    iteration: int                     # Current 0-indexed loop iteration
+    iteration: int  # Current 0-indexed loop iteration
     tool_call_counts: Mapping[str, int]  # Cumulative tool calls by name
-    last_response: ChatResponse | None   # Previous response, None on first iteration
-    messages: Sequence[Message]          # Outbound transcript (read-only)
-    extra: Any = None                    # Factory-computed shared state (see below)
+    last_response: ChatResponse | None  # Previous response, None on first iteration
+    messages: Sequence[Message]  # Outbound transcript (read-only)
+    extra: Any = None  # Factory-computed shared state (see below)
 ```
 
 ## Registration
@@ -57,9 +57,9 @@ saia = (
     SAIA.builder()
     .backend(backend)
     .tools(tools, executor)
-    .tool_gate("search", lambda ctx: ctx.iteration < 10)          # single gate
-    .tool_gates({"fetch": gate_fn, "summarize": other_gate})       # multiple gates
-    .tool_gate_context_factory(compute_shared_state)               # optional
+    .tool_gate("search", lambda ctx: ctx.iteration < 10)  # single gate
+    .tool_gates({"fetch": gate_fn, "summarize": other_gate})  # multiple gates
+    .tool_gate_context_factory(compute_shared_state)  # optional
     .build()
 )
 ```
@@ -68,11 +68,9 @@ saia = (
 
 ```python
 # Per-call gates
-result = await (
-    saia
-    .with_tool_gate("expensive_tool", lambda ctx: ctx.tool_call_counts.get("cheap_tool", 0) >= 2)
-    .complete(task)
-)
+result = await saia.with_tool_gate(
+    "expensive_tool", lambda ctx: ctx.tool_call_counts.get("cheap_tool", 0) >= 2
+).complete(task)
 ```
 
 ### TerminalConfig shortcut
@@ -116,11 +114,13 @@ def compute_empty_searches(ctx: ToolGateContext) -> int:
                 count += 1
     return count
 
+
 def gate_expensive_tool(ctx: ToolGateContext) -> bool | str:
     """Only allow expensive tool after confirming searches found something."""
     if ctx.extra >= 2:  # ctx.extra is the count from compute_empty_searches
         return "too many empty searches"
     return True
+
 
 saia = (
     SAIA.builder()
@@ -144,7 +144,9 @@ def staged_gate(after_iteration: int) -> ToolGate:
         if ctx.iteration < after_iteration:
             return f"requires iteration >= {after_iteration}"
         return True
+
     return gate
+
 
 # Register same gate for multiple tools
 gates = {tool: staged_gate(2) for tool in ["summarize", "conclude"]}
@@ -162,7 +164,9 @@ def max_calls(tool: str, limit: int) -> ToolGate:
         if count >= limit:
             return f"{tool} limit reached ({limit})"
         return True
+
     return gate
+
 
 saia = SAIA.builder().tool_gate("search", max_calls("search", 5)).build()
 ```
@@ -177,7 +181,9 @@ def requires(prerequisite: str) -> ToolGate:
         if ctx.tool_call_counts.get(prerequisite, 0) == 0:
             return f"requires {prerequisite} first"
         return True
+
     return gate
+
 
 saia = SAIA.builder().tool_gate("submit", requires("validate")).build()
 ```

@@ -10,6 +10,7 @@ from typing import Any
 
 from llm_saia import Backend, Message, ToolDef, ChatResponse
 
+
 class MyBackend(Backend):
     async def chat(
         self,
@@ -34,7 +35,7 @@ output parsing, state detection.
 ```python
 @dataclass
 class Message:
-    role: str           # "user", "assistant", "system", "tool"
+    role: str  # "user", "assistant", "system", "tool"
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None  # For tool messages
@@ -79,9 +80,9 @@ class ChatResponse:
     finish_reason: str | None = None  # "end_turn", "tool_use", etc.
     input_tokens: int = 0
     output_tokens: int = 0
-    call_id: str = ""          # Set by SAIA per chat() call for tracing
-    model: str | None = None   # Resolved model name returned by the backend
-    raw: Any = None            # Backend-native response object (escape hatch)
+    call_id: str = ""  # Set by SAIA per chat() call for tracing
+    model: str | None = None  # Resolved model name returned by the backend
+    raw: Any = None  # Backend-native response object (escape hatch)
 ```
 
 `model` is the concrete model identifier that produced the response. Populate it when the backend
@@ -103,8 +104,11 @@ import json
 import httpx
 from llm_saia import Backend, Message, ToolDef, ToolCall, ChatResponse
 
+
 class OpenAIBackend(Backend):
-    def __init__(self, model: str, api_key: str | None = None, base_url: str = "https://api.openai.com/v1"):
+    def __init__(
+        self, model: str, api_key: str | None = None, base_url: str = "https://api.openai.com/v1"
+    ):
         self._model = model
         self._api_key = api_key
         self._base_url = base_url
@@ -138,7 +142,7 @@ class OpenAIBackend(Backend):
         if response_schema:
             request["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": "response", "schema": response_schema}
+                "json_schema": {"name": "response", "schema": response_schema},
             }
 
         # Make request
@@ -162,11 +166,13 @@ class OpenAIBackend(Backend):
         tool_calls = []
         if message.get("tool_calls"):
             for tc in message["tool_calls"]:
-                tool_calls.append(ToolCall(
-                    id=tc["id"],
-                    name=tc["function"]["name"],
-                    arguments=json.loads(tc["function"]["arguments"]),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc["id"],
+                        name=tc["function"]["name"],
+                        arguments=json.loads(tc["function"]["arguments"]),
+                    )
+                )
 
         return ChatResponse(
             content=message.get("content") or "",
@@ -186,8 +192,11 @@ class OpenAIBackend(Backend):
                 "role": "assistant",
                 "content": msg.content or "",
                 "tool_calls": [
-                    {"id": tc.id, "type": "function",
-                     "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                    }
                     for tc in msg.tool_calls
                 ],
             }
@@ -195,9 +204,14 @@ class OpenAIBackend(Backend):
 
     def _convert_tools(self, tools: list[ToolDef]) -> list[dict]:
         return [
-            {"type": "function", "function": {
-                "name": t.name, "description": t.description, "parameters": t.parameters
-            }}
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                },
+            }
             for t in tools
         ]
 
@@ -254,9 +268,11 @@ alternative parsers (orjson, json-repair, etc.):
 ```python
 import json
 
+
 def my_json_parser(content: str) -> dict:
     """Custom parser that fixes newlines then parses."""
     return json.loads(content.replace("\n", "\\n"))
+
 
 # Via builder
 saia = SAIA.builder().backend(backend).json_parser(my_json_parser).build()

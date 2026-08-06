@@ -56,28 +56,37 @@ try:
     result = await saia.verify(code, "no SQL injection")
 except TruncatedResponseError as e:
     # Response was cut off - increase token limit
-    logger.warning("Response truncated", extra={
-        "schema": e.schema_name,
-        "raw_content": e.raw_content[:200],
-    })
+    logger.warning(
+        "Response truncated",
+        extra={
+            "schema": e.schema_name,
+            "raw_content": e.raw_content[:200],
+        },
+    )
     # Retry with higher limit
     result = await saia.with_max_call_tokens(8192).verify(code, "no SQL injection")
 
 except StructuredOutputError as e:
     # LLM returned malformed output
-    logger.error("Invalid output", extra={
-        "schema": e.schema_name,
-        "parse_error": e.parse_error,
-        "raw_content": e.raw_content[:500],
-    })
+    logger.error(
+        "Invalid output",
+        extra={
+            "schema": e.schema_name,
+            "parse_error": e.parse_error,
+            "raw_content": e.raw_content[:500],
+        },
+    )
     raise
 
 except BackendError as e:
     # Network/API error
-    logger.error("Backend failed", extra={
-        "status_code": e.status_code,
-        "response_body": e.response_body,
-    })
+    logger.error(
+        "Backend failed",
+        extra={
+            "status_code": e.status_code,
+            "response_body": e.response_body,
+        },
+    )
     raise
 
 except Error as e:
@@ -92,24 +101,24 @@ Each error type carries context:
 
 ```python
 # StructuredOutputError / TruncatedResponseError
-e.raw_content    # The raw response that failed to parse
-e.schema_name    # Name of the expected schema
-e.parse_error    # The parse error message
+e.raw_content  # The raw response that failed to parse
+e.schema_name  # Name of the expected schema
+e.parse_error  # The parse error message
 
 # ToolExecutionError
-e.tool_name      # Name of the failed tool
-e.arguments      # Arguments passed to the tool
-e.cause          # The underlying exception
+e.tool_name  # Name of the failed tool
+e.arguments  # Arguments passed to the tool
+e.cause  # The underlying exception
 
 # ConfigurationError
-e.field          # The invalid config field
-e.value          # The invalid value
-e.reason         # Why it's invalid
+e.field  # The invalid config field
+e.value  # The invalid value
+e.reason  # Why it's invalid
 
 # BackendError
-e.status_code    # HTTP status code (if applicable)
+e.status_code  # HTTP status code (if applicable)
 e.response_body  # Raw response body
-e.cause          # The underlying exception
+e.cause  # The underlying exception
 ```
 
 ## Tracing
@@ -120,22 +129,23 @@ SAIA writes JSONL traces for every LLM call. Use traces for debugging, monitorin
 
 ```python
 # File-based tracing (at build time)
-saia = (
-    SAIA.builder()
-    .backend(backend)
-    .tracing.file("/var/log/saia/traces.jsonl")
-    .build()
-)
+saia = SAIA.builder().backend(backend).tracing.file("/var/log/saia/traces.jsonl").build()
 
 # Console tracing (stdout)
 saia = SAIA.builder().backend(backend).tracing.console().build()
 
+
 # Callback tracing (custom handler)
+# The callback fires live, per-step, during the verb call (each iteration's
+# Step record) and once more with the full VerbTrace at end-of-call. Consumers
+# that need to interleave SAIA events with their own runtime events should
+# subscribe here rather than waiting for the returned VerbTrace.
 def handle_trace(record: dict) -> None:
     # Send to your observability stack
     metrics.increment("saia.calls", tags={"verb": record.get("verb")})
     if record.get("action") == "error":
         alerts.send(record)
+
 
 saia = SAIA.builder().backend(backend).tracing.callback(handle_trace).build()
 
@@ -155,14 +165,13 @@ Each trace record contains:
 
 ```python
 {
-    "trace_id": "a1b2c3d4",      # Constant across one verb invocation
-    "call_id": "e5f6g7h8",       # Unique per LLM call
-    "iteration": 0,              # Loop iteration (0-indexed)
-    "ts": 1708444800.123,        # Epoch seconds
-    "verb": "Verify",            # Verb class name
-    "phase": "loop",             # "loop", "direct", or "finalize"
-    "request_id": "req-123",     # User-provided correlation ID
-
+    "trace_id": "a1b2c3d4",  # Constant across one verb invocation
+    "call_id": "e5f6g7h8",  # Unique per LLM call
+    "iteration": 0,  # Loop iteration (0-indexed)
+    "ts": 1708444800.123,  # Epoch seconds
+    "verb": "Verify",  # Verb class name
+    "phase": "loop",  # "loop", "direct", or "finalize"
+    "request_id": "req-123",  # User-provided correlation ID
     # Observation (what the LLM returned)
     "has_content": true,
     "has_tool_calls": false,
@@ -172,7 +181,6 @@ Each trace record contains:
     "output_tokens": 50,
     "finish_reason": "end_turn",
     "content_preview": "The code is safe...",
-
     # Decision (what SAIA did)
     "action": "complete",
     "reason": "terminal_content",
@@ -239,8 +247,10 @@ import asyncio
 
 shutdown_event = asyncio.Event()
 
+
 def handle_signal(signum, frame):
     shutdown_event.set()
+
 
 async def main():
     signal.signal(signal.SIGTERM, handle_signal)
@@ -254,6 +264,41 @@ async def main():
             await process_task(saia)
 
         # Cleanup happens via context manager
+```
+
+## Cancellation
+
+`Complete` accepts two cancellation triggers: `abort_signal` (an
+`asyncio.Event` checked by the backend during LLM streaming) and `pause_check`
+(an async callback consulted between tool calls within a single batch). A
+third trigger, raising `PauseRequested` from the `on_iteration` callback,
+behaves like `abort_signal` for the questions below. All three return through
+a single path — the loop never raises `PauseRequested` to the caller.
+
+The pinned contract (also enforced by
+`tests/unit/test_task.py::TestCancellationContract`):
+
+| Question | `abort_signal` / `on_iteration` | `pause_check` |
+|---|---|---|
+| Return path | `TaskResult(paused=True, completed=False, reason="paused")` — no exception | Same |
+| History serializable | Yes. Round-trip each `Message` via `to_dict`/`from_dict`, load into `ListConversation`, resume with `complete(conversation=..., resume=True)` | Same |
+| Partial `VerbTrace` observable | Yes, on the configured tracer *and* on `TaskResult.trace`. Contains `N-1` iteration steps — the cancelled iteration raised before its `Step` was recorded | Yes. Contains `N` steps — the cancelled iteration's `Step` is recorded before `pause_check` fires |
+| In-flight tool calls | None. Abort fires inside `backend.chat()` before any tool of the current iteration starts | Tool that completed keeps its real result; remaining tools in the batch are acknowledged with a `"Paused."` tool message and never executed. Currently-executing tool calls are not cancelled — the check only runs between calls |
+
+Resumption example:
+
+```python
+signal = asyncio.Event()
+paused = await saia.complete(task="Long job", abort_signal=signal)
+if paused.paused:
+    # Persist the history however you like — every Message.to_dict() is JSON-safe.
+    save(msg.to_dict() for msg in paused.history)
+
+# Later:
+conv = ListConversation()
+for raw in load():
+    conv.append(Message.from_dict(raw))
+resumed = await saia.complete(task="ignored", conversation=conv, resume=True)
 ```
 
 ## Guards
@@ -285,17 +330,15 @@ run after each LLM response — not at the end.
 ```python
 from llm_saia import IterationContext, IterationGuard
 
+
 def require_narrative(ctx: IterationContext) -> str | None:
     """Require the LLM to explain its actions, not just call tools silently."""
     if ctx.response.tool_calls and not (ctx.response.content or "").strip():
         return "Explain what you're doing and why."
     return None
 
-result = await (
-    saia
-    .with_guard(IterationGuard(require_narrative, name="narrative"))
-    .complete(task)
-)
+
+result = await saia.with_guard(IterationGuard(require_narrative, name="narrative")).complete(task)
 ```
 
 `IterationContext` provides:
@@ -309,15 +352,14 @@ Use iteration info for adaptive guards:
 ```python
 from llm_saia import UNLIMITED
 
+
 def terminal_deadline(ctx: IterationContext) -> str | None:
     """Force terminal tool call when iterations are running low."""
     # Skip if unlimited iterations
     if ctx.remaining == UNLIMITED:
         return None
     # Check if response already calls the terminal tool
-    has_terminal = any(
-        tc.name == "report_findings" for tc in (ctx.response.tool_calls or [])
-    )
+    has_terminal = any(tc.name == "report_findings" for tc in (ctx.response.tool_calls or []))
     if ctx.remaining <= 3 and not has_terminal:
         return "You must call report_findings now to complete the task."
     return None
@@ -348,6 +390,7 @@ def require_narrative(ctx: IterationContext) -> str | None:
         return "Explain what you're doing and why."
     return None
 
+
 guard = IterationGuard(require_narrative, name="narrative", blocking=False)
 ```
 
@@ -366,11 +409,7 @@ the result and stops the loop.
 
 ```python
 saia = (
-    SAIA.builder()
-    .backend(backend)
-    .tools(tools, executor)
-    .terminal_tool("report_findings")
-    .build()
+    SAIA.builder().backend(backend).tools(tools, executor).terminal_tool("report_findings").build()
 )
 
 result = await saia.complete(task)
@@ -420,8 +459,8 @@ saia = (
     .tools(tools, executor)
     .terminal(
         tool="complete_task",
-        output_field="summary",        # Field to use for result.output
-        status_field="status",         # Field containing completion status
+        output_field="summary",  # Field to use for result.output
+        status_field="status",  # Field containing completion status
         failure_values=("stuck", "failed"),  # Status values that indicate failure
         require_confirmation=False,
     )
@@ -571,11 +610,11 @@ Protect against runaway loops:
 saia = (
     SAIA.builder()
     .backend(backend)
-    .max_iterations(20)          # Stop after N tool loops
-    .timeout_secs(120)           # Stop after N seconds
-    .max_total_tokens(50000)     # Stop after N total tokens
-    .max_call_tokens(4096)       # Limit per-call output
-    .temperature(0.7)            # Sampling temperature (default: backend decides)
+    .max_iterations(20)  # Stop after N tool loops
+    .timeout_secs(120)  # Stop after N seconds
+    .max_total_tokens(50000)  # Stop after N total tokens
+    .max_call_tokens(4096)  # Limit per-call output
+    .temperature(0.7)  # Sampling temperature (default: backend decides)
     .build()
 )
 
@@ -606,9 +645,11 @@ from llm_saia import PauseRequested
 
 should_pause = asyncio.Event()
 
+
 async def on_iteration(iteration: int, response: ChatResponse) -> None:
     if should_pause.is_set():
         raise PauseRequested()
+
 
 result = await saia.complete(task, on_iteration=on_iteration)
 
@@ -623,10 +664,11 @@ For finer-grained control, use `pause_check` to pause between tool calls in a mu
 async def check_pause() -> bool:
     return should_pause.is_set()
 
+
 result = await saia.complete(
     task,
     on_iteration=on_iteration,  # Checked per iteration
-    pause_check=check_pause,     # Checked between tools in a batch
+    pause_check=check_pause,  # Checked between tools in a batch
 )
 ```
 
@@ -725,6 +767,7 @@ and `SerializableConversationLike` protocols:
 ```python
 from llm_saia import ConversationFactory, SerializableConversationLike
 
+
 def run_with_checkpoint(factory: ConversationFactory, state: dict | None = None):
     conv = factory.create_from_state(state) if state is not None else factory.create()
     # ... run loop with conv ...
@@ -743,8 +786,10 @@ import signal
 
 pause_event = asyncio.Event()
 
+
 def handle_signal(signum, frame):
     pause_event.set()
+
 
 async def main():
     signal.signal(signal.SIGINT, handle_signal)
@@ -787,6 +832,7 @@ class Logger(Protocol):
 ```python
 import structlog
 
+
 class StructlogAdapter:
     def __init__(self):
         self._log = structlog.get_logger()
@@ -805,6 +851,7 @@ class StructlogAdapter:
 
     def error(self, msg: str, *, extra: dict | None = None) -> None:
         self._log.error(msg, **(extra or {}))
+
 
 saia = SAIA.builder().backend(backend).logger(StructlogAdapter()).build()
 ```

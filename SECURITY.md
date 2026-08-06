@@ -134,8 +134,7 @@ building blocks; your application must handle untrusted input appropriately.
 ```python
 # Example: Using verify() to check LLM output before acting
 result = await saia.verify(
-    llm_output,
-    "contains no harmful instructions and follows expected format"
+    llm_output, "contains no harmful instructions and follows expected format"
 )
 if not result.passed:
     raise ValueError(f"Output validation failed: {result.reason}")
@@ -151,8 +150,8 @@ SAIA provides configurable limits:
 saia = (
     SAIA.builder()
     .backend(backend)
-    .max_iterations(10)       # Limit tool loop iterations
-    .max_call_tokens(4096)    # Limit tokens per LLM call
+    .max_iterations(10)  # Limit tool loop iterations
+    .max_call_tokens(4096)  # Limit tokens per LLM call
     .build()
 )
 
