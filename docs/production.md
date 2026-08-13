@@ -286,7 +286,7 @@ The pinned contract (also enforced by
 | Return path | `TaskResult(paused=True, completed=False, reason="paused")` — no exception | Same |
 | History serializable | Yes. Round-trip each `Message` via `to_dict`/`from_dict`, load into `ListConversation`, resume with `complete(conversation=..., resume=True)` | Same |
 | Partial `VerbTrace` observable | Yes, on the configured tracer *and* on `TaskResult.trace`. Contains `N-1` iteration steps — the cancelled iteration raised before its `Step` was recorded | Yes. Contains `N` steps — the cancelled iteration's `Step` is recorded before `pause_check` fires |
-| In-flight tool calls | None. `abort_signal` fires inside `backend.chat()` before any tool starts; `on_iteration` fires after the LLM response but before tool execution — same outcome, different timing | Tool that completed keeps its real result; remaining tools in the batch are acknowledged with a `"Paused."` tool message and never executed. Currently-executing tool calls are not cancelled — the check only runs between calls |
+| In-flight tool calls | None (requires backend support). `abort_signal` fires inside `backend.chat()` before any tool starts; `on_iteration` fires after the LLM response but before tool execution — same outcome, different timing | Tool that completed keeps its real result; remaining tools in the batch are acknowledged with a `"Paused."` tool message and never executed. Currently-executing tool calls are not cancelled — the check only runs between calls |
 
 Resumption example:
 
