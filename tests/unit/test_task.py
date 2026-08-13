@@ -1,5 +1,6 @@
 """Tests for the task execution loop."""
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -1611,3 +1612,237 @@ class TestPauseResume:
 
         assert result.completed is True
         assert check_count == 0  # No check between single-tool batches
+
+
+class TestCancellationContract:
+    """Pins the observable contract for abort_signal and pause_check.
+
+    Four questions per trigger (see docs/production.md#cancellation):
+      Q1. Is history serializable and resumable at the cancellation point?
+      Q2. Is the partial VerbTrace observable, and what shape does it have?
+      Q3. What happens to in-flight tool calls?
+      Q4. Does the verb return a TaskResult or raise?
+    """
+
+    async def test_abort_signal_returns_paused_taskresult(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Q4/abort_signal: returns TaskResult(paused=True), no exception surfaces."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        signal = asyncio.Event()
+        signal.set()  # Fire before the first LLM call.
+
+        result = await saia.complete(task="Do work", abort_signal=signal)
+
+        assert result.paused is True
+        assert result.completed is False
+        assert result.reason == "paused"
+
+    async def test_abort_signal_partial_verb_trace_observable(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Q2/abort_signal: emitted trace omits the aborted iteration's step."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        # First iteration completes; abort fires before the second LLM call.
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        signal = asyncio.Event()
+        arm_after_iteration = 0
+
+        async def arm_after_first(iteration: int, response: ChatResponse) -> None:
+            if iteration == arm_after_iteration:
+                signal.set()
+
+        result = await saia.complete(
+            task="Do work",
+            abort_signal=signal,
+            on_iteration=arm_after_first,
+        )
+
+        # Iteration 0 step recorded; iteration 1 raised inside backend.chat()
+        # before the step was built, so trace stops at N-1.
+        assert result.paused is True
+        assert result.trace is not None
+        assert len(result.trace.steps) == 1
+        assert result.trace.steps[0].phase == "iteration"
+
+    async def test_abort_signal_history_serializable_and_resumable(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Q1/abort_signal: paused history round-trips and resumes to completion."""
+        executed: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed.append(name)
+            return f"Result of {name}"
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        # Iteration 0: one tool call. Abort fires between iterations.
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Searching",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        signal = asyncio.Event()
+
+        async def arm_after_first(iteration: int, response: ChatResponse) -> None:
+            if iteration == 0:
+                signal.set()
+
+        paused = await saia.complete(
+            task="Do work",
+            abort_signal=signal,
+            on_iteration=arm_after_first,
+        )
+        assert paused.paused is True
+
+        # Round-trip every message. ListConversation is the resume vehicle.
+        resumed_conv = ListConversation()
+        for msg in paused.history:
+            restored = Message.from_dict(msg.to_dict())
+            resumed_conv.append(restored)
+
+        # Resume path: LLM finishes; classifier confirms.
+        mock_backend.queue_tool_response(
+            ChatResponse(content="Finished.", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        # abort_signal is still set — clear it for resume.
+        signal.clear()
+        resumed = await saia.complete(task="ignored", conversation=resumed_conv, resume=True)
+
+        assert resumed.completed is True
+        assert executed == ["search"]  # first-run tool ran once; no double-execute
+
+    async def test_abort_signal_no_in_flight_tools(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Q3/abort_signal: no tools start executing when abort fires pre-chat."""
+        executed: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed.append(name)
+            return "ok"
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        signal = asyncio.Event()
+        signal.set()
+
+        # Even if the backend would have returned tool calls, abort_signal is
+        # checked at chat() entry so no ChatResponse is ever produced.
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="would call tool",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"query": "q"})],
+                finish_reason="tool_use",
+            )
+        )
+
+        result = await saia.complete(task="Do work", abort_signal=signal)
+
+        assert result.paused is True
+        assert executed == []
+
+    async def test_pause_check_records_current_iteration_step(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Q2/pause_check: trace includes the iteration whose batch was cut short."""
+        saia = make_saia(mock_backend, tools=sample_tools, executor=dummy_executor)
+
+        # Batch of two tools; pause after the first.
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Let me do both",
+                tool_calls=[
+                    ToolCall(id="c1", name="search", arguments={"query": "q"}),
+                    ToolCall(id="c2", name="read_file", arguments={"path": "/x"}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        executed = 0
+
+        async def check_pause() -> bool:
+            nonlocal executed
+            executed += 1
+            return True  # pause after the first tool
+
+        result = await saia.complete(task="Do multiple things", pause_check=check_pause)
+
+        # Q4/pause_check: returns TaskResult(paused=True), no exception surfaces.
+        assert result.paused is True
+        assert result.completed is False
+        assert result.reason == "paused"
+        assert result.trace is not None
+        # pause_check fires AFTER the step is recorded (unlike abort_signal),
+        # so the current iteration is present in the trace.
+        assert len(result.trace.steps) == 1
+        assert result.trace.steps[0].phase == "iteration"
+
+    async def test_pause_check_history_resumable(
+        self, mock_backend: MockBackend, sample_tools: list[ToolDef]
+    ) -> None:
+        """Q1/pause_check: 'Paused.' acks + tool results round-trip; resume completes."""
+        executed: list[str] = []
+
+        async def tracking_executor(name: str, args: dict[str, Any]) -> str:
+            executed.append(name)
+            return f"Result of {name}"
+
+        saia = make_saia(mock_backend, tools=sample_tools, executor=tracking_executor)
+
+        # Batch of two tools; pause between them.
+        mock_backend.queue_tool_response(
+            ChatResponse(
+                content="Doing both",
+                tool_calls=[
+                    ToolCall(id="c1", name="search", arguments={"query": "q"}),
+                    ToolCall(id="c2", name="read_file", arguments={"path": "/x"}),
+                ],
+                finish_reason="tool_use",
+            )
+        )
+
+        async def pause_after_first() -> bool:
+            return True
+
+        paused = await saia.complete(task="Do both", pause_check=pause_after_first)
+        assert paused.paused is True
+        assert executed == ["search"]
+
+        # Round-trip the paused history into a fresh conversation.
+        resumed_conv = ListConversation()
+        for msg in paused.history:
+            resumed_conv.append(Message.from_dict(msg.to_dict()))
+
+        # Resume: LLM finishes; classifier confirms.
+        mock_backend.queue_tool_response(
+            ChatResponse(content="All done.", tool_calls=[], finish_reason="end_turn")
+        )
+        mock_backend.set_structured_response(
+            ClassifyResult, ClassifyResult(category="completed", confidence=1.0, reason="Done")
+        )
+
+        resumed = await saia.complete(task="ignored", conversation=resumed_conv, resume=True)
+
+        assert resumed.completed is True
+        # search executed once during pre-pause; read_file was acked "Paused."
+        # and never re-executed on resume.
+        assert executed == ["search"]

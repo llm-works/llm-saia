@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Cancellation contract for `Complete()` (`abort_signal`, `pause_check`, `PauseRequested`
+  from `on_iteration`) is now documented in the `Complete.__call__` docstring and
+  `docs/production.md`. Behavior unchanged; pins return path, history serializability,
+  `VerbTrace` shape (N-1 vs N steps), and in-flight tool semantics.
+
 ### Added
 - `ChatResponse.llm_request_id` — optional backend-assigned request ID, propagated to
   `Step.llm_call.llm_request_id`. Lets consumers correlate backend callback events to
