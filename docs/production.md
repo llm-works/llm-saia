@@ -56,11 +56,12 @@ try:
     result = await saia.verify(code, "no SQL injection")
 except TruncatedResponseError as e:
     # Response was cut off - increase token limit
+    # Avoid logging raw_content by default (may contain user data)
     logger.warning(
         "Response truncated",
         extra={
             "schema": e.schema_name,
-            "raw_content": e.raw_content[:200],
+            "content_length": len(e.raw_content),
         },
     )
     # Retry with higher limit
@@ -68,23 +69,25 @@ except TruncatedResponseError as e:
 
 except StructuredOutputError as e:
     # LLM returned malformed output
+    # Avoid logging raw_content by default (may contain user data)
     logger.error(
         "Invalid output",
         extra={
             "schema": e.schema_name,
             "parse_error": e.parse_error,
-            "raw_content": e.raw_content[:500],
+            "content_length": len(e.raw_content),
         },
     )
     raise
 
 except BackendError as e:
     # Network/API error
+    # Avoid logging response_body by default (may contain sensitive data)
     logger.error(
         "Backend failed",
         extra={
             "status_code": e.status_code,
-            "response_body": e.response_body,
+            "has_body": bool(e.response_body),
         },
     )
     raise
@@ -283,7 +286,7 @@ The pinned contract (also enforced by
 | Return path | `TaskResult(paused=True, completed=False, reason="paused")` — no exception | Same |
 | History serializable | Yes. Round-trip each `Message` via `to_dict`/`from_dict`, load into `ListConversation`, resume with `complete(conversation=..., resume=True)` | Same |
 | Partial `VerbTrace` observable | Yes, on the configured tracer *and* on `TaskResult.trace`. Contains `N-1` iteration steps — the cancelled iteration raised before its `Step` was recorded | Yes. Contains `N` steps — the cancelled iteration's `Step` is recorded before `pause_check` fires |
-| In-flight tool calls | None. Abort fires inside `backend.chat()` before any tool of the current iteration starts | Tool that completed keeps its real result; remaining tools in the batch are acknowledged with a `"Paused."` tool message and never executed. Currently-executing tool calls are not cancelled — the check only runs between calls |
+| In-flight tool calls | None. `abort_signal` fires inside `backend.chat()` before any tool starts; `on_iteration` fires after the LLM response but before tool execution — same outcome, different timing | Tool that completed keeps its real result; remaining tools in the batch are acknowledged with a `"Paused."` tool message and never executed. Currently-executing tool calls are not cancelled — the check only runs between calls |
 
 Resumption example:
 
@@ -292,7 +295,7 @@ signal = asyncio.Event()
 paused = await saia.complete(task="Long job", abort_signal=signal)
 if paused.paused:
     # Persist the history however you like — every Message.to_dict() is JSON-safe.
-    save(msg.to_dict() for msg in paused.history)
+    save([msg.to_dict() for msg in paused.history])
 
 # Later:
 conv = ListConversation()

@@ -1786,7 +1786,10 @@ class TestCancellationContract:
 
         result = await saia.complete(task="Do multiple things", pause_check=check_pause)
 
+        # Q4/pause_check: returns TaskResult(paused=True), no exception surfaces.
         assert result.paused is True
+        assert result.completed is False
+        assert result.reason == "paused"
         assert result.trace is not None
         # pause_check fires AFTER the step is recorded (unlike abort_signal),
         # so the current iteration is present in the trace.
