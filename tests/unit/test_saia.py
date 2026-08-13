@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from llm_saia.core.conversation import ListConversation
 from llm_saia.core.errors import StructuredOutputError
 from llm_saia.core.types import ChooseResult, ClassifyResult, Critique, VerbResult, VerifyResult
 from llm_saia.guards import schema_retry
@@ -271,3 +272,17 @@ class TestCompleteStructured:
         )
 
         assert result.value.verdict == "y"
+
+    async def test_forwards_conversation(self, mock_backend: MockBackend) -> None:
+        """Conversation is forwarded and updated with user prompt and response."""
+        saia = make_saia(mock_backend)
+        mock_backend.set_structured_response(_Judgment, _Judgment("yes", 0.95))
+        conv = ListConversation()
+
+        await saia.complete_structured("Judge this.", _Judgment, conversation=conv)
+
+        messages = conv.as_messages()
+        assert len(messages) == 2
+        assert messages[0].role == "user"
+        assert messages[0].content == "Judge this."
+        assert messages[1].role == "assistant"
