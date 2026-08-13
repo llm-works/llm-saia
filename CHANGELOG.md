@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VerbTrace` shape (N-1 vs N steps), and in-flight tool semantics.
 
 ### Added
+- `SAIA.complete_structured(prompt, schema, *, conversation=None) -> VerbResult[T]` —
+  publishes the primitive every built-in verb runs on. Sends the prompt verbatim (no
+  framing) and returns a typed value; composes with `with_*` and `with_guard(...)`.
 - `ChatResponse.llm_request_id` — optional backend-assigned request ID, propagated to
   `Step.llm_call.llm_request_id`. Lets consumers correlate backend callback events to
   tracer steps without fuzzy joins. `None` when the backend doesn't supply one.
