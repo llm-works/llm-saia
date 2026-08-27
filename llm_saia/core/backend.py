@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Backend interface that any LLM framework must implement.
 
 SAIA defines what it needs from an LLM backend - implementations live elsewhere

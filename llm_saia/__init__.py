@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+#
+# Maintained by LLM Works LLC (https://llm-works.ai) and contributors.
+
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
 from .builder import SAIABuilder

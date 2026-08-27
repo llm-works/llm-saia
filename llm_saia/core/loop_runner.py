@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Loop execution engine for verbs.
 
 Executes the unified loop on behalf of a Verb, delegating decisions

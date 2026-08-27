@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tree-structured tracing for verb execution observability.
 
 Every verb call produces a :class:`VerbTrace` — a tree with :class:`Step`

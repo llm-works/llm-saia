@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Loop controllers for the Complete verb.
 
 Controllers decide what action to take at each iteration of the agent loop.

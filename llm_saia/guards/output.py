@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Output guards for validating final LLM responses.
 
 Output guards run after the LLM generates a response and can trigger retries

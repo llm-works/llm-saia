@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Output guard mixin for verb classes.
 
 Provides guard application, retry logic, and field-level guard extraction.

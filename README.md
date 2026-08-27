@@ -247,3 +247,5 @@ SAIA's structured verb outputs create opportunities beyond inference:
 ## License
 
 Apache 2.0 - see [LICENSE](LICENSE)
+
+Maintained by [LLM Works LLC](https://llm-works.ai) and contributors.

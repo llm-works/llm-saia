@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tests for tree-structured trace: data model, Tracer, and verb integration."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Logging and diagnostics mixin for verb classes.
 
 Provides loop logging, response logging, tool-support warnings, and text truncation.

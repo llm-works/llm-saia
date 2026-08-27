@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Guard evaluation for verbs.
 
 Handles iteration guard evaluation and feedback collection.
