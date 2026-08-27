@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """VERIFY verb: Check if artifact satisfies predicate."""
 
 from __future__ import annotations

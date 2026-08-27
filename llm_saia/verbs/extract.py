@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """EXTRACT verb: Extract structured data from content."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Per-iteration tool-visibility gate evaluation.
 
 Evaluates :data:`~llm_saia.ToolGate` callbacks registered in

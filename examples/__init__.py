@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Shared utilities for SAIA examples.
 
 Provides an OpenAI-compatible backend, a simple stderr logger, and trace helpers.

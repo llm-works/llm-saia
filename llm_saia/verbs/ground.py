@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """GROUND verb: Anchor artifact against sources for evidence."""
 
 from __future__ import annotations

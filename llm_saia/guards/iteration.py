@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Iteration guards for controlling agent tool loops.
 
 Iteration guards run during tool calling loops and can inject feedback

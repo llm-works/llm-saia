@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Unified loop infrastructure with pluggable strategies.
 
 Provides core loop mechanics shared by all verbs, with decision-making

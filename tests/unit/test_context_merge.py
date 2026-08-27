@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tests for context-merge semantics — ``merge_context`` primitive and
 ``Configurable.with_context()`` integration.
 
