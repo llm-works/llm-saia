@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Configurable interface for fluent per-call overrides."""
 
 from __future__ import annotations
@@ -7,10 +10,10 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from .backend import ToolDef
-    from .config import CallOptions, Config, JsonParser
+    from .config import CallOptions, Config, JsonParser, ToolGate, ToolGateContextFactory
     from .guard import IterationGuard, OutputGuard
     from .trace import Tracer
 
@@ -226,3 +229,33 @@ class Configurable(ABC):
             parser: Function that takes JSON string and returns parsed value.
         """
         return self._with_config(json_parser=parser)
+
+    def with_tool_gate(self, tool_name: str, gate: ToolGate) -> Self:
+        """Return new instance with a visibility gate for ``tool_name``.
+
+        Evaluated before each LLM call; when the gate blocks, the tool is
+        stripped from the outbound schema so the model cannot generate a call
+        to it. See :class:`~llm_saia.ToolGateContext` for the callback contract.
+        """
+        merged: dict[str, ToolGate] = dict(self._config.tool_gates)
+        merged[tool_name] = gate
+        return self._with_config(tool_gates=merged)
+
+    def with_tool_gates(self, gates: Mapping[str, ToolGate]) -> Self:
+        """Return new instance with multiple visibility gates registered.
+
+        Merges with any previously-registered gates; entries in ``gates`` win
+        on conflict.
+        """
+        merged: dict[str, ToolGate] = dict(self._config.tool_gates)
+        merged.update(gates)
+        return self._with_config(tool_gates=merged)
+
+    def with_tool_gate_context_factory(self, factory: ToolGateContextFactory) -> Self:
+        """Return new instance with a factory that populates ``ctx.extra`` per iteration.
+
+        See :data:`~llm_saia.ToolGateContextFactory`. Use to amortize a
+        shared computation (e.g. a transcript walk) across multiple gates
+        instead of re-running it in each one.
+        """
+        return self._with_config(tool_gate_context_factory=factory)

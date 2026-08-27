@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Loop execution engine for verbs.
 
 Executes the unified loop on behalf of a Verb, delegating decisions
@@ -24,7 +27,12 @@ if TYPE_CHECKING:
 
 @dataclass
 class _IterationContext:
-    """Loop-invariant state passed to each iteration."""
+    """Loop state passed between the runner and its helpers.
+
+    Immutable fields are set once at loop start; mutable fields (iteration,
+    total_tokens, start_time, last_response) advance across iterations and
+    are read by :meth:`_LoopRunner._incomplete` to build the final result.
+    """
 
     config: CallOptions
     strategy: LoopStrategy
@@ -36,6 +44,11 @@ class _IterationContext:
     trace: VerbTrace | None
     max_tokens: int | None
     temperature: float | None
+    # Mutable loop state
+    iteration: int = 0
+    total_tokens: int = 0
+    start_time: float = 0.0
+    last_response: ChatResponse | None = None
 
 
 class _LoopHost(Protocol):
@@ -49,6 +62,8 @@ class _LoopHost(Protocol):
         *,
         call: CallOptions | None = None,
         abort_signal: asyncio.Event | None = None,
+        iteration: int | None = None,
+        last_response: ChatResponse | None = None,
     ) -> ChatResponse:
         """Call the LLM backend."""
         ...
@@ -154,8 +169,6 @@ class _LoopRunner:
         """Run the loop until completion, failure, pause, or limit."""
         from .errors import PauseRequested
 
-        h = self._host
-        start_time, iteration, total_tokens, last_content = time.monotonic(), 0, 0, ""
         ctx = _IterationContext(
             config=config,
             strategy=strategy,
@@ -165,24 +178,44 @@ class _LoopRunner:
             on_iteration=on_iteration,
             on_decide=on_decide,
             trace=trace,
-            max_tokens=h._max_tokens(config),
-            temperature=h._resolve_temperature(config),
+            max_tokens=self._host._max_tokens(config),
+            temperature=self._host._resolve_temperature(config),
         )
-
         try:
-            while not h._should_stop(config, iteration, start_time, total_tokens):
-                result, tokens, content = await self._run_iteration(ctx, messages, iteration)
-                total_tokens, last_content = total_tokens + tokens, content
-                if result is not None:
-                    return self._finalize_complete(result, iteration, start_time, total_tokens)
-                iteration += 1
-            h._log_limit_reached(config, iteration, start_time, total_tokens)
-            return self._incomplete_result(messages, iteration, total_tokens, last_content, False)
+            return await self._drive(ctx, messages)
         except PauseRequested:
-            return self._incomplete_result(messages, iteration, total_tokens, last_content, True)
+            return self._incomplete(messages, ctx, paused=True)
+
+    async def _drive(self, ctx: _IterationContext, messages: list[Message]) -> CoreLoopResult:
+        """Main loop body — iterate until a terminal decision or limit is reached."""
+        h = self._host
+        ctx.start_time = time.monotonic()
+        while not h._should_stop(ctx.config, ctx.iteration, ctx.start_time, ctx.total_tokens):
+            result, tokens, _ = await self._run_iteration(
+                ctx, messages, ctx.iteration, ctx.last_response
+            )
+            # ctx.last_response and ctx.total_tokens updated inside _run_iteration
+            if result is not None:
+                return self._finalize_complete(
+                    result, ctx.iteration, ctx.start_time, ctx.total_tokens
+                )
+            ctx.iteration += 1
+        h._log_limit_reached(ctx.config, ctx.iteration, ctx.start_time, ctx.total_tokens)
+        return self._incomplete(messages, ctx, paused=False)
+
+    def _incomplete(
+        self, messages: list[Message], ctx: _IterationContext, *, paused: bool
+    ) -> CoreLoopResult:
+        """Build an incomplete result (limit or pause), pulling content from last response."""
+        content = ctx.last_response.content if ctx.last_response else ""
+        return self._incomplete_result(messages, ctx.iteration, ctx.total_tokens, content, paused)
 
     async def _call_llm(
-        self, ctx: _IterationContext, messages: list[Message], iteration: int
+        self,
+        ctx: _IterationContext,
+        messages: list[Message],
+        iteration: int,
+        last_response: ChatResponse | None,
     ) -> tuple[ChatResponse, int]:
         """Call LLM and return (response, tokens)."""
         h = self._host
@@ -193,6 +226,8 @@ class _LoopRunner:
             ctx.temperature,
             call=ctx.config,
             abort_signal=ctx.abort_signal,
+            iteration=iteration,
+            last_response=last_response,
         )
         tokens = response.input_tokens + response.output_tokens
         h._log_response(response, iteration, tokens)
@@ -204,10 +239,15 @@ class _LoopRunner:
         ctx: _IterationContext,
         messages: list[Message],
         iteration: int,
-    ) -> tuple[CoreLoopResult | None, int, str]:
-        """Run one loop iteration. Returns (result, tokens, content)."""
+        last_response: ChatResponse | None,
+    ) -> tuple[CoreLoopResult | None, int, ChatResponse]:
+        """Run one loop iteration. Returns (result, tokens, response)."""
         h = self._host
-        response, tokens = await self._call_llm(ctx, messages, iteration)
+        response, tokens = await self._call_llm(ctx, messages, iteration, last_response)
+
+        # Update context before pause-capable callbacks so PauseRequested has current state
+        ctx.last_response = response
+        ctx.total_tokens += tokens
 
         _, outcomes = h._run_iteration_guards(
             ctx.config.iteration_guards, response, iteration, ctx.config.max_iterations
@@ -231,7 +271,7 @@ class _LoopRunner:
             decision, response, messages, ctx.conv, ctx.pause_check, advisory_fb
         )
         ctx.strategy.on_iteration_complete(decision, tokens)
-        return result, tokens, response.content
+        return result, tokens, response
 
     async def _execute_decision(
         self,

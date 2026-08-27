@@ -11,6 +11,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -30,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ruff mypy
+          python -m pip install ruff mypy appinfra
 
       - name: Check formatting
         run: python -m ruff format --check .
@@ -40,6 +43,9 @@ jobs:
 
       - name: Type check
         run: python -m mypy llm_saia/ --ignore-missing-imports
+
+      - name: SPDX header check
+        run: python -m appinfra.cli.cli -l error cq spdx
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -105,4 +111,4 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run tests with coverage
-        run: python -m pytest tests/ -m unit --cov=llm_saia --cov-fail-under=90 --cov-report=term
+        run: python -m pytest tests/ -m unit --cov=llm_saia --cov-fail-under=95 --cov-report=term

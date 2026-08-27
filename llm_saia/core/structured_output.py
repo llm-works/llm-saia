@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Structured output handling for verbs.
 
 Handles JSON schema-based structured output completion, including

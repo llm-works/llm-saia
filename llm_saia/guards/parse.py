@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Parse guards for handling structured output parsing failures.
 
 Parse guards run when structured output parsing fails and can provide

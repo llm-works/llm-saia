@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Pytest configuration and fixtures."""
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import pytest
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
 from llm_saia.core.config import CallOptions, Config, TerminalConfig
+from llm_saia.core.errors import PauseRequested
 from llm_saia.core.logger import Logger, NullLogger
 from llm_saia.core.types import (
     ChatResponse,
@@ -153,6 +157,9 @@ class MockBackend(Backend):
         abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Return predetermined response."""
+        # Model a streaming backend that checks abort_signal before emitting.
+        if abort_signal is not None and abort_signal.is_set():
+            raise PauseRequested()
         self.last_messages = messages
         self.last_system = system
         self.last_tools = tools

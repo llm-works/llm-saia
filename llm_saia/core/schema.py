@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Schema conversion utilities for structured output.
 
 SAIA handles structured output by building prompts with JSON schema

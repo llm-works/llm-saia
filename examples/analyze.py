@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Example: Use the Complete verb with tools to analyze its own source code.
 
 Demonstrates the agentic tool loop with tracing — the LLM reads files, reasons

@@ -9,6 +9,7 @@ a defined input/output contract.
 from llm_saia import Verb, Config
 from dataclasses import dataclass
 
+
 class MyVerb(Verb):
     def __init__(self, config: Config):
         super().__init__(config)
@@ -48,6 +49,7 @@ class Analysis:
     score: int
     issues: list[str]
 
+
 async def __call__(self, code: str) -> Analysis:
     prompt = f"Analyze this code:\n{code}"
     return await self._complete_structured(prompt, Analysis)
@@ -85,11 +87,13 @@ async def __call__(self, question: str) -> str:
 from dataclasses import dataclass
 from llm_saia import Verb, Config
 
+
 @dataclass
 class Summary:
     title: str
     key_points: list[str]
     word_count: int
+
 
 class Summarize(Verb):
     """Summarize text into structured output."""
@@ -123,11 +127,13 @@ print(summary.key_points)
 from dataclasses import dataclass
 from llm_saia import Verb, Config, CallOptions
 
+
 @dataclass
 class Investigation:
     findings: list[str]
     conclusion: str
     confidence: float
+
 
 class Investigate(Verb):
     """Investigate using tools and return structured findings."""
@@ -199,6 +205,7 @@ saia = SAIA.builder().backend(backend).build()
 my_verb = MyVerb(saia._config)
 result = await my_verb(input)
 
+
 # Option 2: Extend SAIA (for a framework)
 class MySAIA(SAIA):
     @property
@@ -208,6 +215,7 @@ class MySAIA(SAIA):
     @property
     def investigate(self) -> Investigate:
         return Investigate(self._config)
+
 
 # Usage
 saia = MySAIA.builder().backend(backend).build()

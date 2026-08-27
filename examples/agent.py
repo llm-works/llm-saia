@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Agent with tool loop: complete() iterates until done
 
 Requires a model with robust tool calling support. Small or base models often fail

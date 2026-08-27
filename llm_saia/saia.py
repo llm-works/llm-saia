@@ -1,15 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """SAIA class - the main interface for the framework."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from .core.config import DEFAULT_CALL, CallOptions, Config
 from .core.configurable import Configurable
+from .core.types import VerbResult
 
 if TYPE_CHECKING:
     from .builder import SAIABuilder
+    from .core.conversation import ConversationLike
 from .verbs import (
     Ask,
     Choose,
@@ -26,6 +31,8 @@ from .verbs import (
     Synthesize,
     Verify,
 )
+
+T = TypeVar("T")
 
 
 class SAIA(Configurable):
@@ -88,6 +95,51 @@ class SAIA(Configurable):
     def call_options(self) -> CallOptions:
         """Current call options."""
         return self._config.call  # type: ignore[return-value]
+
+    # --- Structured Completion ---
+
+    async def complete_structured(
+        self,
+        prompt: str,
+        schema: type[T],
+        *,
+        conversation: ConversationLike | None = None,
+    ) -> VerbResult[T]:
+        """Send ``prompt`` verbatim and parse the response against ``schema``.
+
+        Where :meth:`complete` returns raw text (and can drive a tool loop),
+        ``complete_structured`` returns a typed value: it sends the prompt
+        with no framing added, requests JSON output constrained by
+        ``schema``, and returns the parsed instance.
+
+        Use this when the caller has already composed the full prompt
+        (graders, LLM judges, drift detectors, synthesis critics) and no
+        domain verb fits — every domain verb (``extract``, ``verify``,
+        ``classify``, ...) prepends its own framing.
+
+        Args:
+            prompt: Prompt sent verbatim to the backend.
+            schema: Dataclass type describing the expected response shape.
+            conversation: Optional conversation to append messages to.
+
+        Returns:
+            A :class:`VerbResult` holding the parsed value and the emitted
+            :class:`VerbTrace`.
+
+        Guard semantics:
+            ``with_guard(...)`` chaining applies here just as it does on the
+            domain verbs.
+
+            - Iteration guards' ``parse_max_retries`` budgets sum. A
+              :class:`StructuredOutputError` (including its
+              :class:`TruncatedResponseError` subclass) consumes budget until
+              retries are exhausted or parsing succeeds.
+            - ``output_guards`` fire after a successful parse and may force
+              additional retries.
+        """
+        from .verbs.prompt import _PromptVerb
+
+        return await _PromptVerb(self._config)(prompt, schema, conversation=conversation)
 
     # --- Memory Verbs ---
 

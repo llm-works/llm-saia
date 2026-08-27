@@ -1,10 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tests for the main SAIA class."""
 
 from dataclasses import dataclass
 
 import pytest
 
-from llm_saia.core.types import ChooseResult, ClassifyResult, Critique, VerifyResult
+from llm_saia.core.conversation import ListConversation
+from llm_saia.core.errors import StructuredOutputError
+from llm_saia.core.types import ChooseResult, ClassifyResult, Critique, VerbResult, VerifyResult
+from llm_saia.guards import schema_retry
 from llm_saia.verbs.decompose import DecomposeResult
 from tests.unit.conftest import MockBackend, make_saia
 
@@ -185,3 +191,101 @@ class TestSAIA:
         result = saia.compose("Single layer")
 
         assert result == "Single layer"
+
+
+@dataclass
+class _Judgment:
+    verdict: str
+    confidence: float
+
+
+class TestCompleteStructured:
+    """Tests for SAIA.complete_structured — the public structured primitive."""
+
+    async def test_returns_verbresult_with_parsed_value(self, mock_backend: MockBackend) -> None:
+        """Parses backend response against schema and wraps in VerbResult."""
+        saia = make_saia(mock_backend)
+        mock_backend.set_structured_response(_Judgment, _Judgment(verdict="yes", confidence=0.9))
+
+        result = await saia.complete_structured("Is this a cat?", _Judgment)
+
+        assert isinstance(result, VerbResult)
+        assert result.value.verdict == "yes"
+        assert result.value.confidence == 0.9
+
+    async def test_sends_prompt_verbatim(self, mock_backend: MockBackend) -> None:
+        """Unlike domain verbs, no framing is prepended to the prompt."""
+        saia = make_saia(mock_backend)
+        mock_backend.set_structured_response(_Judgment, _Judgment("y", 1.0))
+        prompt = "Return {'verdict': 'y', 'confidence': 1.0}"
+
+        await saia.complete_structured(prompt, _Judgment)
+
+        # Prompt appears verbatim as the user message content (Extract, by
+        # contrast, would wrap it with "Extract the following...").
+        assert mock_backend.last_prompt == prompt
+
+    async def test_emits_trace(self, mock_backend: MockBackend) -> None:
+        """Result carries a VerbTrace tagged with the internal verb name."""
+        saia = make_saia(mock_backend)
+        mock_backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+
+        result = await saia.complete_structured("prompt", _Judgment)
+
+        assert result.trace is not None
+        assert result.trace.trace_id
+        assert result.trace.verb == "_PromptVerb"
+        assert len(result.trace.steps) >= 1
+
+    async def test_with_temperature_threads_through(self, mock_backend: MockBackend) -> None:
+        """with_* chaining is preserved: config threads to the backend call."""
+        saia = make_saia(mock_backend)
+        mock_backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+
+        await saia.with_temperature(0.3).complete_structured("prompt", _Judgment)
+
+        assert mock_backend.last_temperature == 0.3
+
+    async def test_with_request_id_propagates_to_trace(self, mock_backend: MockBackend) -> None:
+        """with_request_id reaches the emitted VerbTrace."""
+        saia = make_saia(mock_backend).with_request_id("req-xyz")
+        mock_backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+
+        result = await saia.complete_structured("prompt", _Judgment)
+
+        assert result.trace.request_id == "req-xyz"
+
+    async def test_raises_on_malformed_json_without_guard(self, mock_backend: MockBackend) -> None:
+        """Without a retry guard, a parse failure surfaces as StructuredOutputError."""
+        saia = make_saia(mock_backend)
+        mock_backend.queue_raw_structured("not json at all")
+
+        with pytest.raises(StructuredOutputError):
+            await saia.complete_structured("prompt", _Judgment)
+
+    async def test_retries_with_schema_retry_guard(self, mock_backend: MockBackend) -> None:
+        """with_guard(schema_retry()) retries on parse failure and succeeds."""
+        saia = make_saia(mock_backend)
+        # First response bad, second good.
+        mock_backend.queue_raw_structured("not json")
+        mock_backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+
+        result = await saia.with_guard(schema_retry(max_retries=2)).complete_structured(
+            "prompt", _Judgment
+        )
+
+        assert result.value.verdict == "y"
+
+    async def test_forwards_conversation(self, mock_backend: MockBackend) -> None:
+        """Conversation is forwarded and updated with user prompt and response."""
+        saia = make_saia(mock_backend)
+        mock_backend.set_structured_response(_Judgment, _Judgment("yes", 0.95))
+        conv = ListConversation()
+
+        await saia.complete_structured("Judge this.", _Judgment, conversation=conv)
+
+        messages = conv.as_messages()
+        assert len(messages) == 2
+        assert messages[0].role == "user"
+        assert messages[0].content == "Judge this."
+        assert messages[1].role == "assistant"

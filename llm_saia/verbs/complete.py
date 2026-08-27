@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """COMPLETE verb: Execute a task with tool calling and completion confirmation."""
 
 from __future__ import annotations
@@ -58,7 +61,50 @@ class Complete(Verb):
                 Remaining tools are acknowledged but not executed.
             abort_signal: Optional event for fast abort during LLM streaming.
                 Set this event to abort the current LLM call within ~100ms
-                (requires backend support). Raises ``PauseRequested`` on abort.
+                (requires backend support). The backend raises ``PauseRequested``
+                on abort; ``Complete`` catches it and returns paused.
+
+        Cancellation contract
+        =====================
+
+        Both ``abort_signal`` and ``pause_check`` (and ``PauseRequested`` raised
+        from ``on_iteration``) exit the loop through a single path and never
+        propagate an exception to the caller. Behavior is pinned by the tests
+        in ``tests/unit/test_task.py::TestCancellationContract``.
+
+        Return path
+            Both triggers return a ``TaskResult`` with ``paused=True``,
+            ``completed=False``, and ``reason="paused"``. No exception surfaces.
+
+        History serializability
+            ``TaskResult.history`` at the pause point round-trips through
+            ``Message.to_dict()`` / ``Message.from_dict()`` and can be
+            reloaded into a ``ListConversation`` to resume via
+            ``complete(conversation=..., resume=True)``. This holds for both
+            triggers.
+
+        Partial VerbTrace
+            ``TaskResult.trace`` is always emitted and observable on the
+            configured tracer (via the ``try/finally`` around the loop). The
+            two triggers differ in what the trace contains for the cancelled
+            iteration:
+
+            - ``abort_signal`` (and ``PauseRequested`` from ``on_iteration``):
+              raises before the current iteration's ``Step`` is recorded, so
+              the trace holds ``N-1`` iterations.
+            - ``pause_check``: raises after the current iteration's ``Step``
+              is recorded (pause fires during tool execution), so the trace
+              holds ``N`` iterations.
+
+        In-flight tool calls
+            - ``abort_signal`` fires inside ``backend.chat()`` before any tool
+              of the current iteration starts; no tool executions are
+              interrupted.
+            - ``pause_check`` fires *between* tools within a single batch.
+              The tool that just completed keeps its real result; remaining
+              tools in the batch are acknowledged with a ``"Paused."`` tool
+              message and are never executed. Currently-executing tool calls
+              are not cancelled — the check only runs between calls.
         """
         self._validate_call(resume, conversation)
         verb_trace = self._init_verb_trace()
@@ -262,6 +308,7 @@ class Complete(Verb):
             output_tokens=response.output_tokens,
             finish_reason=response.finish_reason,
             model=response.model,
+            llm_request_id=response.llm_request_id,
         )
 
     def _core_result_to_task_result(

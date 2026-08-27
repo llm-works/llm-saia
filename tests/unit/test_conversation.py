@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tests for ConversationLike protocol and ListConversation."""
 
 import pytest
@@ -174,6 +177,20 @@ class TestToolCallSerialization:
         restored = ToolCall.from_dict(original.to_dict())
 
         assert restored == original
+
+    def test_to_dict_omits_extra_content_when_none(self) -> None:
+        tc = ToolCall(id="call_1", name="search", arguments={"q": "x"})
+        assert "extra_content" not in tc.to_dict()
+
+    def test_extra_content_roundtrip(self) -> None:
+        extra = {"thought_signature": "sig-abc123"}
+        original = ToolCall(
+            id="call_4", name="web_search", arguments={"q": "x"}, extra_content=extra
+        )
+        restored = ToolCall.from_dict(original.to_dict())
+
+        assert restored == original
+        assert restored.extra_content == extra
 
 
 class TestMessageSerialization:

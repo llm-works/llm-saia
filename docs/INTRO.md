@@ -99,3 +99,7 @@ Part of a larger project, currently being developed:
 
 - [llm-saia](https://github.com/llm-works/llm-saia) - this repo
 - [llm-works](https://github.com/llm-works) - full agent stack
+
+---
+
+Maintained by [LLM Works LLC](https://llm-works.ai) and contributors.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Context dict merge semantics for :meth:`Configurable.with_context`.
 
 The primitive is exposed so consumers that pre-compose context outside the

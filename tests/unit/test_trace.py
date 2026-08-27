@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tests for tree-structured trace: data model, Tracer, and verb integration."""
 
 from __future__ import annotations
@@ -259,6 +262,23 @@ class TestBuildStepFromResponse:
         response = ChatResponse(content="hi", tool_calls=[], call_id="c1")
         step = build_step_from_response(response, phase="attempt", trace_id="t1", verb="Ask")
         assert step.llm_call.model is None
+
+    def test_propagates_llm_request_id_into_llm_call(self) -> None:
+        """ChatResponse.llm_request_id flows into LLMCall for callback correlation."""
+        response = ChatResponse(
+            content="hi",
+            tool_calls=[],
+            call_id="c1",
+            llm_request_id="req-abc12345",
+        )
+        step = build_step_from_response(response, phase="attempt", trace_id="t1", verb="Ask")
+        assert step.llm_call.llm_request_id == "req-abc12345"
+
+    def test_llm_request_id_defaults_to_none_when_backend_omits_it(self) -> None:
+        """Backends that don't surface llm_request_id leave LLMCall.llm_request_id as None."""
+        response = ChatResponse(content="hi", tool_calls=[], call_id="c1")
+        step = build_step_from_response(response, phase="attempt", trace_id="t1", verb="Ask")
+        assert step.llm_call.llm_request_id is None
 
     def test_builds_from_tool_response(self) -> None:
         """Builds a Step from a response with tool calls."""

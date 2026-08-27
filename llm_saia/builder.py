@@ -1,13 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Fluent builder for SAIA instances."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from .core import trace
 from .core.backend import Backend, ToolDef
-from .core.config import DEFAULT_CALL, CallOptions, Config, JsonParser, TerminalConfig
+from .core.config import (
+    DEFAULT_CALL,
+    CallOptions,
+    Config,
+    JsonParser,
+    TerminalConfig,
+    ToolGate,
+    ToolGateContextFactory,
+)
 from .core.logger import Logger, NullLogger
 
 if TYPE_CHECKING:
@@ -45,6 +56,8 @@ class SAIABuilder:
         self._request_id: str | None = DEFAULT_CALL.request_id
         # Config-level options
         self._json_parser: JsonParser | None = None
+        self._tool_gates: dict[str, ToolGate] = {}
+        self._tool_gate_context_factory: ToolGateContextFactory | None = None
 
     def backend(self, backend: Backend) -> SAIABuilder:
         """Set the LLM backend (required)."""
@@ -74,6 +87,7 @@ class SAIABuilder:
         failure_values: tuple[str, ...] | None = None,
         *,
         require_confirmation: bool = True,
+        min_iterations: int = 0,
     ) -> SAIABuilder:
         """Set terminal tool configuration for task completion.
 
@@ -87,6 +101,10 @@ class SAIABuilder:
                 Note: Many models respond to confirmation prompts with text instead of
                 a tool call, causing terminal_data to be None. Set to False if you
                 don't need explicit confirmation.
+            min_iterations: Hide the terminal tool from the outbound schema
+                until this many iterations have elapsed. Prevents the model
+                from generating an expensive terminal payload that a post-response
+                :class:`~llm_saia.IterationGuard` would then reject. Default 0.
         """
         self._terminal = TerminalConfig(
             tool=tool,
@@ -94,10 +112,17 @@ class SAIABuilder:
             status_field=status_field,
             failure_values=failure_values or ("stuck", "failed", "error"),
             require_confirmation=require_confirmation,
+            min_iterations=min_iterations,
         )
         return self
 
-    def terminal_tool(self, name: str, *, require_confirmation: bool = True) -> SAIABuilder:
+    def terminal_tool(
+        self,
+        name: str,
+        *,
+        require_confirmation: bool = True,
+        min_iterations: int = 0,
+    ) -> SAIABuilder:
         """Set terminal tool name for task completion (simple form).
 
         For more control, use .terminal() instead.
@@ -106,8 +131,45 @@ class SAIABuilder:
             name: Name of the terminal tool
             require_confirmation: If True, require model to call terminal tool twice.
                 If False, complete immediately on first call. Default True.
+            min_iterations: Hide the terminal tool from the outbound schema
+                until this many iterations have elapsed. Default 0.
         """
-        self._terminal = TerminalConfig(tool=name, require_confirmation=require_confirmation)
+        self._terminal = TerminalConfig(
+            tool=name,
+            require_confirmation=require_confirmation,
+            min_iterations=min_iterations,
+        )
+        return self
+
+    def tool_gate(self, tool_name: str, gate: ToolGate) -> SAIABuilder:
+        """Register a per-tool visibility gate.
+
+        Evaluated before each LLM call; when the gate blocks, ``tool_name`` is
+        filtered from that call's outbound schema so the model cannot generate
+        a call to it. See :class:`~llm_saia.ToolGateContext` for the callback
+        contract.
+        """
+        self._tool_gates[tool_name] = gate
+        return self
+
+    def tool_gates(self, gates: Mapping[str, ToolGate]) -> SAIABuilder:
+        """Register multiple per-tool visibility gates at once.
+
+        Merges with any previously-registered gates; later registrations for the
+        same tool name win.
+        """
+        self._tool_gates.update(gates)
+        return self
+
+    def tool_gate_context_factory(self, factory: ToolGateContextFactory) -> SAIABuilder:
+        """Register a factory that computes shared per-iteration state for gates.
+
+        The factory runs once per LLM call; its return value is attached as
+        ``ToolGateContext.extra`` for every gate on the same iteration. Use to
+        amortize a shared computation (e.g. a transcript walk) across multiple
+        gates instead of re-running it in each one.
+        """
+        self._tool_gate_context_factory = factory
         return self
 
     def logger(self, lg: Logger) -> SAIABuilder:
@@ -194,5 +256,7 @@ class SAIABuilder:
             tracer=self._tracer,
             warn_tool_support=self._warn_tool_support,
             json_parser=self._json_parser,
+            tool_gates=dict(self._tool_gates),
+            tool_gate_context_factory=self._tool_gate_context_factory,
         )
         return SAIA(config)

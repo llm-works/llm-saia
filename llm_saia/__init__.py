@@ -1,8 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+#
+# Maintained by LLM Works LLC (https://llm-works.ai) and contributors.
+
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
 from .builder import SAIABuilder
 from .core.backend import Backend, ChatResponse, ToolDef
-from .core.config import CallOptions, Config, JsonParser, TerminalConfig
+from .core.config import (
+    CallOptions,
+    Config,
+    JsonParser,
+    TerminalConfig,
+    ToolGate,
+    ToolGateContext,
+    ToolGateContextFactory,
+)
 from .core.conversation import Message, Role, ToolCall
 from .core.errors import (
     BackendError,
@@ -105,6 +118,10 @@ __all__ = [
     "SerializableConversationLike",
     # Terminal
     "TerminalConfig",
+    # Tool visibility gates
+    "ToolGate",
+    "ToolGateContext",
+    "ToolGateContextFactory",
     # Tracing
     "CallbackTracer",
     "GuardOutcome",

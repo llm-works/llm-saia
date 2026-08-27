@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
+
 """Tree-structured tracing for verb execution observability.
 
 Every verb call produces a :class:`VerbTrace` — a tree with :class:`Step`
@@ -56,6 +59,10 @@ class LLMCall:
     finish_reason: str | None = None
     duration_ms: int = 0
     model: str | None = None
+    # Backend-assigned request ID (e.g. llm-infer ChatRequest.id) — the same
+    # identifier that surfaces on the backend's request/response callbacks.
+    # Present when the backend supplies one; None otherwise.
+    llm_request_id: str | None = None
 
 
 @dataclass
@@ -225,6 +232,7 @@ def build_step_from_response(
             finish_reason=getattr(response, "finish_reason", None),
             duration_ms=call_duration,
             model=getattr(response, "model", None),
+            llm_request_id=getattr(response, "llm_request_id", None),
         ),
         tools=[ToolOutcome(name=tc.name, call_id=tc.id) for tc in (response.tool_calls or [])],
     )
