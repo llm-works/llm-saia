@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Python 3.13 and 3.14 added to the CI test matrix and pyproject classifiers;
+  README gains a "Supported Python versions" section. `requires-python` unchanged.
+- `smoke-wheel` CI job builds sdist+wheel, installs into a fresh venv, and runs
+  `examples/quickstart.py` on Python 3.12 and 3.14 — catches wheel-only drift.
+- `examples/quickstart.py`: runnable README quick-start with an in-process demo
+  backend (no API keys, no network).
+
+### Fixed
+- README quick-start accessors: verbs return `VerbResult`, so `result.value.passed`
+  (not `result.passed`), and similarly for `critique` and `decompose`.
+- README `verify`/`critique` prompts replaced with unambiguous ones; the previous
+  examples produced defensible but confusing results against a real backend.
+
 ## [0.6.0] - 2026-08-27
 
 ### Changed
