@@ -5,6 +5,10 @@
 
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
+from importlib.metadata import version as _meta_version
+
+__version__ = _meta_version("llm-saia")
+
 from .builder import SAIABuilder
 from .core.backend import Backend, ChatResponse, ToolDef
 from .core.config import (
@@ -66,6 +70,8 @@ from .core.verb import Verb
 from .saia import SAIA
 
 __all__ = [
+    # Version
+    "__version__",
     # Main class
     "SAIA",
     "SAIABuilder",
