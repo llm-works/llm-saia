@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-29
+
+### Added
+- Python 3.13 and 3.14 added to the CI test matrix and pyproject classifiers.
+- `smoke-wheel` CI job validates wheel installation on Python 3.12 and 3.14.
+- `examples/quickstart.py`: runnable README quick-start with in-process demo backend.
+- `__version__` now exposed at package level via `importlib.metadata`.
+
+### Fixed
+- README quick-start: verbs return `VerbResult`, so `result.value.passed` (not
+  `result.passed`).
+
 ## [0.6.0] - 2026-08-27
 
 ### Changed
@@ -258,7 +270,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/llm-works/llm-saia/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/llm-works/llm-saia/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/llm-works/llm-saia/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/llm-works/llm-saia/compare/v0.3.0...v0.4.0
