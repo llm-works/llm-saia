@@ -40,6 +40,16 @@ consistent patterns.
 **"Is this novel?"** Perhaps not. These are the patterns that emerge when you build LLM agents that
 need to actually work. SAIA extracts them into ~2500 lines anyone can use, inspect, and build on.
 
+## Supported Python versions
+
+CI tests every push against the full test suite:
+
+- **Linux (Ubuntu):** CPython 3.11, 3.12, 3.13, 3.14
+
+`requires-python = ">=3.11"` is declared in package metadata; newer Python
+versions are opt-in and validated against the full test suite before being
+added to the CI matrix.
+
 ## Installation
 
 ```bash
@@ -47,6 +57,10 @@ pip install llm-saia
 ```
 
 ## Quick Start
+
+Verbs return a `VerbResult` — `.value` holds the typed result, `.trace` the
+per-step execution trace. See `examples/quickstart.py` for a runnable version
+with an in-process canned backend.
 
 ```python
 from llm_saia import SAIA
@@ -57,17 +71,20 @@ async def main():
 
     # Verify a claim
     result = await saia.verify(
-        "This code handles null input safely", "no null pointer exceptions possible"
+        "def add(a, b): return a + b",
+        "the function returns the sum of its two arguments",
     )
-    print(f"Passed: {result.passed}, Reason: {result.reason}")
+    print(f"Passed: {result.value.passed}, Reason: {result.value.reason}")
 
     # Generate counter-arguments
-    critique = await saia.critique("Python is slow for all tasks")
-    print(f"Counter: {critique.counter_argument}")
+    critique = await saia.critique(
+        "Adding more programmers to a late project always makes it finish faster."
+    )
+    print(f"Counter: {critique.value.counter_argument}")
 
     # Break down a complex task
     subtasks = await saia.decompose("Build a REST API with authentication")
-    for task in subtasks:
+    for task in subtasks.value:
         print(f"- {task}")
 ```
 

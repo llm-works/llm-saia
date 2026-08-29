@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,12 +55,15 @@ jobs:
     needs: lint
     timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -74,17 +79,80 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/ -m unit -v --tb=short
 
-  # Summary job: required check that passes when all test matrix jobs pass
+  # Smoke test the PyPI-user path: build sdist+wheel with `python -m build`,
+  # install into a fresh venv OUTSIDE the source tree (so imports resolve from
+  # the wheel, not ./llm_saia/), and exercise the surface a first-time user
+  # hits — top-level imports, README quick-start against the installed wheel.
+  # Complements `test` (source-tree editable install); this catches wheel-only
+  # regressions (missing package data, broken exports, README-vs-installed
+  # API drift).
+  #
+  # Matrix: 3.12 (baseline, matches lint/coverage) + 3.14 (newest supported).
+  smoke-wheel:
+    name: Smoke (wheel install) ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 6
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # setuptools-scm needs full history to derive version
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python-version }}'
+          cache: 'pip'
+
+      - name: Install build frontend
+        run: python -m pip install --upgrade pip build
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Install wheel into fresh venv (outside source tree)
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --upgrade pip
+          wheels=(./dist/*.whl)
+          /tmp/smoke/bin/pip install "${wheels[0]}"
+
+      - name: Import + version + top-level exports from installed wheel
+        run: |
+          /tmp/smoke/bin/python - <<'PY'
+          import llm_saia
+          from llm_saia import SAIA, Backend, ChatResponse
+          print("llm_saia", llm_saia.__version__)
+          print("SAIA.builder =", SAIA.builder)
+          PY
+
+      - name: README quick-start against installed wheel
+        run: /tmp/smoke/bin/python examples/quickstart.py
+
+  # Summary job: required check that passes when the test matrix and the
+  # wheel-install smoke both succeed.
   test-summary:
     name: Test
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, smoke-wheel]
     if: always()
     steps:
-      - name: Check test matrix status
+      - name: Check aggregate status
         run: |
           if [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "Test matrix failed"
+            exit 1
+          fi
+          if [[ "${{ needs.smoke-wheel.result }}" != "success" ]]; then
+            echo "Wheel-install smoke failed"
             exit 1
           fi
           echo "All tests passed"
@@ -98,6 +166,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
