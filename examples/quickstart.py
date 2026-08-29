@@ -20,8 +20,7 @@ import asyncio
 import json
 from typing import Any
 
-from llm_saia import SAIA, Backend, ChatResponse
-from llm_saia.core.conversation import Message
+from llm_saia import SAIA, Backend, ChatResponse, Message
 
 
 class DemoBackend(Backend):
