@@ -25,8 +25,6 @@ from contextlib import asynccontextmanager
 from io import StringIO
 from typing import Any
 
-import httpx
-
 from llm_saia.core.backend import (
     Backend,
     ChatResponse,
@@ -226,6 +224,12 @@ class OpenAIBackend(Backend):
         api_key: str | None = None,
         base_url: str | None = None,
     ):
+        # httpx is imported lazily so importing this module (or the packaged
+        # quickstart, which uses DemoBackend) does not require the httpx
+        # runtime dep. Users of OpenAIBackend must install it themselves —
+        # it's bundled with the [dev] extras.
+        import httpx
+
         self._model = model or os.environ.get("LLM_MODEL", "gpt-4o-mini")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._base_url = base_url or os.environ.get("LLM_BASE_URL", "http://localhost:8000/v1")

@@ -27,21 +27,23 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from examples import Colors as C
-from examples import get_backend
 from llm_saia import SAIA
+from llm_saia.examples import Colors as C
+from llm_saia.examples import get_backend
 
 DEFAULT_CLAIM = "2 + 2 equals 5"
 
 
 async def main(claim: str) -> None:
     async with get_backend() as backend:
+        # 2048 keeps critique's weaknesses array from truncating mid-JSON on smaller/local models.
         saia = (
             SAIA.builder()
             .backend(backend)
             .system("One sentence max. No markdown. No lists.")
+            .max_call_tokens(2048)
             .build()
         )
 

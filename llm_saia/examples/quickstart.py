@@ -5,9 +5,10 @@
 
 """Minimal quick-start smoke that mirrors the README example.
 
-Runs against an installed wheel via `python examples/quickstart.py`. Exercised
-by the smoke-wheel CI job to catch README-vs-installed API drift, broken
-top-level exports, and missing wheel resources.
+Runs against an installed wheel via `python -m llm_saia.examples.quickstart`.
+Exercised by the smoke-wheel CI job from a working directory outside the
+source tree to catch README-vs-installed API drift, broken top-level
+exports, and missing wheel resources.
 
 Uses an in-process demo backend so the run needs no API keys and no network —
 the goal is to prove the surface is wired, not to validate LLM output.

@@ -35,11 +35,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from examples import Colors as C
-from examples import get_backend, print_trace_compact, print_trace_full
 from llm_saia import SAIA, ToolDef
+from llm_saia.examples import Colors as C
+from llm_saia.examples import get_backend, print_trace_compact, print_trace_full
 
 # Simple tools for file analysis
 TOOLS = [

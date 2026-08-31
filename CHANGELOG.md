@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `examples/` now ships inside the wheel at `llm_saia/examples/`. Installed invocation
+  is `python -m llm_saia.examples.quickstart`; root-level `examples/` symlink preserved
+  for local dev.
+- `__version__` falls back to `"0.0.0.dev0"` when package metadata is unavailable
+  (uninstalled source checkouts).
+
 ## [0.6.1] - 2026-08-29
 
 ### Added
