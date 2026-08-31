@@ -38,10 +38,12 @@ DEFAULT_CLAIM = "2 + 2 equals 5"
 
 async def main(claim: str) -> None:
     async with get_backend() as backend:
+        # 2048 keeps critique's weaknesses array from truncating mid-JSON on smaller/local models.
         saia = (
             SAIA.builder()
             .backend(backend)
             .system("One sentence max. No markdown. No lists.")
+            .max_call_tokens(2048)
             .build()
         )
 
