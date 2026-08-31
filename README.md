@@ -59,8 +59,10 @@ pip install llm-saia
 ## Quick Start
 
 Verbs return a `VerbResult` — `.value` holds the typed result, `.trace` the
-per-step execution trace. See `examples/quickstart.py` for a runnable version
-with an in-process canned backend.
+per-step execution trace. Run the installed quick-start with
+`python -m llm_saia.examples.quickstart` (source at
+`llm_saia/examples/quickstart.py`); it uses an in-process canned backend so
+no API keys or network are needed.
 
 ```python
 from llm_saia import SAIA
