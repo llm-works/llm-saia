@@ -5,9 +5,13 @@
 
 """SAIA: Framework-agnostic verb vocabulary for LLM agents."""
 
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _meta_version
 
-__version__ = _meta_version("llm-saia")
+try:
+    __version__ = _meta_version("llm-saia")
+except PackageNotFoundError:
+    __version__ = "0.0.0.dev0"
 
 from .builder import SAIABuilder
 from .core.backend import Backend, ChatResponse, ToolDef

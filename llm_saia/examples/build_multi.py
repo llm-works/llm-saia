@@ -77,12 +77,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from examples import DEFAULT_ANTHROPIC_MODEL, OpenAIBackend
-from examples import Colors as C
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
+from llm_saia.examples import DEFAULT_ANTHROPIC_MODEL, OpenAIBackend
+from llm_saia.examples import Colors as C
 
 TASK = "Build a Python unit converter: km/miles, celsius/fahrenheit, kg/pounds"
 

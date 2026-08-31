@@ -46,10 +46,10 @@ Issues = "https://github.com/llm-works/llm-saia/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["llm_saia*"]
-exclude = ["tests*", "examples*"]
+exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-llm_saia = ["py.typed"]
+llm_saia = ["py.typed", "examples/**/*.py"]
 
 [tool.setuptools_scm]
 # Version derived from git tags (e.g., v0.1.0 -> 0.1.0)
@@ -92,4 +92,7 @@ markers = [
 omit = [
     # SAIA class tool-loop paths require integration tests
     "llm_saia/saia.py",
+    # Shipped examples: runnable demos, exercised end-to-end by the
+    # smoke-wheel CI job, not by the unit-test suite.
+    "llm_saia/examples/*",
 ]

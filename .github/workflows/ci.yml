@@ -134,8 +134,8 @@ jobs:
           print("SAIA.builder =", SAIA.builder)
           PY
 
-      - name: README quick-start against installed wheel
-        run: /tmp/smoke/bin/python examples/quickstart.py
+      - name: README quick-start against installed wheel (packaged path)
+        run: cd /tmp && /tmp/smoke/bin/python -m llm_saia.examples.quickstart
 
   # Summary job: required check that passes when the test matrix and the
   # wheel-install smoke both succeed.
