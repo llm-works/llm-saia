@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-31
+
 ### Fixed
 - `examples/` now ships inside the wheel at `llm_saia/examples/`. Installed invocation
   is `python -m llm_saia.examples.quickstart`; root-level `examples/` symlink preserved
@@ -277,7 +279,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/llm-works/llm-saia/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/llm-works/llm-saia/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/llm-works/llm-saia/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/llm-works/llm-saia/compare/v0.4.0...v0.5.0
