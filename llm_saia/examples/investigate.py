@@ -27,11 +27,11 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from examples import Colors as C
-from examples import get_backend
 from llm_saia import SAIA
+from llm_saia.examples import Colors as C
+from llm_saia.examples import get_backend
 
 DEFAULT_CLAIM = "2 + 2 equals 5"
 
