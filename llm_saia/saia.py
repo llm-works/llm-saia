@@ -122,7 +122,7 @@ class SAIA(Configurable):
             schema: The response shape. Either a stdlib ``@dataclass`` (the
                 default; zero runtime dependency) or a
                 :class:`pydantic.BaseModel` subclass. BaseModel support
-                requires ``pip install llm-saia[pydantic]`` and unlocks the
+                requires ``pip install 'llm-saia[pydantic]'`` and unlocks the
                 full JSON-Schema vocabulary — ``Field(ge=..., le=...,
                 pattern=..., max_length=..., discriminator=..., ...)`` —
                 whose structural constraints are enforced by the backend's

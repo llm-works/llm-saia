@@ -16,7 +16,7 @@ JSON schema envelope and round-trips through complete_structured — not to
 validate LLM output. For a real-LLM run, swap DemoBackend for the
 OpenAI-compatible backend from ``examples/__init__.py``.
 
-Requires ``pip install llm-saia[pydantic]``.
+Requires ``pip install 'llm-saia[pydantic]'``.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ try:
     from pydantic import BaseModel, Field
 except ImportError:
     print(
-        "This example needs pydantic. Install it with:\n  pip install llm-saia[pydantic]",
+        "This example needs pydantic. Install it with:\n  pip install 'llm-saia[pydantic]'",
         file=sys.stderr,
     )
     raise SystemExit(2) from None

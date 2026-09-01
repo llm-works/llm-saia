@@ -305,8 +305,8 @@ class TestPydanticDispatch:
         assert props["confidence"]["minimum"] == 0.0
         assert props["confidence"]["maximum"] == 1.0
 
-    def test_pydantic_additional_properties_false(self) -> None:
-        """Pydantic schemas include additionalProperties: false for OpenAI strict mode."""
+    def test_pydantic_strict_mode_normalization(self) -> None:
+        """Pydantic schemas are normalized for OpenAI strict mode."""
         from pydantic import BaseModel
 
         class Inner(BaseModel):
@@ -314,19 +314,22 @@ class TestPydanticDispatch:
 
         class Outer(BaseModel):
             name: str
+            confidence: float = 0.5  # Field with default
             nested: Inner
             items: list[Inner]
 
         result = to_json_schema(Outer)
         schema = result["schema"]
 
-        # Top-level object
+        # Top-level: additionalProperties and all properties in required
         assert schema.get("additionalProperties") is False
+        assert set(schema.get("required", [])) == {"name", "confidence", "nested", "items"}
 
-        # Nested model in $defs
+        # Nested model in $defs: same normalization
         assert "$defs" in schema
         inner_def = schema["$defs"]["Inner"]
         assert inner_def.get("additionalProperties") is False
+        assert inner_def.get("required") == ["value"]
 
     def test_parse_dispatches_to_model_validate(self) -> None:
         from pydantic import BaseModel

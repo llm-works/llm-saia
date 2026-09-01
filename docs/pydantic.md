@@ -14,7 +14,7 @@ the decoder didn't catch.
 ## Installation
 
 ```bash
-pip install llm-saia[pydantic]
+pip install 'llm-saia[pydantic]'
 ```
 
 The extra pulls in `pydantic>=2.0`. Base `pip install llm-saia` remains
@@ -53,8 +53,9 @@ holds the per-step execution trace, same as every other verb.
 
 ## What's structurally enforced vs. advisory
 
-SAIA forwards the entire JSON schema produced by `model_json_schema()` to
-the backend verbatim. Which keywords the model *literally cannot* violate
+SAIA forwards the JSON schema produced by `model_json_schema()` to the
+backend after normalizing for strict mode (`additionalProperties: false`,
+all properties in `required`). Which keywords the model *literally cannot* violate
 depends on the backend's constrained decoder:
 
 | `Field(...)` keyword | JSON Schema | Enforced by vLLM / OpenAI strict | Notes |
@@ -104,9 +105,9 @@ result = await saia.with_guard(schema_retry(max_retries=2)).complete_structured(
 
 If the first response has one citation, the validator raises, the retry
 guard consumes budget, and SAIA reprompts with the validation error in
-the user turn. Pydantic's default error messages are LLM-friendly
-("List should have at least 2 items after validation, not 1"), which
-helps the model self-correct.
+the user turn. Pydantic prefixes custom validator errors with "Value
+error," ("Value error, need at least two citations"), which helps the
+model self-correct.
 
 ## Discriminated unions
 

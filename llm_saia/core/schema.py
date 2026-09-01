@@ -38,7 +38,7 @@ def to_json_schema(schema: type) -> dict[str, Any]:
     validators, everything pydantic v2 supports). Stdlib dataclasses
     continue through :func:`dataclass_to_json_schema`.
 
-    Requires ``pip install llm-saia[pydantic]`` for BaseModel schemas;
+    Requires ``pip install 'llm-saia[pydantic]'`` for BaseModel schemas;
     dataclass callers pay no dependency cost.
     """
     if _is_pydantic_model(schema):
@@ -75,13 +75,20 @@ def _pydantic_to_json_schema(schema: type) -> dict[str, Any]:
 
 
 def _inject_additional_properties_false(schema: dict[str, Any]) -> None:
-    """Recursively add additionalProperties: false to all object types.
+    """Recursively normalize schemas for OpenAI strict mode.
 
-    Required for OpenAI strict mode. Pydantic's model_json_schema() does not
-    emit this by default (unless extra='forbid' is set on every model).
+    OpenAI strict mode requires:
+    1. additionalProperties: false on every object
+    2. Every property listed in required (even those with defaults)
+
+    Pydantic's model_json_schema() omits both by default.
     """
-    if schema.get("type") == "object" and "additionalProperties" not in schema:
-        schema["additionalProperties"] = False
+    if schema.get("type") == "object":
+        if "additionalProperties" not in schema:
+            schema["additionalProperties"] = False
+        props = schema.get("properties", {})
+        if props:
+            schema["required"] = list(props.keys())
 
     # Handle $defs (nested model definitions)
     for defn in schema.get("$defs", {}).values():

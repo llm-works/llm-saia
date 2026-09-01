@@ -24,7 +24,7 @@ requested schema. No API keys, no network. Exercised by CI.
 | Example | What it shows |
 |---------|---------------|
 | `quickstart.py` | The README quick-start: `verify`, `critique`, `decompose` end-to-end. |
-| `pydantic_scorer.py` | `complete_structured` with a `pydantic.BaseModel` — `Field(ge=, le=, max_length=, Literal[...])`. Requires `pip install llm-saia[pydantic]`. |
+| `pydantic_scorer.py` | `complete_structured` with a `pydantic.BaseModel` — `Field(ge=, le=, max_length=, Literal[...])`. Requires `pip install 'llm-saia[pydantic]'`. |
 | `compose_example.py` | The `compose()` prompt-building utility. No LLM at all — pure string mechanics. |
 
 ## Real LLM required

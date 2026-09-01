@@ -54,7 +54,7 @@ added to the CI matrix.
 
 ```bash
 pip install llm-saia               # zero-dep core
-pip install llm-saia[pydantic]     # + pydantic BaseModel schemas
+pip install 'llm-saia[pydantic]'     # + pydantic BaseModel schemas
 ```
 
 The `[pydantic]` extra enables using `pydantic.BaseModel` as the schema type
@@ -249,7 +249,7 @@ prompt is sent verbatim (no framing added); the response is parsed into
 `schema` and returned as `VerbResult[T]`.
 
 `schema` can be a stdlib `@dataclass` (default; zero-dep) or a
-`pydantic.BaseModel` (requires `pip install llm-saia[pydantic]`). With
+`pydantic.BaseModel` (requires `pip install 'llm-saia[pydantic]'`). With
 Pydantic, the full JSON-Schema vocabulary flows through — `Field(ge=..., le=...,
 pattern=..., max_length=..., discriminator=..., ...)` — and structural
 constraints are enforced by the backend's constrained decoder (vLLM,
@@ -274,8 +274,10 @@ result = await saia.complete_structured(
 )
 ```
 
-The decoder rejects tokens that would violate `ge`/`le`/`pattern`/etc., so
-the model literally cannot return `score=85` or `confidence=100`. See
+On backends with constrained decoding (vLLM, OpenAI strict mode), the decoder
+rejects tokens that would violate `ge`/`le`/`pattern`/etc. — the model
+literally cannot return `score=85`. Anthropic treats the schema as advisory;
+Pydantic validation and the schema-retry loop catch violations there. See
 [docs/pydantic.md](docs/pydantic.md) for the full story — enforcement
 matrix, validators + retry, discriminated unions, migration — and
 `examples/pydantic_scorer.py` for a runnable smoke test.
