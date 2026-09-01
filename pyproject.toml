@@ -53,7 +53,7 @@ include = ["llm_saia*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-llm_saia = ["py.typed", "examples/**/*.py"]
+llm_saia = ["py.typed", "examples/**/*.py", "examples/**/*.md"]
 
 [tool.setuptools_scm]
 # Version derived from git tags (e.g., v0.1.0 -> 0.1.0)
