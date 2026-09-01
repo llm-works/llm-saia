@@ -305,6 +305,29 @@ class TestPydanticDispatch:
         assert props["confidence"]["minimum"] == 0.0
         assert props["confidence"]["maximum"] == 1.0
 
+    def test_pydantic_additional_properties_false(self) -> None:
+        """Pydantic schemas include additionalProperties: false for OpenAI strict mode."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            value: int
+
+        class Outer(BaseModel):
+            name: str
+            nested: Inner
+            items: list[Inner]
+
+        result = to_json_schema(Outer)
+        schema = result["schema"]
+
+        # Top-level object
+        assert schema.get("additionalProperties") is False
+
+        # Nested model in $defs
+        assert "$defs" in schema
+        inner_def = schema["$defs"]["Inner"]
+        assert inner_def.get("additionalProperties") is False
+
     def test_parse_dispatches_to_model_validate(self) -> None:
         from pydantic import BaseModel
 

@@ -65,11 +65,40 @@ def parse(data: Any, schema: type[T]) -> T:
 
 def _pydantic_to_json_schema(schema: type) -> dict[str, Any]:
     """Build SAIA's schema envelope from a pydantic BaseModel."""
+    raw = schema.model_json_schema()  # type: ignore[attr-defined]
+    _inject_additional_properties_false(raw)
     return {
         "name": schema.__name__,
         "description": schema.__doc__ or f"Structured output for {schema.__name__}",
-        "schema": schema.model_json_schema(),  # type: ignore[attr-defined]
+        "schema": raw,
     }
+
+
+def _inject_additional_properties_false(schema: dict[str, Any]) -> None:
+    """Recursively add additionalProperties: false to all object types.
+
+    Required for OpenAI strict mode. Pydantic's model_json_schema() does not
+    emit this by default (unless extra='forbid' is set on every model).
+    """
+    if schema.get("type") == "object" and "additionalProperties" not in schema:
+        schema["additionalProperties"] = False
+
+    # Handle $defs (nested model definitions)
+    for defn in schema.get("$defs", {}).values():
+        _inject_additional_properties_false(defn)
+
+    # Handle nested properties
+    for prop in schema.get("properties", {}).values():
+        _inject_additional_properties_false(prop)
+
+    # Handle array items
+    if "items" in schema:
+        _inject_additional_properties_false(schema["items"])
+
+    # Handle allOf/anyOf/oneOf
+    for key in ("allOf", "anyOf", "oneOf"):
+        for sub in schema.get(key, []):
+            _inject_additional_properties_false(sub)
 
 
 def dataclass_to_json_schema(schema: type) -> dict[str, Any]:

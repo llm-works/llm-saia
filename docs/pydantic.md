@@ -199,7 +199,7 @@ class Score(BaseModel):
     label: str
 ```
 
-The dispatch in `complete_structured` is by isinstance check on the
+The dispatch in `complete_structured` is by duck-type detection on the
 schema type — no caller changes needed. Nothing about SAIA's public
 surface (verb signatures, `VerbResult`, tracing) changes.
 
