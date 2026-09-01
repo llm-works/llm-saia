@@ -119,7 +119,16 @@ class SAIA(Configurable):
 
         Args:
             prompt: Prompt sent verbatim to the backend.
-            schema: Dataclass type describing the expected response shape.
+            schema: The response shape. Either a stdlib ``@dataclass`` (the
+                default; zero runtime dependency) or a
+                :class:`pydantic.BaseModel` subclass. BaseModel support
+                requires ``pip install llm-saia[pydantic]`` and unlocks the
+                full JSON-Schema vocabulary — ``Field(ge=..., le=...,
+                pattern=..., max_length=..., discriminator=..., ...)`` —
+                whose structural constraints are enforced by the backend's
+                constrained decoder, and whose ``@field_validator`` /
+                ``@model_validator`` checks run on parse and can trigger
+                the same schema-retry loop as dataclass parse failures.
             conversation: Optional conversation to append messages to.
 
         Returns:

@@ -15,6 +15,63 @@ from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin, get
 T = TypeVar("T")
 
 
+def _is_pydantic_model(schema: type) -> bool:
+    """Duck-type check for pydantic.BaseModel subclasses.
+
+    Uses attribute presence rather than isinstance so pydantic remains a
+    genuinely optional dependency — the import is deferred to callers
+    that reach the pydantic branch. Zero-dep users pay nothing.
+    """
+    return (
+        isinstance(schema, type)
+        and hasattr(schema, "model_json_schema")
+        and hasattr(schema, "model_validate")
+    )
+
+
+def to_json_schema(schema: type) -> dict[str, Any]:
+    """Convert a schema type to the JSON schema envelope SAIA sends to backends.
+
+    Dispatches on ``schema``: pydantic ``BaseModel`` subclasses go through
+    ``model_json_schema()`` (full JSON-Schema vocabulary — ``ge``/``le``,
+    ``pattern``, ``format``, discriminated unions, ``$ref``/``$defs``,
+    validators, everything pydantic v2 supports). Stdlib dataclasses
+    continue through :func:`dataclass_to_json_schema`.
+
+    Requires ``pip install llm-saia[pydantic]`` for BaseModel schemas;
+    dataclass callers pay no dependency cost.
+    """
+    if _is_pydantic_model(schema):
+        return _pydantic_to_json_schema(schema)
+    return dataclass_to_json_schema(schema)
+
+
+def parse(data: Any, schema: type[T]) -> T:
+    """Parse JSON data into an instance of ``schema``.
+
+    Dispatches on ``schema``: pydantic models validate via
+    ``model_validate`` (full pydantic pipeline — coercion, custom
+    ``@field_validator``/``@model_validator``, discriminated union
+    dispatch); dataclasses use :func:`parse_json_to_dataclass`.
+
+    Pydantic's :class:`ValidationError` inherits from :class:`ValueError`,
+    so it flows into SAIA's existing structured-output retry path just
+    like a dataclass parse error.
+    """
+    if _is_pydantic_model(schema):
+        return cast(T, schema.model_validate(data))  # type: ignore[attr-defined]
+    return parse_json_to_dataclass(data, schema)
+
+
+def _pydantic_to_json_schema(schema: type) -> dict[str, Any]:
+    """Build SAIA's schema envelope from a pydantic BaseModel."""
+    return {
+        "name": schema.__name__,
+        "description": schema.__doc__ or f"Structured output for {schema.__name__}",
+        "schema": schema.model_json_schema(),  # type: ignore[attr-defined]
+    }
+
+
 def dataclass_to_json_schema(schema: type) -> dict[str, Any]:
     """Convert a dataclass to a JSON schema.
 

@@ -137,6 +137,16 @@ jobs:
       - name: README quick-start against installed wheel (packaged path)
         run: cd /tmp && /tmp/smoke/bin/python -m llm_saia.examples.quickstart
 
+      # Prove the [pydantic] extra installs and its dispatch path works
+      # from the installed wheel (not the source tree).
+      - name: Install [pydantic] extra
+        run: |
+          wheels=(./dist/*.whl)
+          /tmp/smoke/bin/pip install "${wheels[0]}[pydantic]"
+
+      - name: Pydantic scorer against installed wheel (packaged path)
+        run: cd /tmp && /tmp/smoke/bin/python -m llm_saia.examples.pydantic_scorer
+
   # Summary job: required check that passes when the test matrix and the
   # wheel-install smoke both succeed.
   test-summary:

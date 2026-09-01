@@ -10,9 +10,12 @@ from typing import Any, Literal, Optional, Union
 import pytest
 
 from llm_saia.core.schema import (
+    _is_pydantic_model,
     dataclass_to_json_schema,
+    parse,
     parse_json_to_dataclass,
     python_type_to_json_schema,
+    to_json_schema,
 )
 
 pytestmark = pytest.mark.unit
@@ -245,6 +248,105 @@ class TestDataclassToJsonSchema:
         schema = dataclass_to_json_schema(NoDoc)
         # Dataclass without explicit docstring gets auto-generated repr-style doc
         assert "NoDoc" in schema["description"]
+
+
+class TestPydanticDispatch:
+    """to_json_schema / parse route BaseModel subclasses through pydantic."""
+
+    pydantic = pytest.importorskip("pydantic")
+
+    def test_detector_true_for_basemodel(self) -> None:
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            x: int
+
+        assert _is_pydantic_model(M) is True
+
+    def test_detector_false_for_dataclass(self) -> None:
+        @dataclass
+        class D:
+            x: int
+
+        assert _is_pydantic_model(D) is False
+
+    def test_detector_false_for_non_type(self) -> None:
+        assert _is_pydantic_model(42) is False  # type: ignore[arg-type]
+        assert _is_pydantic_model("string") is False  # type: ignore[arg-type]
+        assert _is_pydantic_model({"model_json_schema": lambda: {}}) is False  # type: ignore[arg-type]
+
+    def test_to_json_schema_pydantic_envelope(self) -> None:
+        from pydantic import BaseModel
+
+        class Simple(BaseModel):
+            """Docstring flows into the envelope description."""
+
+            name: str
+            value: int
+
+        result = to_json_schema(Simple)
+        assert result["name"] == "Simple"
+        assert result["description"] == "Docstring flows into the envelope description."
+        assert result["schema"]["properties"]["name"]["type"] == "string"
+        assert result["schema"]["properties"]["value"]["type"] == "integer"
+
+    def test_to_json_schema_projects_field_constraints(self) -> None:
+        """Field(ge=..., le=..., description=...) reaches the JSON schema."""
+        from pydantic import BaseModel, Field
+
+        class Scored(BaseModel):
+            score: float = Field(ge=0.0, le=10.0, description="grade 0-10")
+            confidence: float = Field(ge=0.0, le=1.0)
+
+        props = to_json_schema(Scored)["schema"]["properties"]
+        assert props["score"]["minimum"] == 0.0
+        assert props["score"]["maximum"] == 10.0
+        assert props["score"]["description"] == "grade 0-10"
+        assert props["confidence"]["minimum"] == 0.0
+        assert props["confidence"]["maximum"] == 1.0
+
+    def test_parse_dispatches_to_model_validate(self) -> None:
+        from pydantic import BaseModel
+
+        class Point(BaseModel):
+            x: int
+            y: int
+
+        result = parse({"x": 1, "y": 2}, Point)
+        assert isinstance(result, Point)
+        assert result.x == 1 and result.y == 2
+
+    def test_parse_validation_error_is_valueerror(self) -> None:
+        """StructuredOutputHandler catches (TypeError, ValueError); Pydantic's
+        ValidationError must inherit from ValueError for that path to work."""
+        from pydantic import BaseModel, Field, ValidationError
+
+        class Bounded(BaseModel):
+            score: float = Field(ge=0.0, le=1.0)
+
+        assert issubclass(ValidationError, ValueError)
+        with pytest.raises(ValidationError):
+            parse({"score": 42.0}, Bounded)
+
+    def test_to_json_schema_dispatches_dataclass_unchanged(self) -> None:
+        """Regression: dataclass path still works through the dispatcher."""
+
+        @dataclass
+        class D:
+            name: str
+
+        result = to_json_schema(D)
+        assert result["name"] == "D"
+        assert result["schema"]["properties"]["name"]["type"] == "string"
+
+    def test_parse_dispatches_dataclass_unchanged(self) -> None:
+        @dataclass
+        class D:
+            name: str
+
+        result = parse({"name": "x"}, D)
+        assert isinstance(result, D)
+        assert result.name == "x"
 
 
 class TestParseJsonToDataclass:
