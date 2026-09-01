@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Optional Pydantic schema support via `pip install 'llm-saia[pydantic]'`.
+  `SAIA.complete_structured` now accepts `pydantic.BaseModel` in addition
+  to `@dataclass` — `Field(ge=, le=, pattern=, ...)` and validators flow
+  through. Zero-dep users pay nothing.
+- `examples/pydantic_scorer.py`: smoke for the Pydantic path.
+
 ## [0.6.2] - 2026-08-31
 
 ### Fixed

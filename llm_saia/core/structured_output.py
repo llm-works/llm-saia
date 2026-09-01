@@ -18,7 +18,8 @@ from .backend import ChatResponse
 from .conversation import ListConversation, Message, Role
 from .errors import StructuredOutputError
 from .guard import IterationContext, IterationGuard
-from .schema import dataclass_to_json_schema, parse_json_to_dataclass
+from .schema import parse as parse_schema
+from .schema import to_json_schema
 
 if TYPE_CHECKING:
     from .config import CallOptions
@@ -187,7 +188,7 @@ class _StructuredOutputHandler:
         if not schema:
             return content, None
         structured_prompt = f"{prompt}\n\nBased on the following information:\n{content}"
-        json_schema = dataclass_to_json_schema(schema)
+        json_schema = to_json_schema(schema)
         response = await self._host._chat(
             [Message(role=Role.USER, content=structured_prompt)],
             max_tokens=None,
@@ -209,7 +210,7 @@ class _StructuredOutputHandler:
             self._log_finalize_parse_error(e, content, schema.__name__)
             raise h._structured_output_error(e, content, schema.__name__) from e
         try:
-            return parse_json_to_dataclass(data, schema)
+            return parse_schema(data, schema)
         except (TypeError, ValueError) as e:
             raise StructuredOutputError(
                 f"Response does not match {schema.__name__}: {e}",
@@ -415,7 +416,7 @@ class _StructuredOutputHandler:
                 return result
         conv = conversation if conversation is not None else ListConversation()
         await h._append_msg(conv, Message(role=Role.USER, content=prompt))
-        json_schema = dataclass_to_json_schema(schema)
+        json_schema = to_json_schema(schema)
         config = h._get_call_options(run)
         response = await h._chat(
             conv.as_messages(),
@@ -438,7 +439,7 @@ class _StructuredOutputHandler:
         except Exception as e:
             raise h._structured_output_error(e, content, schema.__name__) from e
         try:
-            return parse_json_to_dataclass(data, schema)
+            return parse_schema(data, schema)
         except (TypeError, ValueError) as e:
             raise StructuredOutputError(
                 f"Response does not match {schema.__name__}: {e}",

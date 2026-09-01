@@ -26,7 +26,11 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+pydantic = [
+    "pydantic>=2.0",
+]
 dev = [
+    "llm-saia[pydantic]",
     "appinfra>=0.3.4",
     "httpx>=0.27.0",
     "pytest>=8.0.0",
@@ -49,7 +53,7 @@ include = ["llm_saia*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-llm_saia = ["py.typed", "examples/**/*.py"]
+llm_saia = ["py.typed", "examples/**/*.py", "examples/**/*.md"]
 
 [tool.setuptools_scm]
 # Version derived from git tags (e.g., v0.1.0 -> 0.1.0)

@@ -53,8 +53,12 @@ added to the CI matrix.
 ## Installation
 
 ```bash
-pip install llm-saia
+pip install llm-saia               # zero-dep core
+pip install 'llm-saia[pydantic]'     # + pydantic BaseModel schemas
 ```
+
+The `[pydantic]` extra enables using `pydantic.BaseModel` as the schema type
+for `complete_structured` — see [Custom typed output (Pydantic)](#custom-typed-output-pydantic).
 
 ## Quick Start
 
@@ -237,6 +241,47 @@ Gates return `True`/`None` to allow, `False` to block silently, or a `str` reaso
 trace (never surfaced to the model). See [docs/tool-gates.md](docs/tool-gates.md) for advanced
 patterns including context factories for shared computation.
 
+## Custom typed output (Pydantic)
+
+When no built-in verb fits — an LLM judge, a domain-specific extractor, a
+scoring rubric — reach for `saia.complete_structured(prompt, schema)`. The
+prompt is sent verbatim (no framing added); the response is parsed into
+`schema` and returned as `VerbResult[T]`.
+
+`schema` can be a stdlib `@dataclass` (default; zero-dep) or a
+`pydantic.BaseModel` (requires `pip install 'llm-saia[pydantic]'`). With
+Pydantic, the full JSON-Schema vocabulary flows through — `Field(ge=..., le=...,
+pattern=..., max_length=..., discriminator=..., ...)` — and structural
+constraints are enforced by the backend's constrained decoder (vLLM,
+OpenAI). Custom `@field_validator` / `@model_validator` checks run on parse
+and can trigger SAIA's schema-retry loop.
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+
+class EssayScore(BaseModel):
+    score: float = Field(ge=0.0, le=10.0, description="0-10 overall grade")
+    confidence: float = Field(ge=0.0, le=1.0)
+    verdict: Literal["pass", "fail", "borderline"]
+    feedback: str = Field(max_length=400, description="1-2 sentences")
+
+
+result = await saia.complete_structured(
+    f"Grade this essay for clarity and evidence:\n\n{essay}",
+    EssayScore,
+)
+```
+
+On backends with constrained decoding (vLLM, OpenAI strict mode), the decoder
+rejects tokens that would violate `ge`/`le`/`pattern`/etc. — the model
+literally cannot return `score=85`. Anthropic treats the schema as advisory;
+Pydantic validation and the schema-retry loop catch violations there. See
+[docs/pydantic.md](docs/pydantic.md) for the full story — enforcement
+matrix, validators + retry, discriminated unions, migration — and
+`examples/pydantic_scorer.py` for a runnable smoke test.
+
 ## Examples
 
 See the [examples/](examples/) directory:
@@ -244,6 +289,7 @@ See the [examples/](examples/) directory:
 - `investigate.py` - Investigate a claim (verify → critique → refine)
 - `build.py` - Build an app (decompose → instruct → synthesize)
 - `build_multi.py` - Two LLMs collaborate (local generates, smart verifies)
+- `pydantic_scorer.py` - Typed output with Pydantic (requires `[pydantic]` extra)
 
 ## Design Philosophy
 

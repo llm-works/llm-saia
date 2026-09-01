@@ -15,6 +15,106 @@ from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin, get
 T = TypeVar("T")
 
 
+def _is_pydantic_model(schema: type) -> bool:
+    """Duck-type check for pydantic.BaseModel subclasses.
+
+    Uses attribute presence rather than isinstance so pydantic remains a
+    genuinely optional dependency — the import is deferred to callers
+    that reach the pydantic branch. Zero-dep users pay nothing.
+    """
+    return (
+        isinstance(schema, type)
+        and hasattr(schema, "model_json_schema")
+        and hasattr(schema, "model_validate")
+    )
+
+
+def to_json_schema(schema: type) -> dict[str, Any]:
+    """Convert a schema type to the JSON schema envelope SAIA sends to backends.
+
+    Dispatches on ``schema``: pydantic ``BaseModel`` subclasses go through
+    ``model_json_schema()`` (full JSON-Schema vocabulary — ``ge``/``le``,
+    ``pattern``, ``format``, discriminated unions, ``$ref``/``$defs``,
+    validators, everything pydantic v2 supports). Stdlib dataclasses
+    continue through :func:`dataclass_to_json_schema`.
+
+    Requires ``pip install 'llm-saia[pydantic]'`` for BaseModel schemas;
+    dataclass callers pay no dependency cost.
+    """
+    if _is_pydantic_model(schema):
+        return _pydantic_to_json_schema(schema)
+    return dataclass_to_json_schema(schema)
+
+
+def parse(data: Any, schema: type[T]) -> T:
+    """Parse JSON data into an instance of ``schema``.
+
+    Dispatches on ``schema``: pydantic models validate via
+    ``model_validate`` (full pydantic pipeline — coercion, custom
+    ``@field_validator``/``@model_validator``, discriminated union
+    dispatch); dataclasses use :func:`parse_json_to_dataclass`.
+
+    Pydantic's :class:`ValidationError` inherits from :class:`ValueError`,
+    so it flows into SAIA's existing structured-output retry path just
+    like a dataclass parse error.
+    """
+    if _is_pydantic_model(schema):
+        return cast(T, schema.model_validate(data))  # type: ignore[attr-defined]
+    return parse_json_to_dataclass(data, schema)
+
+
+def _pydantic_to_json_schema(schema: type) -> dict[str, Any]:
+    """Build SAIA's schema envelope from a pydantic BaseModel."""
+    raw = schema.model_json_schema()  # type: ignore[attr-defined]
+    if raw.get("type") != "object":
+        msg = f"Root schema must be object for OpenAI strict mode, got {raw.get('type')!r}"
+        raise ValueError(msg)
+    _inject_additional_properties_false(raw)
+    return {
+        "name": schema.__name__,
+        "description": schema.__doc__ or f"Structured output for {schema.__name__}",
+        "schema": raw,
+    }
+
+
+def _inject_additional_properties_false(schema: dict[str, Any]) -> None:
+    """Recursively normalize schemas for OpenAI strict mode.
+
+    OpenAI strict mode requires:
+    1. additionalProperties: false on every object
+    2. Every property listed in required (even those with defaults)
+
+    Pydantic's model_json_schema() omits both by default.
+    """
+    if schema.get("type") == "object":
+        ap = schema.get("additionalProperties")
+        if ap is None:
+            schema["additionalProperties"] = False
+        elif ap is not False:
+            msg = "additionalProperties must be false for OpenAI strict mode"
+            raise ValueError(msg)
+        props = schema.get("properties", {})
+        if props:
+            schema["required"] = list(props.keys())
+
+    # Handle $defs (nested model definitions)
+    for defn in schema.get("$defs", {}).values():
+        _inject_additional_properties_false(defn)
+
+    # Handle nested properties
+    for prop in schema.get("properties", {}).values():
+        _inject_additional_properties_false(prop)
+
+    # Handle array items
+    if "items" in schema:
+        _inject_additional_properties_false(schema["items"])
+
+    # Handle allOf/anyOf/oneOf
+    for key in ("allOf", "anyOf", "oneOf"):
+        for sub in schema.get(key, []):
+            _inject_additional_properties_false(sub)
+
+
 def dataclass_to_json_schema(schema: type) -> dict[str, Any]:
     """Convert a dataclass to a JSON schema.
 
