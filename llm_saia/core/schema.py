@@ -66,6 +66,9 @@ def parse(data: Any, schema: type[T]) -> T:
 def _pydantic_to_json_schema(schema: type) -> dict[str, Any]:
     """Build SAIA's schema envelope from a pydantic BaseModel."""
     raw = schema.model_json_schema()  # type: ignore[attr-defined]
+    if raw.get("type") != "object":
+        msg = f"Root schema must be object for OpenAI strict mode, got {raw.get('type')!r}"
+        raise ValueError(msg)
     _inject_additional_properties_false(raw)
     return {
         "name": schema.__name__,
@@ -84,8 +87,12 @@ def _inject_additional_properties_false(schema: dict[str, Any]) -> None:
     Pydantic's model_json_schema() omits both by default.
     """
     if schema.get("type") == "object":
-        if "additionalProperties" not in schema:
+        ap = schema.get("additionalProperties")
+        if ap is None:
             schema["additionalProperties"] = False
+        elif ap is not False:
+            msg = "additionalProperties must be false for OpenAI strict mode"
+            raise ValueError(msg)
         props = schema.get("properties", {})
         if props:
             schema["required"] = list(props.keys())

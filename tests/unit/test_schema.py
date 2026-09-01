@@ -374,6 +374,27 @@ class TestPydanticDispatch:
         assert isinstance(result, D)
         assert result.name == "x"
 
+    def test_extra_allow_rejected(self) -> None:
+        """Models with extra='allow' generate additionalProperties: true, rejected."""
+        from pydantic import BaseModel, ConfigDict
+
+        class Flexible(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            name: str
+
+        with pytest.raises(ValueError, match="additionalProperties must be false"):
+            to_json_schema(Flexible)
+
+    def test_root_model_rejected(self) -> None:
+        """RootModel produces non-object schema, rejected for strict mode."""
+        from pydantic import RootModel
+
+        class StringList(RootModel[list[str]]):
+            pass
+
+        with pytest.raises(ValueError, match="Root schema must be object"):
+            to_json_schema(StringList)
+
 
 class TestParseJsonToDataclass:
     def test_parse_simple(self) -> None:
