@@ -121,6 +121,9 @@ async def main():
 
 ## Configuration
 
+SAIA has no config files. Configuration is a `Config` dataclass constructed by the caller through
+the builder below — no YAML, no `etc/` directory, no CLI, no file discovery.
+
 ### Builder Pattern
 
 ```python
