@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through. Zero-dep users pay nothing.
 - `examples/pydantic_scorer.py`: smoke for the Pydantic path.
 
+### Changed
+- README `Configuration` section now states explicitly that SAIA has no
+  config files — configuration is a `Config` dataclass the caller
+  constructs through the builder.
+
 ## [0.6.2] - 2026-08-31
 
 ### Fixed
