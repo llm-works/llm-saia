@@ -132,39 +132,21 @@ class TestStructuredOutputConversationIsolation:
         await saia.complete_structured("Judge.", _Judgment, conversation=conv)
 
         msgs = conv.as_messages()
-        # Two attempts ran but only the successful exchange is merged back —
-        # the outer conversation must carry a single user+assistant pair,
-        # not both attempts' messages. This is the isolation invariant.
+        # Two attempts ran but the outer conversation carries the caller's
+        # original prompt + the final successful response only. The failed
+        # exchange (bad response + retry framing) stays inside the strategy's
+        # inner conversation and never leaks into the caller's history.
         assert len(msgs) == 2, (
-            f"expected outer conv to hold only successful exchange, got roles "
-            f"{[m.role for m in msgs]} and contents {[m.content[:30] for m in msgs]}"
+            f"expected outer conv to hold only original + successful response, "
+            f"got roles {[m.role for m in msgs]} and contents "
+            f"{[m.content[:30] for m in msgs]}"
         )
         assert msgs[0].role == Role.USER
-        # The merged user message is the retry prompt (built from the
-        # original + parse-error feedback), and the original prompt appears
-        # at its start. This is deliberate: the successful call's prompt is
-        # what defines the exchange, and it includes the retry framing.
-        assert msgs[0].content.startswith("Judge.")
+        assert msgs[0].content == "Judge."
         assert msgs[1].role == Role.ASSISTANT
         # Payload of the successful attempt (JSON-parseable), not the failed raw.
         parsed = json.loads(msgs[1].content)
         assert parsed == {"verdict": "y", "confidence": 0.5}
-
-        # Verify retry request structure (last_messages is from the successful retry).
-        retry_msgs = mock_backend.last_messages
-        # Retry prompt should start with the original prompt.
-        user_msgs = [m for m in retry_msgs if m.role == Role.USER]
-        assert user_msgs, "retry request should have a user message"
-        assert user_msgs[-1].content.startswith("Judge."), (
-            "retry prompt should start with original prompt"
-        )
-        # Failed raw content should NOT appear as a separate assistant message
-        # in the retry request (it may be embedded in the retry prompt itself).
-        assistant_msgs = [m for m in retry_msgs if m.role == Role.ASSISTANT]
-        for am in assistant_msgs:
-            assert am.content != "not json", (
-                "failed raw response should not appear as assistant message in retry"
-            )
 
     async def test_prior_history_preserved_across_parse_retry(
         self, mock_backend: MockBackend
@@ -180,13 +162,14 @@ class TestStructuredOutputConversationIsolation:
         await saia.complete_structured("Judge.", _Judgment, conversation=conv)
 
         msgs = conv.as_messages()
-        # Prior history intact at the front, followed by only the successful
-        # exchange (isolation preserved; failed attempt not merged).
+        # Prior history intact at the front, followed by original prompt +
+        # successful response only (isolation preserved; failed attempt and
+        # retry framing not merged).
         assert len(msgs) == 4, [(m.role, m.content[:30]) for m in msgs]
         assert msgs[0].content == "prior turn"
         assert msgs[1].content == "prior response"
         assert msgs[2].role == Role.USER
-        assert msgs[2].content.startswith("Judge.")
+        assert msgs[2].content == "Judge."
         assert msgs[3].role == Role.ASSISTANT
 
 
@@ -215,6 +198,32 @@ class TestStructuredOutputWithToolsRouting:
         assert result.value.confidence == 0.9
         assert result.trace.trace_id
         assert len(result.trace.steps) >= 1
+        # Steps must not be mislabeled as parse_retry when no retry happened,
+        # nor carry parsed=False from a stale parse-error annotation.
+        for step in result.trace.steps:
+            assert step.phase != "parse_retry"
+            assert step.parsed is True
+
+
+class TestFinalizeSuppressesTools:
+    """Finalize is a single-shot post-tool-loop parse and must not re-drive
+    the tool loop. When _run_schema_loop runs with phase="finalize", every
+    chat call in that loop must send tools=[] to the backend.
+    """
+
+    async def test_finalize_sends_no_tools_even_when_configured(self) -> None:
+        backend = MockBackend()
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+        saia = make_saia(backend, tools=[_tool_def()], executor=_noop_executor)
+        # Extract exposes the shared _complete_structured_attempt path; invoking
+        # it with _phase="finalize" hits the same code path as the tool-loop
+        # finalize step.
+        result = await saia.extract._complete_structured_attempt(
+            "Judge.", _Judgment, _phase="finalize"
+        )
+        assert isinstance(result, _Judgment)
+        # tools=[] threads to backend as None (resolved via `tools or None`).
+        assert not backend.last_tools, f"finalize must suppress tools, got {backend.last_tools!r}"
 
 
 # ---------------------------------------------------------------------------
