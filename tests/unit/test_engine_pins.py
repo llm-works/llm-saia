@@ -231,11 +231,25 @@ class TestFinalizeSuppressesTools:
 # ---------------------------------------------------------------------------
 
 
-class TestTextVerbDispatchEquivalence:
-    """Ask/Instruct produce equivalent observable content whether the dispatch
-    goes through the direct-call path (no tools) or the loop path (tools
-    configured), given identical backend responses.
+class TestTextVerbUnifiedLoopDispatch:
+    """Ask/Instruct always route through the unified loop, whether tools are
+    configured or not. Zero tools resolves as a one-iteration loop; results
+    must be identical to the tools-configured case for the same backend
+    output.
     """
+
+    async def test_text_verb_zero_tools_records_single_attempt_step(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Ask with no tools should produce exactly one trace step, phase='attempt'."""
+        mock_backend.set_complete_response("the answer")
+        saia = make_saia(mock_backend)
+
+        result = await saia.ask("artifact", "question?")
+
+        assert result.value == "the answer"
+        assert len(result.trace.steps) == 1
+        assert result.trace.steps[0].phase == "attempt"
 
     async def test_ask_returns_same_content_across_dispatch_paths(self) -> None:
         direct_backend = MockBackend()

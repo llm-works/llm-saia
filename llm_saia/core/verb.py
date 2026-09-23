@@ -312,6 +312,7 @@ class Verb(OutputGuardMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None = None,
         resume: bool = False,
         abort_signal: asyncio.Event | None = None,
     ) -> tuple[str, T | None]:
@@ -326,6 +327,9 @@ class Verb(OutputGuardMixin, Configurable):
             _trace: Parent verb trace.
             on_iteration: Optional callback invoked each iteration. May raise
                 ``PauseRequested`` to exit the loop early.
+            on_decide: Optional callback invoked after each iteration's decision.
+                When provided, the loop delegates step recording to it, letting
+                callers stamp phase-labeled trace steps.
             resume: If True, continue from existing conversation state.
             abort_signal: Optional event for fast abort during LLM streaming.
                 When set, backends that support streaming can abort within ~100ms.
@@ -354,6 +358,7 @@ class Verb(OutputGuardMixin, Configurable):
             conv=conv,
             abort_signal=abort_signal,
             on_iteration=on_iteration,
+            on_decide=on_decide,
             trace=_trace,
         )
 
@@ -541,43 +546,27 @@ class Verb(OutputGuardMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
     ) -> str:
-        """Complete with tools if available, otherwise direct.
+        """Complete via the unified loop, applying output guards if configured.
 
-        Applies output guards if configured.
+        Zero tools resolves as a one-iteration loop — the LLM returns text
+        without tool calls, :class:`SimpleStrategy` returns COMPLETE, and the
+        loop terminates immediately. With tools configured, standard
+        tool-calling iteration applies.
         """
         trace = _trace if _trace is not None else self._init_verb_trace()
-        if self._has_tools():
-            content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=trace)
-        else:
-            content = await self._complete_direct(prompt, run, conversation, trace)
+        content, _ = await self._loop(
+            prompt,
+            run=run,
+            conversation=conversation,
+            _trace=trace,
+            on_decide=self._make_phase_on_decide(trace, "attempt"),
+        )
         result = await self._apply_text_guards(
             prompt, content, run, conversation=conversation, _trace=trace
         )
         if _trace is None:
             self._emit_verb_trace(trace)
         return result
-
-    async def _complete_direct(
-        self,
-        prompt: str,
-        run: CallOptions | None,
-        conversation: ConversationLike | None,
-        trace: VerbTrace,
-    ) -> str:
-        """Direct (no-tool) text completion. Records step to trace."""
-        config = self._get_call_options(run)
-        conv = conversation if conversation is not None else ListConversation()
-        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
-        response = await self._chat(
-            conv.as_messages(),
-            max_tokens=self._max_tokens(config),
-            temperature=self._resolve_temperature(run),
-            call=config,
-            tools=[],
-        )
-        await self._append_msg(conv, self._to_message(response))
-        self._record_step(response, phase="attempt", _trace=trace)
-        return response.content
 
     async def _complete_text_attempt(
         self,
@@ -589,24 +578,34 @@ class Verb(OutputGuardMixin, Configurable):
     ) -> str:
         """Single attempt at text completion without applying guards.
 
-        Used by guard retry logic to avoid recursion.
+        Used by guard retry logic to avoid recursion. Routes through
+        :meth:`_loop` (zero tools → one iteration) and stamps each iteration
+        with ``phase`` so ``VerbTrace.guard_retries`` stays accurate.
         """
-        if self._has_tools():
-            content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=_trace)
-            return content
-        config = self._get_call_options(run)
-        conv = conversation if conversation is not None else ListConversation()
-        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
-        response = await self._chat(
-            conv.as_messages(),
-            max_tokens=self._max_tokens(config),
-            temperature=self._resolve_temperature(run),
-            call=config,
-            tools=[],
+        content, _ = await self._loop(
+            prompt,
+            run=run,
+            conversation=conversation,
+            _trace=_trace,
+            on_decide=self._make_phase_on_decide(_trace, phase),
         )
-        await self._append_msg(conv, self._to_message(response))
-        self._record_step(response, phase=phase, _trace=_trace)
-        return response.content
+        return content
+
+    def _make_phase_on_decide(
+        self, trace: VerbTrace | None, phase: str
+    ) -> Callable[[ChatResponse, LoopDecision, int, list[GuardOutcome]], None]:
+        """Build an ``on_decide`` that stamps each iteration's step with ``phase``."""
+
+        def on_decide(
+            response: ChatResponse,
+            decision: LoopDecision,
+            iteration: int,
+            outcomes: list[GuardOutcome],
+        ) -> None:
+            self._record_step(response, phase=phase, _trace=trace)
+            self._attach_guard_outcomes(trace, outcomes)
+
+        return on_decide
 
     async def _complete_structured(
         self,
