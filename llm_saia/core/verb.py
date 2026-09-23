@@ -751,8 +751,8 @@ class Verb(OutputGuardMixin, Configurable):
         """
         from dataclasses import replace
 
-        if config.max_iterations > 0 and strategy._parse_budget > config.max_iterations:
-            return replace(config, max_iterations=strategy._parse_budget)
+        if config.max_iterations > 0 and strategy.parse_budget > config.max_iterations:
+            return replace(config, max_iterations=strategy.parse_budget)
         return config
 
     async def _seed_inner_conv(

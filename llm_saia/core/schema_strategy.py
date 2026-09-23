@@ -82,6 +82,11 @@ class SchemaTerminatingStrategy(Generic[T]):
         self.last_parse_error: StructuredOutputError | None = None
         self.parse_attempts: int = 0
 
+    @property
+    def parse_budget(self) -> int:
+        """Total attempts allowed: 1 initial + sum of guard retries."""
+        return self._parse_budget
+
     async def decide(
         self,
         response: ChatResponse,
