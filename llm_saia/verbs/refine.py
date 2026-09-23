@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from ..core.types import VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
+    from ..core.backend import ChatResponse
     from ..core.conversation import ConversationLike
 
 
@@ -18,7 +21,15 @@ class Refine(Verb):
     """Improve artifact based on feedback."""
 
     async def __call__(
-        self, artifact: Any, feedback: str, *, conversation: ConversationLike | None = None
+        self,
+        artifact: Any,
+        feedback: str,
+        *,
+        conversation: ConversationLike | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> VerbResult[str]:
         """Improve an artifact based on the provided feedback."""
         trace = self._init_verb_trace()
@@ -27,7 +38,15 @@ class Refine(Verb):
                 f"Improve this artifact based on the feedback.\n\n"
                 f"Artifact: {artifact}\n\nFeedback: {feedback}"
             )
-            value = await self._complete(prompt, conversation=conversation, _trace=trace)
+            value = await self._complete(
+                prompt,
+                conversation=conversation,
+                _trace=trace,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
+                resume=resume,
+            )
             return VerbResult(value=value, trace=trace)
         finally:
             self._emit_verb_trace(trace)

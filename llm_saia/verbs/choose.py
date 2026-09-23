@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from ..core.types import ChooseResult, VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
+    from ..core.backend import ChatResponse
     from ..core.conversation import ConversationLike
 
 
@@ -24,6 +27,10 @@ class Choose(Verb):
         criteria: str | None = None,
         *,
         conversation: ConversationLike | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> VerbResult[ChooseResult]:
         """Select one option from the given choices."""
         trace = self._init_verb_trace()
@@ -35,7 +42,14 @@ class Choose(Verb):
             if criteria:
                 prompt += f"\n\nCriteria: {criteria}"
             value = await self._complete_structured(
-                prompt, ChooseResult, conversation=conversation, _trace=trace
+                prompt,
+                ChooseResult,
+                conversation=conversation,
+                _trace=trace,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
+                resume=resume,
             )
             return VerbResult(value=value, trace=trace)
         finally:

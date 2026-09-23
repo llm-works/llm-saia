@@ -271,12 +271,26 @@ async def main():
 
 ## Cancellation
 
-`Complete` accepts two cancellation triggers: `abort_signal` (an
-`asyncio.Event` checked by the backend during LLM streaming) and `pause_check`
-(an async callback consulted between tool calls within a single batch). A
-third trigger, raising `PauseRequested` from the `on_iteration` callback,
-behaves like `abort_signal` for the questions below. All three return through
-a single path — the loop never raises `PauseRequested` to the caller.
+Every SAIA verb is driven by the same inner loop, so the cooperative surface
+is uniform: `Complete`, `Ask`, `Constrain`, `Instruct`, the domain verbs
+(`extract`, `verify`, `classify`, …), and `SAIA.complete_structured` all
+accept the same four kwargs:
+
+- `on_iteration(iteration: int, response: ChatResponse) -> Awaitable[None]`
+  — fires once per backend LLM call. May raise `PauseRequested` to exit
+  the loop early.
+- `abort_signal: asyncio.Event` — signals the backend to fast-cancel the
+  current LLM call (requires backend support).
+- `pause_check() -> Awaitable[bool]` — consulted between tool calls in a
+  single batch. No-op absent tools.
+- `resume: bool` — continues from an existing `conversation` state
+  instead of appending a new prompt as a fresh turn. Requires
+  `conversation` to be supplied.
+
+`abort_signal` and `pause_check` are both cancellation triggers; raising
+`PauseRequested` from `on_iteration` behaves like `abort_signal` for the
+questions below. All three return through a single path — the loop never
+raises `PauseRequested` to the caller.
 
 The pinned contract (also enforced by
 `tests/unit/test_task.py::TestCancellationContract`):

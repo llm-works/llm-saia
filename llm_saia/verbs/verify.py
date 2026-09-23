@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from ..core.types import VerbResult, VerifyResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
+    from ..core.backend import ChatResponse
     from ..core.conversation import ConversationLike
 
 
@@ -23,6 +26,10 @@ class Verify(Verb):
         predicate: str = "factually accurate",
         *,
         conversation: ConversationLike | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> VerbResult[VerifyResult]:
         """Check whether an artifact satisfies a given predicate."""
         trace = self._init_verb_trace()
@@ -32,7 +39,14 @@ class Verify(Verb):
                 f"Artifact: {artifact}\n\nPredicate: {predicate}"
             )
             value = await self._complete_structured(
-                prompt, VerifyResult, conversation=conversation, _trace=trace
+                prompt,
+                VerifyResult,
+                conversation=conversation,
+                _trace=trace,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
+                resume=resume,
             )
             return VerbResult(value=value, trace=trace)
         finally:

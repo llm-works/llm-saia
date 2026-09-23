@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, TypeVar
 
 from ..core.types import VerbResult
 from ..core.verb import Verb
 
 if TYPE_CHECKING:
+    from ..core.backend import ChatResponse
     from ..core.conversation import ConversationLike
 
 T = TypeVar("T")
@@ -32,12 +35,23 @@ class _PromptVerb(Verb):
         schema: type[T],
         *,
         conversation: ConversationLike | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> VerbResult[T]:
         """Send prompt verbatim and parse the response against schema."""
         trace = self._init_verb_trace()
         try:
             value = await self._complete_structured(
-                prompt, schema, conversation=conversation, _trace=trace
+                prompt,
+                schema,
+                conversation=conversation,
+                _trace=trace,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
+                resume=resume,
             )
             return VerbResult(value=value, trace=trace)
         finally:

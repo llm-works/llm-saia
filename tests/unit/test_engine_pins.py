@@ -319,3 +319,126 @@ class TestStructuredOutputErrorShape:
         # The last attempt's raw content is what surfaces.
         assert err.raw_content == "still not json"
         assert err.parse_error is not None
+
+
+# ---------------------------------------------------------------------------
+# Uniform cooperative surface across every public verb
+# ---------------------------------------------------------------------------
+
+
+class TestUniformCooperativeSurface:
+    """Every public verb accepts on_iteration / abort_signal / pause_check /
+    resume as kwargs. Contract: the kwargs mean the same thing everywhere —
+    on_iteration fires per LLM call, abort_signal cancels the current call,
+    pause_check is checked between tools in a batch, resume continues from
+    prior conversation state.
+    """
+
+    async def test_on_iteration_fires_once_per_llm_call_on_text_verb(self) -> None:
+        backend = MockBackend()
+        backend.set_complete_response("the answer")
+        saia = make_saia(backend)
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        await saia.ask("artifact", "question?", on_iteration=on_iter)
+
+        assert seen == [0], f"expected one on_iteration call at iter 0, got {seen}"
+
+    async def test_on_iteration_fires_once_per_llm_call_on_typed_verb(self) -> None:
+        backend = MockBackend()
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.9))
+        saia = make_saia(backend)
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        await saia.complete_structured("Judge.", _Judgment, on_iteration=on_iter)
+
+        assert seen == [0]
+
+    async def test_on_iteration_fires_per_parse_retry(self) -> None:
+        backend = MockBackend()
+        backend.queue_raw_structured("not json")
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+        saia = make_saia(backend).with_guard(schema_retry(max_retries=1))
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        await saia.complete_structured("Judge.", _Judgment, on_iteration=on_iter)
+
+        # Two backend calls (first parse fails, second succeeds) → two on_iteration.
+        assert seen == [0, 1]
+
+    async def test_abort_signal_cancels_text_verb_before_response(self) -> None:
+        import asyncio as _asyncio
+
+        backend = MockBackend()
+        backend.set_complete_response("would have been the answer")
+        saia = make_saia(backend)
+        signal = _asyncio.Event()
+        signal.set()  # Pre-signaled: MockBackend raises PauseRequested on first check.
+
+        from llm_saia.core.errors import PauseRequested
+
+        # Text verbs surface abort as PauseRequested (matches Complete's contract).
+        with pytest.raises(PauseRequested):
+            await saia.ask("artifact", "question?", abort_signal=signal)
+
+    async def test_every_public_verb_accepts_cooperative_kwargs(self) -> None:
+        """Smoke test: each verb accepts the four kwargs without TypeError."""
+        import inspect
+
+        from llm_saia.verbs import (
+            Ask,
+            Choose,
+            Classify,
+            Constrain,
+            Critique_,
+            Decompose,
+            Extract,
+            Find,
+            Ground,
+            Instruct,
+            Refine,
+            Synthesize,
+            Verify,
+        )
+        from llm_saia.verbs.prompt import _PromptVerb
+
+        required = {"on_iteration", "abort_signal", "pause_check", "resume"}
+        for verb_cls in (
+            Ask,
+            Choose,
+            Classify,
+            Constrain,
+            Critique_,
+            Decompose,
+            Extract,
+            Find,
+            Ground,
+            Instruct,
+            Refine,
+            Synthesize,
+            Verify,
+            _PromptVerb,
+        ):
+            sig = inspect.signature(verb_cls.__call__)
+            missing = required - set(sig.parameters.keys())
+            assert not missing, f"{verb_cls.__name__}.__call__ missing kwargs: {missing}"
+
+    async def test_saia_complete_structured_accepts_cooperative_kwargs(self) -> None:
+        """SAIA.complete_structured on the public class exposes the same surface."""
+        import inspect
+
+        from llm_saia import SAIA
+
+        sig = inspect.signature(SAIA.complete_structured)
+        required = {"on_iteration", "abort_signal", "pause_check", "resume"}
+        missing = required - set(sig.parameters.keys())
+        assert not missing, f"SAIA.complete_structured missing kwargs: {missing}"
