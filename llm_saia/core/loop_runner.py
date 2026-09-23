@@ -45,6 +45,7 @@ class _IterationContext:
     max_tokens: int | None
     temperature: float | None
     response_schema: dict[str, Any] | None = None
+    suppress_tools: bool = False
     # Mutable loop state
     iteration: int = 0
     total_tokens: int = 0
@@ -168,12 +169,17 @@ class _LoopRunner:
         on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None = None,
         trace: VerbTrace | None = None,
         response_schema: dict[str, Any] | None = None,
+        suppress_tools: bool = False,
     ) -> CoreLoopResult:
         """Run the loop until completion, failure, pause, or limit.
 
         ``response_schema`` is threaded to every chat call in the loop so
         backends can constrain generation. Used by schema-terminating
         strategies; text-only loops pass ``None``.
+
+        ``suppress_tools`` forces ``tools=[]`` on every chat call, overriding
+        the configured tools list. Used by finalize-style single-shot parses
+        that must not re-drive the tool loop.
         """
         from .errors import PauseRequested
 
@@ -189,6 +195,7 @@ class _LoopRunner:
             max_tokens=self._host._max_tokens(config),
             temperature=self._host._resolve_temperature(config),
             response_schema=response_schema,
+            suppress_tools=suppress_tools,
         )
         try:
             return await self._drive(ctx, messages)
@@ -229,15 +236,20 @@ class _LoopRunner:
         """Call LLM and return (response, tokens)."""
         h = self._host
         llm_messages = ctx.conv.as_messages() if ctx.conv else messages
+        chat_kwargs: dict[str, Any] = {
+            "call": ctx.config,
+            "response_schema": ctx.response_schema,
+            "abort_signal": ctx.abort_signal,
+            "iteration": iteration,
+            "last_response": last_response,
+        }
+        if ctx.suppress_tools:
+            chat_kwargs["tools"] = []
         response = await h._chat(
             llm_messages,
             ctx.max_tokens,
             ctx.temperature,
-            call=ctx.config,
-            response_schema=ctx.response_schema,
-            abort_signal=ctx.abort_signal,
-            iteration=iteration,
-            last_response=last_response,
+            **chat_kwargs,
         )
         tokens = response.input_tokens + response.output_tokens
         h._log_response(response, iteration, tokens)

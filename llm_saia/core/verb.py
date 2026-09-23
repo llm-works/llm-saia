@@ -379,6 +379,7 @@ class Verb(OutputGuardMixin, Configurable):
         on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None = None,
         trace: VerbTrace | None = None,
         response_schema: dict[str, Any] | None = None,
+        suppress_tools: bool = False,
     ) -> CoreLoopResult:
         """Unified loop with pluggable strategy. Delegates to _LoopRunner."""
         runner = _LoopRunner(self)
@@ -393,6 +394,7 @@ class Verb(OutputGuardMixin, Configurable):
             on_decide=on_decide,
             trace=trace,
             response_schema=response_schema,
+            suppress_tools=suppress_tools,
         )
 
     @staticmethod
@@ -709,6 +711,7 @@ class Verb(OutputGuardMixin, Configurable):
             on_decide=self._make_schema_on_decide(strategy, trace, phase),
             trace=trace,
             response_schema=to_json_schema(schema),
+            suppress_tools=(phase == "finalize"),
         )
 
         if not result.completed:
@@ -779,7 +782,14 @@ class Verb(OutputGuardMixin, Configurable):
         trace: VerbTrace,
         phase: str,
     ) -> Callable[[ChatResponse, LoopDecision, int, list[GuardOutcome]], None]:
-        """Build the ``on_decide`` callback that stamps parse outcome onto steps."""
+        """Build the ``on_decide`` callback that stamps parse outcome onto steps.
+
+        Distinguishes parse-related iterations from tool or blocking-guard
+        iterations by the decision reason, and uses ``strategy.parse_attempts``
+        to tell the first parse attempt from subsequent retries. Non-parse
+        iterations (tool execution, non-parse blocking guards) never inherit
+        a stale ``last_parse_error`` from an earlier parse failure.
+        """
 
         def on_decide(
             response: ChatResponse,
@@ -787,9 +797,15 @@ class Verb(OutputGuardMixin, Configurable):
             iteration: int,
             outcomes: list[GuardOutcome],
         ) -> None:
-            step_phase = phase if iteration == 0 else "parse_retry"
+            is_parse_step = (
+                decision.reason.startswith("parse_") or decision.reason == "schema_parsed"
+            )
+            if is_parse_step and strategy.parse_attempts > 1:
+                step_phase = "parse_retry"
+            else:
+                step_phase = phase
             self._record_step(response, phase=step_phase, _trace=trace)
-            if strategy.last_parse_error is not None and trace.steps:
+            if is_parse_step and strategy.last_parse_error is not None and trace.steps:
                 trace.steps[-1].parsed = False
                 trace.steps[-1].parse_error = strategy.last_parse_error.parse_error
             self._attach_guard_outcomes(trace, outcomes)

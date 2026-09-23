@@ -198,6 +198,32 @@ class TestStructuredOutputWithToolsRouting:
         assert result.value.confidence == 0.9
         assert result.trace.trace_id
         assert len(result.trace.steps) >= 1
+        # Steps must not be mislabeled as parse_retry when no retry happened,
+        # nor carry parsed=False from a stale parse-error annotation.
+        for step in result.trace.steps:
+            assert step.phase != "parse_retry"
+            assert step.parsed is True
+
+
+class TestFinalizeSuppressesTools:
+    """Finalize is a single-shot post-tool-loop parse and must not re-drive
+    the tool loop. When _run_schema_loop runs with phase="finalize", every
+    chat call in that loop must send tools=[] to the backend.
+    """
+
+    async def test_finalize_sends_no_tools_even_when_configured(self) -> None:
+        backend = MockBackend()
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+        saia = make_saia(backend, tools=[_tool_def()], executor=_noop_executor)
+        # Extract exposes the shared _complete_structured_attempt path; invoking
+        # it with _phase="finalize" hits the same code path as the tool-loop
+        # finalize step.
+        result = await saia.extract._complete_structured_attempt(
+            "Judge.", _Judgment, _phase="finalize"
+        )
+        assert isinstance(result, _Judgment)
+        # tools=[] threads to backend as None (resolved via `tools or None`).
+        assert not backend.last_tools, f"finalize must suppress tools, got {backend.last_tools!r}"
 
 
 # ---------------------------------------------------------------------------
