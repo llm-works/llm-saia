@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from llm_saia.core.backend import ToolDef
-from llm_saia.core.conversation import ListConversation, Role
+from llm_saia.core.conversation import ListConversation, Message, Role
 from llm_saia.core.errors import StructuredOutputError
 from llm_saia.guards import schema_retry
 from tests.unit.conftest import MockBackend, make_saia
@@ -158,8 +158,6 @@ class TestStructuredOutputConversationIsolation:
         mock_backend.queue_raw_structured("not json")
         mock_backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
         conv = ListConversation()
-        from llm_saia.core.conversation import Message
-
         conv.append(Message(role=Role.USER, content="prior turn"))
         conv.append(Message(role=Role.ASSISTANT, content="prior response"))
 
