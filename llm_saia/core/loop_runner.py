@@ -44,6 +44,7 @@ class _IterationContext:
     trace: VerbTrace | None
     max_tokens: int | None
     temperature: float | None
+    response_schema: dict[str, Any] | None = None
     # Mutable loop state
     iteration: int = 0
     total_tokens: int = 0
@@ -61,6 +62,7 @@ class _LoopHost(Protocol):
         temperature: float | None,
         *,
         call: CallOptions | None = None,
+        response_schema: dict[str, Any] | None = None,
         abort_signal: asyncio.Event | None = None,
         iteration: int | None = None,
         last_response: ChatResponse | None = None,
@@ -165,8 +167,14 @@ class _LoopRunner:
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
         on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None = None,
         trace: VerbTrace | None = None,
+        response_schema: dict[str, Any] | None = None,
     ) -> CoreLoopResult:
-        """Run the loop until completion, failure, pause, or limit."""
+        """Run the loop until completion, failure, pause, or limit.
+
+        ``response_schema`` is threaded to every chat call in the loop so
+        backends can constrain generation. Used by schema-terminating
+        strategies; text-only loops pass ``None``.
+        """
         from .errors import PauseRequested
 
         ctx = _IterationContext(
@@ -180,6 +188,7 @@ class _LoopRunner:
             trace=trace,
             max_tokens=self._host._max_tokens(config),
             temperature=self._host._resolve_temperature(config),
+            response_schema=response_schema,
         )
         try:
             return await self._drive(ctx, messages)
@@ -225,6 +234,7 @@ class _LoopRunner:
             ctx.max_tokens,
             ctx.temperature,
             call=ctx.config,
+            response_schema=ctx.response_schema,
             abort_signal=ctx.abort_signal,
             iteration=iteration,
             last_response=last_response,

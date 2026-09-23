@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `examples/pydantic_scorer.py`: smoke for the Pydantic path.
 
 ### Changed
+- `SAIA.complete_structured` and typed verbs now share Complete's inner
+  loop instead of a separate parse-retry mechanism. Parse retries
+  iterate the loop, and the caller's conversation receives (original
+  prompt, final response) only — retry framing stays internal.
 - README `Configuration` section now states explicitly that SAIA has no
   config files — configuration is a `Config` dataclass the caller
   constructs through the builder.
