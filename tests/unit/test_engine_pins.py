@@ -150,6 +150,22 @@ class TestStructuredOutputConversationIsolation:
         parsed = json.loads(msgs[1].content)
         assert parsed == {"verdict": "y", "confidence": 0.5}
 
+        # Verify retry request structure (last_messages is from the successful retry).
+        retry_msgs = mock_backend.last_messages
+        # Retry prompt should start with the original prompt.
+        user_msgs = [m for m in retry_msgs if m.role == Role.USER]
+        assert user_msgs, "retry request should have a user message"
+        assert user_msgs[-1].content.startswith("Judge."), (
+            "retry prompt should start with original prompt"
+        )
+        # Failed raw content should NOT appear as a separate assistant message
+        # in the retry request (it may be embedded in the retry prompt itself).
+        assistant_msgs = [m for m in retry_msgs if m.role == Role.ASSISTANT]
+        for am in assistant_msgs:
+            assert am.content != "not json", (
+                "failed raw response should not appear as assistant message in retry"
+            )
+
     async def test_prior_history_preserved_across_parse_retry(
         self, mock_backend: MockBackend
     ) -> None:
@@ -279,3 +295,4 @@ class TestStructuredOutputErrorShape:
         assert err.schema_name == "_Judgment"
         # The last attempt's raw content is what surfaces.
         assert err.raw_content == "still not json"
+        assert err.parse_error is not None
