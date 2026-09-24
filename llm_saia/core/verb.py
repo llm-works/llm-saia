@@ -577,7 +577,14 @@ class Verb(OutputGuardMixin, Configurable):
             pause_check=pause_check,
         )
         result = await self._apply_text_guards(
-            prompt, content, run, conversation=conversation, _trace=trace
+            prompt,
+            content,
+            run,
+            conversation=conversation,
+            _trace=trace,
+            on_iteration=on_iteration,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
         )
         if _trace is None:
             self._emit_verb_trace(trace)
@@ -590,6 +597,9 @@ class Verb(OutputGuardMixin, Configurable):
         phase: str = "direct",
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> str:
         """Single attempt at text completion without applying guards.
 
@@ -603,6 +613,9 @@ class Verb(OutputGuardMixin, Configurable):
             conversation=conversation,
             _trace=_trace,
             on_decide=self._make_phase_on_decide(_trace, phase),
+            on_iteration=on_iteration,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
         )
         return content
 
@@ -649,8 +662,49 @@ class Verb(OutputGuardMixin, Configurable):
         parsing responses off that state without re-seeding ``prompt``.
         """
         trace = _trace if _trace is not None else self._init_verb_trace()
+        result = await self._parse_with_trace(
+            prompt,
+            schema,
+            run,
+            conversation,
+            trace,
+            on_iteration,
+            abort_signal,
+            pause_check,
+            resume,
+            _trace,
+        )
+        result = await self._apply_guards(
+            prompt,
+            result,
+            schema,
+            run,
+            conversation,
+            trace,
+            on_iteration,
+            abort_signal,
+            pause_check,
+        )
+        if _trace is None:
+            self._emit_verb_trace(trace)
+        return result
+
+    async def _parse_with_trace(
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+        trace: VerbTrace,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
+        abort_signal: asyncio.Event | None,
+        pause_check: Callable[[], Awaitable[bool]] | None,
+        resume: bool,
+        _trace: VerbTrace | None,
+    ) -> T:
+        """Run schema loop, emitting trace on parse failure if caller owns it."""
         try:
-            result = await self._run_schema_loop(
+            return await self._run_schema_loop(
                 prompt,
                 schema,
                 run=run,
@@ -667,12 +721,6 @@ class Verb(OutputGuardMixin, Configurable):
             if _trace is None:
                 self._emit_verb_trace(trace, reason="parse_error")
             raise
-        result = await self._apply_guards(
-            prompt, result, schema, run, conversation=conversation, _trace=trace
-        )
-        if _trace is None:
-            self._emit_verb_trace(trace)
-        return result
 
     async def _complete_structured_attempt(
         self,
@@ -682,6 +730,9 @@ class Verb(OutputGuardMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
         _phase: str = "attempt",
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> T:
         """Single structured attempt with parse-retry disabled.
 
@@ -700,6 +751,9 @@ class Verb(OutputGuardMixin, Configurable):
                 trace=trace,
                 phase=_phase,
                 retry_on_parse_failure=False,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
             )
         finally:
             if _trace is None:

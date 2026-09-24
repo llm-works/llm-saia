@@ -442,3 +442,35 @@ class TestUniformCooperativeSurface:
         required = {"on_iteration", "abort_signal", "pause_check", "resume"}
         missing = required - set(sig.parameters.keys())
         assert not missing, f"SAIA.complete_structured missing kwargs: {missing}"
+
+    async def test_on_iteration_fires_during_guard_retry(self) -> None:
+        """Guard retries must honor cooperative kwargs, including on_iteration.
+
+        Verifies that the guard retry path properly forwards on_iteration so
+        callers get visibility into all LLM calls, not just the primary attempt.
+        """
+        from llm_saia import OutputGuard
+        from llm_saia.core.backend import ChatResponse
+
+        def reject_short(text: str) -> str | None:
+            """Guard that fails short responses."""
+            return "response too short" if len(text) < 20 else None
+
+        guard = OutputGuard(reject_short, retry_instruction="Make it longer", max_retries=1)
+        backend = MockBackend()
+        # First response is short (fails guard), second is long enough
+        backend.queue_response(
+            ChatResponse(content="short", tool_calls=[], finish_reason="end_turn")
+        )
+        backend.set_complete_response("this is a sufficiently long response")
+        saia = make_saia(backend).with_guard(guard)
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        result = await saia.ask("artifact", "question?", on_iteration=on_iter)
+
+        # Guard retry produces a second LLM call, so on_iteration should fire twice
+        assert len(seen) == 2, f"expected on_iteration for both attempts, got {seen}"
+        assert result.value == "this is a sufficiently long response"

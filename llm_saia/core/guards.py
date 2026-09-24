@@ -9,10 +9,13 @@ Separated from verb.py to keep the base class manageable.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    NamedTuple,
     TypeVar,
     get_args,
     get_origin,
@@ -23,12 +26,21 @@ from .guard import Guarded, OutputGuard, OutputGuardError
 from .logging import VerbLoggingMixin
 
 if TYPE_CHECKING:
+    from .backend import ChatResponse
     from .config import CallOptions
     from .conversation import ConversationLike
     from .logger import Logger
     from .trace import VerbTrace
 
 T = TypeVar("T")
+
+
+class _CoopKwargs(NamedTuple):
+    """Bundle of cooperative kwargs for guard retry plumbing."""
+
+    on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None
+    abort_signal: asyncio.Event | None
+    pause_check: Callable[[], Awaitable[bool]] | None
 
 
 class OutputGuardMixin(VerbLoggingMixin):
@@ -62,6 +74,9 @@ class OutputGuardMixin(VerbLoggingMixin):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
         _phase: str = "attempt",
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> T:
         raise NotImplementedError
 
@@ -72,6 +87,9 @@ class OutputGuardMixin(VerbLoggingMixin):
         phase: str = "direct",
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> str:
         raise NotImplementedError
 
@@ -85,40 +103,30 @@ class OutputGuardMixin(VerbLoggingMixin):
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> T:
-        """Apply output guards sequentially, retrying on failure.
-
-        Applies both instance-level guards (from with_guard/with_guards) and
-        field-level guards (from Annotated[..., Guarded(...)] type hints).
-
-        If a guard retry produces a different result, all guards are re-validated
-        from the beginning to ensure the new result passes all guards.
-        """
-        config = self._get_call_options(run)
-        instance_guards = config.output_guards
-        field_guards = self._extract_field_guards(schema)
-
-        guard_names = [g.name for g in instance_guards]
-        field_guard_names = list(field_guards.keys())
+        """Apply output guards sequentially, retrying on failure."""
+        cfg = self._get_call_options(run)
+        inst, fld = cfg.output_guards, self._extract_field_guards(schema)
         self._lg.trace(
             "applying output guards",
-            extra={"instance_guards": guard_names, "field_guards": field_guard_names},
+            extra={"instance_guards": [g.name for g in inst], "field_guards": list(fld.keys())},
         )
-
-        for _round in range(self._MAX_REVALIDATION_ROUNDS):
-            original_result = result
-
-            result, changed = await self._apply_instance_guards_once(
-                prompt, result, original_result, schema, instance_guards, run, conversation, _trace
+        coop = _CoopKwargs(on_iteration, abort_signal, pause_check)
+        for _ in range(self._MAX_REVALIDATION_ROUNDS):
+            orig = result
+            result, chg = await self._apply_instance_guards_once(
+                prompt, result, orig, schema, inst, run, conversation, _trace, coop
             )
-            if not changed:
-                result, changed = await self._apply_field_guards_once(
-                    prompt, result, original_result, schema, field_guards, run, conversation, _trace
+            if not chg:
+                result, chg = await self._apply_field_guards_once(
+                    prompt, result, orig, schema, fld, run, conversation, _trace, coop
                 )
-            if not changed:
+            if not chg:
                 self._lg.trace("all output guards passed")
                 return result
-
         raise OutputGuardError(
             "revalidation", "guards did not converge", self._MAX_REVALIDATION_ROUNDS
         )
@@ -132,12 +140,13 @@ class OutputGuardMixin(VerbLoggingMixin):
         guards: tuple[OutputGuard, ...],
         run: CallOptions | None,
         conversation: ConversationLike | None,
-        _trace: VerbTrace | None = None,
+        _trace: VerbTrace | None,
+        coop: _CoopKwargs,
     ) -> tuple[T, bool]:
         """Apply instance-level guards once, returning (result, changed)."""
         for guard in guards:
             result = await self._apply_single_guard(
-                prompt, result, schema, guard, run, conversation=conversation, _trace=_trace
+                prompt, result, schema, guard, run, conversation, _trace, coop
             )
             if result != original_result:
                 return result, True
@@ -152,20 +161,14 @@ class OutputGuardMixin(VerbLoggingMixin):
         field_guards: dict[str, tuple[OutputGuard, ...]],
         run: CallOptions | None,
         conversation: ConversationLike | None,
-        _trace: VerbTrace | None = None,
+        _trace: VerbTrace | None,
+        coop: _CoopKwargs,
     ) -> tuple[T, bool]:
         """Apply field-level guards once, returning (result, changed)."""
         for field_name, guards in field_guards.items():
             for guard in guards:
                 result = await self._apply_field_guard(
-                    prompt,
-                    result,
-                    schema,
-                    field_name,
-                    guard,
-                    run,
-                    conversation=conversation,
-                    _trace=_trace,
+                    prompt, result, schema, field_name, guard, run, conversation, _trace, coop
                 )
                 if result != original_result:
                     return result, True
@@ -205,8 +208,9 @@ class OutputGuardMixin(VerbLoggingMixin):
         field_name: str,
         guard: OutputGuard,
         run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-        _trace: VerbTrace | None = None,
+        conversation: ConversationLike | None,
+        _trace: VerbTrace | None,
+        coop: _CoopKwargs,
     ) -> T:
         """Apply a guard to a specific field of the result."""
         gname = f"{field_name}.{guard.name}" if guard.name else field_name
@@ -225,12 +229,7 @@ class OutputGuardMixin(VerbLoggingMixin):
                 prompt, result, field_name, field_value, guard, error, attempt
             )
             result = await self._complete_structured_attempt(
-                retry_prompt,
-                schema,
-                run,
-                conversation=conversation,
-                _trace=_trace,
-                _phase="guard_retry",
+                retry_prompt, schema, run, conversation, _trace, "guard_retry", *coop
             )
             last_step_num = len(_trace.steps) if _trace else None
         return result  # Unreachable, satisfies type checker
@@ -281,15 +280,11 @@ class OutputGuardMixin(VerbLoggingMixin):
         schema: type[T],
         guard: OutputGuard,
         run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-        _trace: VerbTrace | None = None,
+        conversation: ConversationLike | None,
+        _trace: VerbTrace | None,
+        coop: _CoopKwargs,
     ) -> T:
-        """Apply one guard with retries.
-
-        Note: Guard retries call _complete_structured_attempt directly, bypassing
-        parse_retries. This is intentional - guards run after parsing succeeds,
-        so JSON structure is expected to be stable on retry.
-        """
+        """Apply one guard with retries."""
         self._lg.trace("checking guard", extra={"guard": guard.name})
         last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
@@ -303,12 +298,7 @@ class OutputGuardMixin(VerbLoggingMixin):
                 self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, result, guard, error, attempt)
                 result = await self._complete_structured_attempt(
-                    retry_prompt,
-                    schema,
-                    run,
-                    conversation=conversation,
-                    _trace=_trace,
-                    _phase="guard_retry",
+                    retry_prompt, schema, run, conversation, _trace, "guard_retry", *coop
                 )
                 last_step_num = len(_trace.steps) if _trace else None
             else:
@@ -324,32 +314,28 @@ class OutputGuardMixin(VerbLoggingMixin):
         run: CallOptions | None,
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> str:
-        """Apply output guards to text completion results.
-
-        Similar to _apply_guards but for plain text (not structured output).
-        Guards validate the text string directly.
-        """
+        """Apply output guards to text completion results."""
         config = self._get_call_options(run)
         guards = config.output_guards
         if not guards:
             return text
-
-        guard_names = [g.name for g in guards]
-        self._lg.trace("applying text guards", extra={"guards": guard_names})
-
+        self._lg.trace("applying text guards", extra={"guards": [g.name for g in guards]})
+        coop = _CoopKwargs(on_iteration, abort_signal, pause_check)
         for _round in range(self._MAX_REVALIDATION_ROUNDS):
             original_text = text
             for guard in guards:
                 text = await self._apply_single_text_guard(
-                    prompt, text, guard, run, conversation=conversation, _trace=_trace
+                    prompt, text, guard, run, conversation, _trace, coop
                 )
                 if text != original_text:
                     break
             else:
                 self._lg.trace("all text guards passed")
                 return text
-
         raise OutputGuardError(
             "revalidation", "guards did not converge", self._MAX_REVALIDATION_ROUNDS
         )
@@ -360,8 +346,9 @@ class OutputGuardMixin(VerbLoggingMixin):
         text: str,
         guard: OutputGuard,
         run: CallOptions | None,
-        conversation: ConversationLike | None = None,
-        _trace: VerbTrace | None = None,
+        conversation: ConversationLike | None,
+        _trace: VerbTrace | None,
+        coop: _CoopKwargs,
     ) -> str:
         """Apply one guard to text with retries."""
         self._lg.trace("checking text guard", extra={"guard": guard.name})
@@ -377,11 +364,7 @@ class OutputGuardMixin(VerbLoggingMixin):
                 self._log_guard_retry(guard.name, attempt + 1, guard.max_retries, error)
                 retry_prompt = self._build_guard_retry_prompt(prompt, text, guard, error, attempt)
                 text = await self._complete_text_attempt(
-                    retry_prompt,
-                    run,
-                    phase="guard_retry",
-                    conversation=conversation,
-                    _trace=_trace,
+                    retry_prompt, run, "guard_retry", conversation, _trace, *coop
                 )
                 last_step_num = len(_trace.steps) if _trace else None
             else:
