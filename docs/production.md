@@ -324,13 +324,12 @@ no returned conversation because `PauseRequested` is raised, not
 returned. (If `conversation` is omitted, the loop creates an internal
 `ListConversation` that is discarded on pause.) Persist the supplied
 conversation as-is (`Message.to_dict()` is JSON-safe). To resume, call
-the same verb again with `resume=True` and that conversation.
-`resume=True` skips prompt seeding; the loop sends the conversation
-as-is to the LLM, receives a fresh response for that iteration, and
-continues. `resume=True` requires `conversation`.
-
-`Ground` explicitly rejects `resume=True` (each source needs its own
-prompt) — it raises `ValueError`.
+the same verb again with `resume=True` and that conversation — except
+`Ground`, which rejects `resume=True` (each source needs its own
+prompt) and raises `ValueError`; a paused `Ground` call must be rerun
+from the start. `resume=True` skips prompt seeding; the loop sends the
+conversation as-is to the LLM, receives a fresh response for that
+iteration, and continues. `resume=True` requires `conversation`.
 
 The pinned contract for `Complete` (enforced by
 `tests/unit/test_task.py::TestCancellationContract`):
