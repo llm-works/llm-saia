@@ -807,7 +807,7 @@ class Verb(OutputGuardMixin, Configurable):
         )
         if not result.completed:
             self._raise_schema_loop_failure(result, strategy, schema)
-        await self._merge_successful_exchange(conversation, inner_conv, prior_len)
+        await self._merge_successful_exchange(conversation, inner_conv, prior_len, resume=resume)
         assert strategy.parsed_value is not None
         return strategy.parsed_value
 
@@ -846,17 +846,26 @@ class Verb(OutputGuardMixin, Configurable):
         outer: ConversationLike | None,
         inner: ConversationLike,
         prior_len: int,
+        *,
+        resume: bool = False,
     ) -> None:
         """Copy the original prompt + final response from ``inner`` to ``outer``.
 
         Intermediate parse-retry framing and failed responses stay inside the
         inner conversation so the caller's durable history reads as
         "asked X, got Y", not the full attempt-by-attempt exchange.
+
+        Under ``resume=True``, no fresh user prompt was seeded — ``new_msgs[0]``
+        would be an assistant turn (possibly a failed reply or bare tool call),
+        so only the final assistant response is merged.
         """
         if outer is None:
             return
         new_msgs = inner.as_messages()[prior_len:]
         if not new_msgs:
+            return
+        if resume:
+            await self._append_msg(outer, new_msgs[-1])
             return
         await self._append_msg(outer, new_msgs[0])
         if len(new_msgs) >= 2:

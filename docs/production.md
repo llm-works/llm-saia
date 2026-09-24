@@ -289,10 +289,21 @@ accept the same four kwargs:
 
 `abort_signal` and `pause_check` are both cancellation triggers; raising
 `PauseRequested` from `on_iteration` behaves like `abort_signal` for the
-questions below. All three return through a single path — the loop never
-raises `PauseRequested` to the caller.
+questions below.
 
-The pinned contract (also enforced by
+The return path is verb-dependent:
+
+- `Complete` catches `PauseRequested` and returns
+  `TaskResult(paused=True, completed=False, reason="paused")`. The pinned
+  contract below applies.
+- Text verbs (`Ask`, `Constrain`, `Instruct`, `Refine`), typed verbs
+  (`Extract`, `Verify`, `Classify`, `Choose`, `Critique_`, `Decompose`,
+  `Find`, `Ground`, `Synthesize`), and `SAIA.complete_structured`
+  re-raise `PauseRequested` to the caller for all three triggers. The
+  supplied `conversation` holds the partial state; passing it back with
+  `resume=True` continues from that point.
+
+The pinned contract for `Complete` (enforced by
 `tests/unit/test_task.py::TestCancellationContract`):
 
 | Question | `abort_signal` / `on_iteration` | `pause_check` |

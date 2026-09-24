@@ -32,6 +32,10 @@ class Ground(Verb):
         resume: bool = False,
     ) -> VerbResult[list[Evidence]]:
         """Find evidence in sources that supports or refutes the artifact."""
+        if resume:
+            raise ValueError(
+                "Ground does not support resume=True; each source needs its own prompt"
+            )
         trace = self._init_verb_trace()
         try:
             # Snapshot conversation before the loop so each source starts from
