@@ -443,6 +443,109 @@ class TestUniformCooperativeSurface:
         missing = required - set(sig.parameters.keys())
         assert not missing, f"SAIA.complete_structured missing kwargs: {missing}"
 
+
+# ---------------------------------------------------------------------------
+# Non-Complete pause/resume contract
+# ---------------------------------------------------------------------------
+
+
+class TestNonCompletePauseResumeContract:
+    """Pause on text or typed verbs preserves the caller's conversation such
+    that resume=True can continue the loop. Mirrors Complete's on_iteration
+    semantics but delivered by exception rather than a paused return value.
+    """
+
+    async def test_text_verb_pause_via_abort_leaves_prompt_in_conversation(
+        self,
+    ) -> None:
+        import asyncio as _asyncio
+
+        from llm_saia.core.conversation import ListConversation, Role
+        from llm_saia.core.errors import PauseRequested
+
+        backend = MockBackend()
+        saia = make_saia(backend)
+        conv = ListConversation()
+        signal = _asyncio.Event()
+        signal.set()  # backend raises PauseRequested on the first chat call
+
+        with pytest.raises(PauseRequested):
+            await saia.ask("artifact", "question?", conversation=conv, abort_signal=signal)
+
+        # The prompt was seeded before the loop hit the abort, so the
+        # caller's conversation now holds the ask that never got a reply.
+        msgs = conv.as_messages()
+        assert msgs, "conversation must retain the prompt for lossless resume"
+        assert msgs[0].role == Role.USER
+        assert "question?" in msgs[0].content
+        # The response was never received, so no assistant message should
+        # have been committed.
+        assert not any(m.role == Role.ASSISTANT for m in msgs)
+
+    async def test_typed_verb_pause_merges_prompt_into_outer_conversation(
+        self,
+    ) -> None:
+        import asyncio as _asyncio
+
+        from llm_saia.core.conversation import ListConversation, Role
+        from llm_saia.core.errors import PauseRequested
+
+        backend = MockBackend()
+        saia = make_saia(backend)
+        conv = ListConversation()
+        signal = _asyncio.Event()
+        signal.set()
+
+        with pytest.raises(PauseRequested):
+            await saia.complete_structured(
+                "Judge.", _Judgment, conversation=conv, abort_signal=signal
+            )
+
+        # Typed verbs run on a forked inner conversation; pause must merge
+        # the forked state back to the outer conv so the caller can resume.
+        msgs = conv.as_messages()
+        assert msgs, "outer conv must receive the prompt on pause"
+        assert msgs[0].role == Role.USER
+        assert msgs[0].content == "Judge."
+        assert not any(m.role == Role.ASSISTANT for m in msgs)
+
+    async def test_typed_verb_resume_after_pause_completes(self) -> None:
+        """A pause caught by the caller, followed by resume=True with the
+        same conversation, must produce a successful parse without
+        re-appending the prompt."""
+        import asyncio as _asyncio
+
+        from llm_saia.core.conversation import ListConversation
+        from llm_saia.core.errors import PauseRequested
+
+        backend = MockBackend()
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.9))
+        saia = make_saia(backend)
+        conv = ListConversation()
+        signal = _asyncio.Event()
+        signal.set()
+
+        # First call: abort before any response.
+        with pytest.raises(PauseRequested):
+            await saia.complete_structured(
+                "Judge.", _Judgment, conversation=conv, abort_signal=signal
+            )
+        prompt_len = len(conv.as_messages())
+        assert prompt_len == 1  # only the prompt
+
+        # Second call: same conversation, resume=True, signal cleared.
+        signal.clear()
+        result = await saia.complete_structured(
+            "ignored on resume", _Judgment, conversation=conv, resume=True
+        )
+        assert isinstance(result.value, _Judgment)
+        assert result.value.verdict == "y"
+        # The resume path did not re-seed the prompt; it consumed the
+        # conversation as-is and appended the successful response.
+        msgs = conv.as_messages()
+        assert msgs[0].content == "Judge."
+        assert any(m.role.value == "assistant" for m in msgs)
+
     async def test_on_iteration_fires_during_guard_retry(self) -> None:
         """Guard retries must honor cooperative kwargs, including on_iteration.
 

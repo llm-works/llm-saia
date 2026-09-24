@@ -277,7 +277,7 @@ class _LoopRunner:
         blocking_fb, advisory_fb = h._split_guard_feedback(outcomes)
 
         if ctx.on_iteration:
-            await self._call_on_iteration_with_terminal_commit(ctx, iteration, response, messages)
+            await ctx.on_iteration(iteration, response)
 
         decision = await ctx.strategy.decide(
             response, messages, iteration, blocking_fb, advisory_fb
@@ -294,36 +294,6 @@ class _LoopRunner:
         )
         ctx.strategy.on_iteration_complete(decision, tokens)
         return result, tokens, response
-
-    async def _call_on_iteration_with_terminal_commit(
-        self,
-        ctx: _IterationContext,
-        iteration: int,
-        response: ChatResponse,
-        messages: list[Message],
-    ) -> None:
-        """Invoke ``on_iteration`` and commit terminal no-tool responses on pause.
-
-        When the callback raises :class:`PauseRequested` on a response that
-        carries no tool calls, that response is the LLM's terminal answer.
-        Committing it before the pause propagates lets the caller resume
-        from the same conversation without re-generating the answer.
-        Tool-call responses remain uncommitted so resume can re-drive the
-        tool loop.
-        """
-        from .errors import PauseRequested
-
-        assert ctx.on_iteration is not None
-        try:
-            await ctx.on_iteration(iteration, response)
-        except PauseRequested:
-            if not response.tool_calls:
-                h = self._host
-                msg = h._to_message(response)
-                messages.append(msg)
-                if ctx.conv:
-                    await h._append_msg(ctx.conv, msg)
-            raise
 
     async def _execute_decision(
         self,

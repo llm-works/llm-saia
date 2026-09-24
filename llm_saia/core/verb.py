@@ -806,10 +806,31 @@ class Verb(OutputGuardMixin, Configurable):
             pause_check,
         )
         if not result.completed:
-            self._raise_schema_loop_failure(result, strategy, schema)
+            await self._handle_schema_loop_incomplete(
+                result, strategy, schema, conversation, inner_conv, prior_len
+            )
         await self._merge_successful_exchange(conversation, inner_conv, prior_len, resume=resume)
         assert strategy.parsed_value is not None
         return strategy.parsed_value
+
+    async def _handle_schema_loop_incomplete(
+        self,
+        result: CoreLoopResult,
+        strategy: SchemaTerminatingStrategy[Any],
+        schema: type[T],
+        conversation: ConversationLike | None,
+        inner_conv: ConversationLike,
+        prior_len: int,
+    ) -> None:
+        """Merge pause state to outer conv on pause, then raise the failure.
+
+        Unlike success (which merges a clean ``prompt + final`` pair), pause
+        preserves intermediate retry framing and failed responses because
+        ``resume=True`` needs them to reconstruct the exact loop position.
+        """
+        if result.paused:
+            await self._merge_pause_state(conversation, inner_conv, prior_len)
+        self._raise_schema_loop_failure(result, strategy, schema)
 
     async def _drive_schema_core_loop(
         self,
@@ -870,6 +891,26 @@ class Verb(OutputGuardMixin, Configurable):
         await self._append_msg(outer, new_msgs[0])
         if len(new_msgs) >= 2:
             await self._append_msg(outer, new_msgs[-1])
+
+    async def _merge_pause_state(
+        self,
+        outer: ConversationLike | None,
+        inner: ConversationLike,
+        prior_len: int,
+    ) -> None:
+        """Copy all new inner messages to outer for lossless resume on pause.
+
+        Complements :meth:`_merge_successful_exchange`: success merges only
+        the caller-visible pair ``(prompt, final response)`` for a clean
+        history; pause merges every message the loop added — the prompt,
+        intermediate retry framing, failed parses, tool exchanges — so a
+        subsequent call with ``resume=True`` can reconstruct the exact
+        loop state at pause and continue from there.
+        """
+        if outer is None:
+            return
+        for msg in inner.as_messages()[prior_len:]:
+            await self._append_msg(outer, msg)
 
     @staticmethod
     def _bump_iterations_for_parse_budget(

@@ -299,9 +299,28 @@ The return path is verb-dependent:
 - Text verbs (`Ask`, `Constrain`, `Instruct`, `Refine`), typed verbs
   (`Extract`, `Verify`, `Classify`, `Choose`, `Critique_`, `Decompose`,
   `Find`, `Ground`, `Synthesize`), and `SAIA.complete_structured`
-  re-raise `PauseRequested` to the caller for all three triggers. The
-  supplied `conversation` holds the partial state; passing it back with
-  `resume=True` continues from that point.
+  re-raise `PauseRequested` to the caller. Their contract (below) mirrors
+  Complete's `on_iteration` semantics but is delivered by exception
+  rather than by a paused return value.
+
+**Non-Complete pause/resume contract.** When any of the three triggers
+fires on a text or typed verb, the LLM response of the pause iteration
+is not committed. The caller's `conversation` object holds the loop
+state just before that LLM call:
+
+- The verb's prompt (or a prior verb call's history, if you continued
+  a conversation) is present.
+- Any intermediate exchanges the loop already committed — parse-retry
+  framing, failed responses, tool results — are present.
+- The response that triggered the pause is *not* present.
+
+To resume, call the same verb again with `resume=True` and the same
+`conversation`. `resume=True` skips prompt seeding; the loop sends the
+conversation as-is to the LLM, receives a fresh response for that
+iteration, and continues. `resume=True` requires `conversation`.
+
+`Ground` explicitly rejects `resume=True` (each source needs its own
+prompt) — it raises `ValueError`.
 
 The pinned contract for `Complete` (enforced by
 `tests/unit/test_task.py::TestCancellationContract`):
