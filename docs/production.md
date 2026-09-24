@@ -304,9 +304,9 @@ The return path is verb-dependent:
   rather than by a paused return value.
 
 **Non-Complete pause/resume contract.** When a trigger fires on a text
-or typed verb, the caller's `conversation` object holds every message
-the loop had committed as of that moment. What "committed" means
-depends on which trigger fired:
+verb, a typed verb, or `SAIA.complete_structured`, the caller's
+`conversation` object holds every message the loop had committed as of
+that moment. What "committed" means depends on which trigger fired:
 
 - `abort_signal` and `PauseRequested` from `on_iteration` fire before
   the loop's per-iteration commit step. The iteration's LLM response
@@ -318,11 +318,16 @@ depends on which trigger fired:
   results for tools that had already completed; remaining tools in the
   batch appear as `"Paused."` tool messages and are never executed.
 
-Persist the returned `conversation` as-is (`Message.to_dict()` is
-JSON-safe). To resume, call the same verb again with `resume=True` and
-that conversation. `resume=True` skips prompt seeding; the loop sends
-the conversation as-is to the LLM, receives a fresh response for that
-iteration, and continues. `resume=True` requires `conversation`.
+To persist paused state, callers must supply their own `conversation`
+before the initial call — the loop mutates it in place, and there is
+no returned conversation because `PauseRequested` is raised, not
+returned. (If `conversation` is omitted, the loop creates an internal
+`ListConversation` that is discarded on pause.) Persist the supplied
+conversation as-is (`Message.to_dict()` is JSON-safe). To resume, call
+the same verb again with `resume=True` and that conversation.
+`resume=True` skips prompt seeding; the loop sends the conversation
+as-is to the LLM, receives a fresh response for that iteration, and
+continues. `resume=True` requires `conversation`.
 
 `Ground` explicitly rejects `resume=True` (each source needs its own
 prompt) — it raises `ValueError`.
