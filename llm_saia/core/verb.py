@@ -312,8 +312,10 @@ class Verb(OutputGuardMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
         on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        on_decide: Callable[[ChatResponse, LoopDecision, int, list[Any]], None] | None = None,
         resume: bool = False,
         abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> tuple[str, T | None]:
         """Execute prompt with tool-calling loop.
 
@@ -326,6 +328,9 @@ class Verb(OutputGuardMixin, Configurable):
             _trace: Parent verb trace.
             on_iteration: Optional callback invoked each iteration. May raise
                 ``PauseRequested`` to exit the loop early.
+            on_decide: Optional callback invoked after each iteration's decision.
+                When provided, the loop delegates step recording to it, letting
+                callers stamp phase-labeled trace steps.
             resume: If True, continue from existing conversation state.
             abort_signal: Optional event for fast abort during LLM streaming.
                 When set, backends that support streaming can abort within ~100ms.
@@ -353,7 +358,9 @@ class Verb(OutputGuardMixin, Configurable):
             strategy=SimpleStrategy(),
             conv=conv,
             abort_signal=abort_signal,
+            pause_check=pause_check,
             on_iteration=on_iteration,
+            on_decide=on_decide,
             trace=_trace,
         )
 
@@ -540,44 +547,48 @@ class Verb(OutputGuardMixin, Configurable):
         run: CallOptions | None = None,
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        *,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> str:
-        """Complete with tools if available, otherwise direct.
+        """Complete via the unified loop, applying output guards if configured.
 
-        Applies output guards if configured.
+        Zero tools resolves as a one-iteration loop — the LLM returns text
+        without tool calls, :class:`SimpleStrategy` returns COMPLETE, and the
+        loop terminates immediately. With tools configured, standard
+        tool-calling iteration applies.
+
+        The cooperative kwargs (``on_iteration``, ``abort_signal``,
+        ``pause_check``, ``resume``) are the framework-wide surface — see
+        :meth:`_loop` for their contract.
         """
         trace = _trace if _trace is not None else self._init_verb_trace()
-        if self._has_tools():
-            content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=trace)
-        else:
-            content = await self._complete_direct(prompt, run, conversation, trace)
+        content, _ = await self._loop(
+            prompt,
+            run=run,
+            conversation=conversation,
+            _trace=trace,
+            on_iteration=on_iteration,
+            on_decide=self._make_phase_on_decide(trace, "attempt"),
+            resume=resume,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
+        )
         result = await self._apply_text_guards(
-            prompt, content, run, conversation=conversation, _trace=trace
+            prompt,
+            content,
+            run,
+            conversation=conversation,
+            _trace=trace,
+            on_iteration=on_iteration,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
         )
         if _trace is None:
             self._emit_verb_trace(trace)
         return result
-
-    async def _complete_direct(
-        self,
-        prompt: str,
-        run: CallOptions | None,
-        conversation: ConversationLike | None,
-        trace: VerbTrace,
-    ) -> str:
-        """Direct (no-tool) text completion. Records step to trace."""
-        config = self._get_call_options(run)
-        conv = conversation if conversation is not None else ListConversation()
-        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
-        response = await self._chat(
-            conv.as_messages(),
-            max_tokens=self._max_tokens(config),
-            temperature=self._resolve_temperature(run),
-            call=config,
-            tools=[],
-        )
-        await self._append_msg(conv, self._to_message(response))
-        self._record_step(response, phase="attempt", _trace=trace)
-        return response.content
 
     async def _complete_text_attempt(
         self,
@@ -586,27 +597,43 @@ class Verb(OutputGuardMixin, Configurable):
         phase: str = "direct",
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> str:
         """Single attempt at text completion without applying guards.
 
-        Used by guard retry logic to avoid recursion.
+        Used by guard retry logic to avoid recursion. Routes through
+        :meth:`_loop` (zero tools → one iteration) and stamps each iteration
+        with ``phase`` so ``VerbTrace.guard_retries`` stays accurate.
         """
-        if self._has_tools():
-            content, _ = await self._loop(prompt, run=run, conversation=conversation, _trace=_trace)
-            return content
-        config = self._get_call_options(run)
-        conv = conversation if conversation is not None else ListConversation()
-        await self._append_msg(conv, Message(role=Role.USER, content=prompt))
-        response = await self._chat(
-            conv.as_messages(),
-            max_tokens=self._max_tokens(config),
-            temperature=self._resolve_temperature(run),
-            call=config,
-            tools=[],
+        content, _ = await self._loop(
+            prompt,
+            run=run,
+            conversation=conversation,
+            _trace=_trace,
+            on_decide=self._make_phase_on_decide(_trace, phase),
+            on_iteration=on_iteration,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
         )
-        await self._append_msg(conv, self._to_message(response))
-        self._record_step(response, phase=phase, _trace=_trace)
-        return response.content
+        return content
+
+    def _make_phase_on_decide(
+        self, trace: VerbTrace | None, phase: str
+    ) -> Callable[[ChatResponse, LoopDecision, int, list[GuardOutcome]], None]:
+        """Build an ``on_decide`` that stamps each iteration's step with ``phase``."""
+
+        def on_decide(
+            response: ChatResponse,
+            decision: LoopDecision,
+            iteration: int,
+            outcomes: list[GuardOutcome],
+        ) -> None:
+            self._record_step(response, phase=phase, _trace=trace)
+            self._attach_guard_outcomes(trace, outcomes)
+
+        return on_decide
 
     async def _complete_structured(
         self,
@@ -615,6 +642,11 @@ class Verb(OutputGuardMixin, Configurable):
         run: CallOptions | None = None,
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
+        *,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> T:
         """Complete structured with parse-retry and output guards.
 
@@ -622,10 +654,57 @@ class Verb(OutputGuardMixin, Configurable):
         retries (via ``schema_retry`` iteration guards) come for free from the
         strategy; output guards (instance + field) run over the parsed value
         once the strategy terminates.
+
+        The cooperative kwargs (``on_iteration``, ``abort_signal``,
+        ``pause_check``, ``resume``) are the framework-wide surface — see
+        :meth:`_loop` for their contract. ``resume=True`` requires
+        ``conversation`` to hold the prior state; the strategy continues
+        parsing responses off that state without re-seeding ``prompt``.
         """
         trace = _trace if _trace is not None else self._init_verb_trace()
+        result = await self._parse_with_trace(
+            prompt,
+            schema,
+            run,
+            conversation,
+            trace,
+            on_iteration,
+            abort_signal,
+            pause_check,
+            resume,
+            _trace,
+        )
+        result = await self._apply_guards(
+            prompt,
+            result,
+            schema,
+            run,
+            conversation,
+            trace,
+            on_iteration,
+            abort_signal,
+            pause_check,
+        )
+        if _trace is None:
+            self._emit_verb_trace(trace)
+        return result
+
+    async def _parse_with_trace(
+        self,
+        prompt: str,
+        schema: type[T],
+        run: CallOptions | None,
+        conversation: ConversationLike | None,
+        trace: VerbTrace,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
+        abort_signal: asyncio.Event | None,
+        pause_check: Callable[[], Awaitable[bool]] | None,
+        resume: bool,
+        _trace: VerbTrace | None,
+    ) -> T:
+        """Run schema loop, emitting trace on parse failure if caller owns it."""
         try:
-            result = await self._run_schema_loop(
+            return await self._run_schema_loop(
                 prompt,
                 schema,
                 run=run,
@@ -633,17 +712,15 @@ class Verb(OutputGuardMixin, Configurable):
                 trace=trace,
                 phase="attempt",
                 retry_on_parse_failure=True,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
+                resume=resume,
             )
         except StructuredOutputError:
             if _trace is None:
                 self._emit_verb_trace(trace, reason="parse_error")
             raise
-        result = await self._apply_guards(
-            prompt, result, schema, run, conversation=conversation, _trace=trace
-        )
-        if _trace is None:
-            self._emit_verb_trace(trace)
-        return result
 
     async def _complete_structured_attempt(
         self,
@@ -653,6 +730,9 @@ class Verb(OutputGuardMixin, Configurable):
         conversation: ConversationLike | None = None,
         _trace: VerbTrace | None = None,
         _phase: str = "attempt",
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> T:
         """Single structured attempt with parse-retry disabled.
 
@@ -671,6 +751,9 @@ class Verb(OutputGuardMixin, Configurable):
                 trace=trace,
                 phase=_phase,
                 retry_on_parse_failure=False,
+                on_iteration=on_iteration,
+                abort_signal=abort_signal,
+                pause_check=pause_check,
             )
         finally:
             if _trace is None:
@@ -686,60 +769,148 @@ class Verb(OutputGuardMixin, Configurable):
         trace: VerbTrace,
         phase: str,
         retry_on_parse_failure: bool,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> T:
         """Drive ``_core_loop`` with :class:`SchemaTerminatingStrategy`.
 
         Runs the loop on a forked inner conversation and merges only the
         original prompt + final successful response back to the caller's
         conversation, so failed parse attempts stay isolated from callers'
-        durable history.
+        durable history. Under ``resume=True``, ``prompt`` is ignored and the
+        loop continues from the existing conversation state; ``conversation``
+        must be supplied.
         """
-        from .schema import to_json_schema
-
+        if resume and conversation is None:
+            raise ValueError("conversation is required when resume=True")
         config = self._get_call_options(run)
         strategy = SchemaTerminatingStrategy(
             schema, self, config, retry_on_parse_failure=retry_on_parse_failure
         )
         config = self._bump_iterations_for_parse_budget(config, strategy)
-        inner_conv, prior_len, messages = await self._seed_inner_conv(conversation, prompt)
+        inner_conv, prior_len, messages = await self._seed_inner_conv(
+            conversation, prompt, resume=resume
+        )
+        result = await self._drive_schema_core_loop(
+            messages,
+            config,
+            strategy,
+            inner_conv,
+            trace,
+            phase,
+            schema,
+            on_iteration,
+            abort_signal,
+            pause_check,
+        )
+        if not result.completed:
+            await self._handle_schema_loop_incomplete(
+                result, strategy, schema, conversation, inner_conv, prior_len
+            )
+        await self._merge_successful_exchange(conversation, inner_conv, prior_len, resume=resume)
+        assert strategy.parsed_value is not None
+        return strategy.parsed_value
 
-        result = await self._core_loop(
+    async def _handle_schema_loop_incomplete(
+        self,
+        result: CoreLoopResult,
+        strategy: SchemaTerminatingStrategy[Any],
+        schema: type[T],
+        conversation: ConversationLike | None,
+        inner_conv: ConversationLike,
+        prior_len: int,
+    ) -> None:
+        """Merge pause state to outer conv on pause, then raise the failure.
+
+        Unlike success (which merges a clean ``prompt + final`` pair), pause
+        preserves intermediate retry framing and failed responses because
+        ``resume=True`` needs them to reconstruct the exact loop position.
+        """
+        if result.paused:
+            await self._merge_pause_state(conversation, inner_conv, prior_len)
+        self._raise_schema_loop_failure(result, strategy, schema)
+
+    async def _drive_schema_core_loop(
+        self,
+        messages: list[Message],
+        config: CallOptions,
+        strategy: SchemaTerminatingStrategy[T],
+        inner_conv: ConversationLike,
+        trace: VerbTrace,
+        phase: str,
+        schema: type[T],
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None,
+        abort_signal: asyncio.Event | None,
+        pause_check: Callable[[], Awaitable[bool]] | None,
+    ) -> CoreLoopResult:
+        """Invoke ``_core_loop`` with the schema strategy and its callback wiring."""
+        from .schema import to_json_schema
+
+        return await self._core_loop(
             messages=messages,
             config=config,
             strategy=strategy,
             conv=inner_conv,
+            on_iteration=on_iteration,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
             on_decide=self._make_schema_on_decide(strategy, trace, phase),
             trace=trace,
             response_schema=to_json_schema(schema),
             suppress_tools=(phase == "finalize"),
         )
 
-        if not result.completed:
-            self._raise_schema_loop_failure(result, strategy, schema)
-        await self._merge_successful_exchange(conversation, inner_conv, prior_len)
-        assert strategy.parsed_value is not None
-        return strategy.parsed_value
-
     async def _merge_successful_exchange(
         self,
         outer: ConversationLike | None,
         inner: ConversationLike,
         prior_len: int,
+        *,
+        resume: bool = False,
     ) -> None:
         """Copy the original prompt + final response from ``inner`` to ``outer``.
 
         Intermediate parse-retry framing and failed responses stay inside the
         inner conversation so the caller's durable history reads as
         "asked X, got Y", not the full attempt-by-attempt exchange.
+
+        Under ``resume=True``, no fresh user prompt was seeded — ``new_msgs[0]``
+        would be an assistant turn (possibly a failed reply or bare tool call),
+        so only the final assistant response is merged.
         """
         if outer is None:
             return
         new_msgs = inner.as_messages()[prior_len:]
         if not new_msgs:
             return
+        if resume:
+            await self._append_msg(outer, new_msgs[-1])
+            return
         await self._append_msg(outer, new_msgs[0])
         if len(new_msgs) >= 2:
             await self._append_msg(outer, new_msgs[-1])
+
+    async def _merge_pause_state(
+        self,
+        outer: ConversationLike | None,
+        inner: ConversationLike,
+        prior_len: int,
+    ) -> None:
+        """Copy all new inner messages to outer for lossless resume on pause.
+
+        Complements :meth:`_merge_successful_exchange`: success merges only
+        the caller-visible pair ``(prompt, final response)`` for a clean
+        history; pause merges every message the loop added — the prompt,
+        intermediate retry framing, failed parses, tool exchanges — so a
+        subsequent call with ``resume=True`` can reconstruct the exact
+        loop state at pause and continue from there.
+        """
+        if outer is None:
+            return
+        for msg in inner.as_messages()[prior_len:]:
+            await self._append_msg(outer, msg)
 
     @staticmethod
     def _bump_iterations_for_parse_budget(
@@ -759,21 +930,28 @@ class Verb(OutputGuardMixin, Configurable):
         return config
 
     async def _seed_inner_conv(
-        self, outer: ConversationLike | None, prompt: str
+        self,
+        outer: ConversationLike | None,
+        prompt: str,
+        *,
+        resume: bool = False,
     ) -> tuple[ConversationLike, int, list[Message]]:
         """Create the strategy's inner conversation seeded from the outer one.
 
         Returns ``(inner_conv, prior_len, messages)``. ``prior_len`` marks the
         boundary between messages inherited from the outer conversation and
         those added during the strategy run — used to slice out the newly
-        produced exchange for the outer merge.
+        produced exchange for the outer merge. Under ``resume=True``, the
+        initial user message is not appended; the loop continues from the
+        conversation's existing tail.
         """
         inner: ConversationLike = ListConversation()
         if outer is not None:
             for msg in outer.as_messages():
                 inner.append(msg)
         prior_len = len(inner.as_messages())
-        await self._append_msg(inner, Message(role=Role.USER, content=prompt))
+        if not resume:
+            await self._append_msg(inner, Message(role=Role.USER, content=prompt))
         return inner, prior_len, list(inner.as_messages())
 
     def _make_schema_on_decide(
@@ -818,13 +996,20 @@ class Verb(OutputGuardMixin, Configurable):
         strategy: SchemaTerminatingStrategy[Any],
         schema: type[T],
     ) -> None:
-        """Translate a non-completed loop result into the right exception."""
-        if strategy.last_parse_error is not None:
-            raise strategy.last_parse_error
+        """Translate a non-completed loop result into the right exception.
+
+        Pause takes precedence over a stale ``last_parse_error``: if a
+        callback pauses during a retry iteration, the strategy's parse
+        error from the previous attempt is still set. Raising it would
+        obscure the pause and break the pause/resume contract. A terminal
+        parse failure that did not pause still surfaces its parse error.
+        """
         if result.paused:
             from .errors import PauseRequested
 
             raise PauseRequested()
+        if strategy.last_parse_error is not None:
+            raise strategy.last_parse_error
         raise StructuredOutputError(
             f"Loop terminated without a successful parse of {schema.__name__}",
             schema_name=schema.__name__,

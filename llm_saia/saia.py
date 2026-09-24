@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
@@ -14,6 +16,7 @@ from .core.types import VerbResult
 
 if TYPE_CHECKING:
     from .builder import SAIABuilder
+    from .core.backend import ChatResponse
     from .core.conversation import ConversationLike
 from .verbs import (
     Ask,
@@ -104,6 +107,10 @@ class SAIA(Configurable):
         schema: type[T],
         *,
         conversation: ConversationLike | None = None,
+        on_iteration: Callable[[int, ChatResponse], Awaitable[None]] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        pause_check: Callable[[], Awaitable[bool]] | None = None,
+        resume: bool = False,
     ) -> VerbResult[T]:
         """Send ``prompt`` verbatim and parse the response against ``schema``.
 
@@ -130,6 +137,16 @@ class SAIA(Configurable):
                 ``@model_validator`` checks run on parse and can trigger
                 the same schema-retry loop as dataclass parse failures.
             conversation: Optional conversation to append messages to.
+            on_iteration: Optional async callback invoked once per backend
+                LLM call. May raise :class:`~llm_saia.errors.PauseRequested`
+                to exit the loop early.
+            abort_signal: Optional :class:`asyncio.Event` that signals a fast
+                cancel of the current backend call.
+            pause_check: Optional async callback checked between tool
+                executions in a batch. No-op absent tools.
+            resume: When True, continue from ``conversation``'s existing
+                state instead of appending ``prompt`` as a new user turn.
+                Requires ``conversation``.
 
         Returns:
             A :class:`VerbResult` holding the parsed value and the emitted
@@ -148,7 +165,15 @@ class SAIA(Configurable):
         """
         from .verbs.prompt import _PromptVerb
 
-        return await _PromptVerb(self._config)(prompt, schema, conversation=conversation)
+        return await _PromptVerb(self._config)(
+            prompt,
+            schema,
+            conversation=conversation,
+            on_iteration=on_iteration,
+            abort_signal=abort_signal,
+            pause_check=pause_check,
+            resume=resume,
+        )
 
     # --- Memory Verbs ---
 

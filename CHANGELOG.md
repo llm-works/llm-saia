@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Every public verb — Complete, Ask, Constrain, Instruct, Extract, Verify,
+  and every other domain verb, plus `SAIA.complete_structured` — now
+  accepts the cooperative surface (`on_iteration`, `abort_signal`,
+  `pause_check`, `resume`) uniformly. Same kwarg, same meaning everywhere.
 - Optional Pydantic schema support via `pip install 'llm-saia[pydantic]'`.
   `SAIA.complete_structured` now accepts `pydantic.BaseModel` in addition
   to `@dataclass` — `Field(ge=, le=, pattern=, ...)` and validators flow

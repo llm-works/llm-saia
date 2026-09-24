@@ -231,11 +231,25 @@ class TestFinalizeSuppressesTools:
 # ---------------------------------------------------------------------------
 
 
-class TestTextVerbDispatchEquivalence:
-    """Ask/Instruct produce equivalent observable content whether the dispatch
-    goes through the direct-call path (no tools) or the loop path (tools
-    configured), given identical backend responses.
+class TestTextVerbUnifiedLoopDispatch:
+    """Ask/Instruct always route through the unified loop, whether tools are
+    configured or not. Zero tools resolves as a one-iteration loop; results
+    must be identical to the tools-configured case for the same backend
+    output.
     """
+
+    async def test_text_verb_zero_tools_records_single_attempt_step(
+        self, mock_backend: MockBackend
+    ) -> None:
+        """Ask with no tools should produce exactly one trace step, phase='attempt'."""
+        mock_backend.set_complete_response("the answer")
+        saia = make_saia(mock_backend)
+
+        result = await saia.ask("artifact", "question?")
+
+        assert result.value == "the answer"
+        assert len(result.trace.steps) == 1
+        assert result.trace.steps[0].phase == "attempt"
 
     async def test_ask_returns_same_content_across_dispatch_paths(self) -> None:
         direct_backend = MockBackend()
@@ -305,3 +319,261 @@ class TestStructuredOutputErrorShape:
         # The last attempt's raw content is what surfaces.
         assert err.raw_content == "still not json"
         assert err.parse_error is not None
+
+
+# ---------------------------------------------------------------------------
+# Uniform cooperative surface across every public verb
+# ---------------------------------------------------------------------------
+
+
+class TestUniformCooperativeSurface:
+    """Every public verb accepts on_iteration / abort_signal / pause_check /
+    resume as kwargs. Contract: the kwargs mean the same thing everywhere —
+    on_iteration fires per LLM call, abort_signal cancels the current call,
+    pause_check is checked between tools in a batch, resume continues from
+    prior conversation state.
+    """
+
+    async def test_on_iteration_fires_once_per_llm_call_on_text_verb(self) -> None:
+        backend = MockBackend()
+        backend.set_complete_response("the answer")
+        saia = make_saia(backend)
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        await saia.ask("artifact", "question?", on_iteration=on_iter)
+
+        assert seen == [0], f"expected one on_iteration call at iter 0, got {seen}"
+
+    async def test_on_iteration_fires_once_per_llm_call_on_typed_verb(self) -> None:
+        backend = MockBackend()
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.9))
+        saia = make_saia(backend)
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        await saia.complete_structured("Judge.", _Judgment, on_iteration=on_iter)
+
+        assert seen == [0]
+
+    async def test_on_iteration_fires_per_parse_retry(self) -> None:
+        backend = MockBackend()
+        backend.queue_raw_structured("not json")
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.5))
+        saia = make_saia(backend).with_guard(schema_retry(max_retries=1))
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        await saia.complete_structured("Judge.", _Judgment, on_iteration=on_iter)
+
+        # Two backend calls (first parse fails, second succeeds) → two on_iteration.
+        assert seen == [0, 1]
+
+    async def test_abort_signal_cancels_text_verb_before_response(self) -> None:
+        import asyncio as _asyncio
+
+        backend = MockBackend()
+        backend.set_complete_response("would have been the answer")
+        saia = make_saia(backend)
+        signal = _asyncio.Event()
+        signal.set()  # Pre-signaled: MockBackend raises PauseRequested on first check.
+
+        from llm_saia.core.errors import PauseRequested
+
+        # Text verbs surface abort as PauseRequested (matches Complete's contract).
+        with pytest.raises(PauseRequested):
+            await saia.ask("artifact", "question?", abort_signal=signal)
+
+    async def test_every_public_verb_accepts_cooperative_kwargs(self) -> None:
+        """Smoke test: each verb accepts the four kwargs without TypeError."""
+        import inspect
+
+        from llm_saia.verbs import (
+            Ask,
+            Choose,
+            Classify,
+            Constrain,
+            Critique_,
+            Decompose,
+            Extract,
+            Find,
+            Ground,
+            Instruct,
+            Refine,
+            Synthesize,
+            Verify,
+        )
+        from llm_saia.verbs.prompt import _PromptVerb
+
+        required = {"on_iteration", "abort_signal", "pause_check", "resume"}
+        for verb_cls in (
+            Ask,
+            Choose,
+            Classify,
+            Constrain,
+            Critique_,
+            Decompose,
+            Extract,
+            Find,
+            Ground,
+            Instruct,
+            Refine,
+            Synthesize,
+            Verify,
+            _PromptVerb,
+        ):
+            sig = inspect.signature(verb_cls.__call__)
+            missing = required - set(sig.parameters.keys())
+            assert not missing, f"{verb_cls.__name__}.__call__ missing kwargs: {missing}"
+
+    async def test_saia_complete_structured_accepts_cooperative_kwargs(self) -> None:
+        """SAIA.complete_structured on the public class exposes the same surface."""
+        import inspect
+
+        from llm_saia import SAIA
+
+        sig = inspect.signature(SAIA.complete_structured)
+        required = {"on_iteration", "abort_signal", "pause_check", "resume"}
+        missing = required - set(sig.parameters.keys())
+        assert not missing, f"SAIA.complete_structured missing kwargs: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Non-Complete pause/resume contract
+# ---------------------------------------------------------------------------
+
+
+class TestNonCompletePauseResumeContract:
+    """Pause on text or typed verbs preserves the caller's conversation such
+    that resume=True can continue the loop. Mirrors Complete's on_iteration
+    semantics but delivered by exception rather than a paused return value.
+    """
+
+    async def test_text_verb_pause_via_abort_leaves_prompt_in_conversation(
+        self,
+    ) -> None:
+        import asyncio as _asyncio
+
+        from llm_saia.core.conversation import ListConversation, Role
+        from llm_saia.core.errors import PauseRequested
+
+        backend = MockBackend()
+        saia = make_saia(backend)
+        conv = ListConversation()
+        signal = _asyncio.Event()
+        signal.set()  # backend raises PauseRequested on the first chat call
+
+        with pytest.raises(PauseRequested):
+            await saia.ask("artifact", "question?", conversation=conv, abort_signal=signal)
+
+        # The prompt was seeded before the loop hit the abort, so the
+        # caller's conversation now holds the ask that never got a reply.
+        msgs = conv.as_messages()
+        assert msgs, "conversation must retain the prompt for lossless resume"
+        assert msgs[0].role == Role.USER
+        assert "question?" in msgs[0].content
+        # The response was never received, so no assistant message should
+        # have been committed.
+        assert not any(m.role == Role.ASSISTANT for m in msgs)
+
+    async def test_typed_verb_pause_merges_prompt_into_outer_conversation(
+        self,
+    ) -> None:
+        import asyncio as _asyncio
+
+        from llm_saia.core.conversation import ListConversation, Role
+        from llm_saia.core.errors import PauseRequested
+
+        backend = MockBackend()
+        saia = make_saia(backend)
+        conv = ListConversation()
+        signal = _asyncio.Event()
+        signal.set()
+
+        with pytest.raises(PauseRequested):
+            await saia.complete_structured(
+                "Judge.", _Judgment, conversation=conv, abort_signal=signal
+            )
+
+        # Typed verbs run on a forked inner conversation; pause must merge
+        # the forked state back to the outer conv so the caller can resume.
+        msgs = conv.as_messages()
+        assert msgs, "outer conv must receive the prompt on pause"
+        assert msgs[0].role == Role.USER
+        assert msgs[0].content == "Judge."
+        assert not any(m.role == Role.ASSISTANT for m in msgs)
+
+    async def test_typed_verb_resume_after_pause_completes(self) -> None:
+        """A pause caught by the caller, followed by resume=True with the
+        same conversation, must produce a successful parse without
+        re-appending the prompt."""
+        import asyncio as _asyncio
+
+        from llm_saia.core.conversation import ListConversation
+        from llm_saia.core.errors import PauseRequested
+
+        backend = MockBackend()
+        backend.set_structured_response(_Judgment, _Judgment("y", 0.9))
+        saia = make_saia(backend)
+        conv = ListConversation()
+        signal = _asyncio.Event()
+        signal.set()
+
+        # First call: abort before any response.
+        with pytest.raises(PauseRequested):
+            await saia.complete_structured(
+                "Judge.", _Judgment, conversation=conv, abort_signal=signal
+            )
+        prompt_len = len(conv.as_messages())
+        assert prompt_len == 1  # only the prompt
+
+        # Second call: same conversation, resume=True, signal cleared.
+        signal.clear()
+        result = await saia.complete_structured(
+            "ignored on resume", _Judgment, conversation=conv, resume=True
+        )
+        assert isinstance(result.value, _Judgment)
+        assert result.value.verdict == "y"
+        # The resume path did not re-seed the prompt; it consumed the
+        # conversation as-is and appended the successful response.
+        msgs = conv.as_messages()
+        assert msgs[0].content == "Judge."
+        assert any(m.role.value == "assistant" for m in msgs)
+
+    async def test_on_iteration_fires_during_guard_retry(self) -> None:
+        """Guard retries must honor cooperative kwargs, including on_iteration.
+
+        Verifies that the guard retry path properly forwards on_iteration so
+        callers get visibility into all LLM calls, not just the primary attempt.
+        """
+        from llm_saia import OutputGuard
+        from llm_saia.core.backend import ChatResponse
+
+        def reject_short(text: str) -> str | None:
+            """Guard that fails short responses."""
+            return "response too short" if len(text) < 20 else None
+
+        guard = OutputGuard(reject_short, retry_instruction="Make it longer", max_retries=1)
+        backend = MockBackend()
+        # First response is short (fails guard), second is long enough
+        backend.queue_response(
+            ChatResponse(content="short", tool_calls=[], finish_reason="end_turn")
+        )
+        backend.set_complete_response("this is a sufficiently long response")
+        saia = make_saia(backend).with_guard(guard)
+        seen: list[int] = []
+
+        async def on_iter(i: int, response: Any) -> None:
+            seen.append(i)
+
+        result = await saia.ask("artifact", "question?", on_iteration=on_iter)
+
+        # Guard retry produces a second LLM call, so on_iteration should fire twice
+        assert len(seen) == 2, f"expected on_iteration for both attempts, got {seen}"
+        assert result.value == "this is a sufficiently long response"
