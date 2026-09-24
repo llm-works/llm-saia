@@ -303,20 +303,25 @@ The return path is verb-dependent:
   Complete's `on_iteration` semantics but is delivered by exception
   rather than by a paused return value.
 
-**Non-Complete pause/resume contract.** When any of the three triggers
-fires on a text or typed verb, the LLM response of the pause iteration
-is not committed. The caller's `conversation` object holds the loop
-state just before that LLM call:
+**Non-Complete pause/resume contract.** When a trigger fires on a text
+or typed verb, the caller's `conversation` object holds every message
+the loop had committed as of that moment. What "committed" means
+depends on which trigger fired:
 
-- The verb's prompt (or a prior verb call's history, if you continued
-  a conversation) is present.
-- Any intermediate exchanges the loop already committed — parse-retry
-  framing, failed responses, tool results — are present.
-- The response that triggered the pause is *not* present.
+- `abort_signal` and `PauseRequested` from `on_iteration` fire before
+  the loop's per-iteration commit step. The iteration's LLM response
+  is **not** in the conversation. The prompt and any earlier committed
+  exchanges (parse-retry framing, failed responses, prior tool
+  exchanges) are present.
+- `pause_check` fires between tools within a single batch. The
+  assistant tool-call message *is* in the conversation, along with real
+  results for tools that had already completed; remaining tools in the
+  batch appear as `"Paused."` tool messages and are never executed.
 
-To resume, call the same verb again with `resume=True` and the same
-`conversation`. `resume=True` skips prompt seeding; the loop sends the
-conversation as-is to the LLM, receives a fresh response for that
+Persist the returned `conversation` as-is (`Message.to_dict()` is
+JSON-safe). To resume, call the same verb again with `resume=True` and
+that conversation. `resume=True` skips prompt seeding; the loop sends
+the conversation as-is to the LLM, receives a fresh response for that
 iteration, and continues. `resume=True` requires `conversation`.
 
 `Ground` explicitly rejects `resume=True` (each source needs its own
