@@ -955,13 +955,20 @@ class Verb(OutputGuardMixin, Configurable):
         strategy: SchemaTerminatingStrategy[Any],
         schema: type[T],
     ) -> None:
-        """Translate a non-completed loop result into the right exception."""
-        if strategy.last_parse_error is not None:
-            raise strategy.last_parse_error
+        """Translate a non-completed loop result into the right exception.
+
+        Pause takes precedence over a stale ``last_parse_error``: if a
+        callback pauses during a retry iteration, the strategy's parse
+        error from the previous attempt is still set. Raising it would
+        obscure the pause and break the pause/resume contract. A terminal
+        parse failure that did not pause still surfaces its parse error.
+        """
         if result.paused:
             from .errors import PauseRequested
 
             raise PauseRequested()
+        if strategy.last_parse_error is not None:
+            raise strategy.last_parse_error
         raise StructuredOutputError(
             f"Loop terminated without a successful parse of {schema.__name__}",
             schema_name=schema.__name__,
