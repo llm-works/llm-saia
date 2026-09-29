@@ -35,6 +35,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any, Generic, TypeVar
 
+from .serialization import known_fields
+
 _P = TypeVar("_P")
 _CONTENT_PREVIEW_LIMIT = 200
 
@@ -64,6 +66,15 @@ class LLMCall:
     # Present when the backend supplies one; None otherwise.
     llm_request_id: str | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-compatible dict."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LLMCall:
+        """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        return cls(**known_fields(cls, data))
+
 
 @dataclass
 class GuardOutcome:
@@ -75,6 +86,15 @@ class GuardOutcome:
     error: str | None = None
     blocking: bool = True  # Whether the guard blocks tool execution when it fires
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-compatible dict."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> GuardOutcome:
+        """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        return cls(**known_fields(cls, data))
+
 
 @dataclass
 class ToolOutcome:
@@ -84,6 +104,15 @@ class ToolOutcome:
     call_id: str = ""
     success: bool = True
     error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-compatible dict."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ToolOutcome:
+        """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        return cls(**known_fields(cls, data))
 
 
 @dataclass
@@ -129,6 +158,20 @@ class Step:
     consecutive_degenerate: int | None = None
     pending_terminal: bool | None = None
     classifier_called: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-compatible dict (nested records included)."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Step:
+        """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        kw = known_fields(cls, data)
+        if "llm_call" in kw:
+            kw["llm_call"] = LLMCall.from_dict(kw["llm_call"])
+        kw["guards"] = [GuardOutcome.from_dict(g) for g in kw.get("guards", [])]
+        kw["tools"] = [ToolOutcome.from_dict(t) for t in kw.get("tools", [])]
+        return cls(**kw)
 
 
 @dataclass
@@ -186,6 +229,13 @@ class VerbTrace:
     def to_dict(self) -> dict[str, Any]:
         """Convert to a plain dict (including all steps)."""
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> VerbTrace:
+        """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        kw = known_fields(cls, data)
+        kw["steps"] = [Step.from_dict(s) for s in kw.get("steps", [])]
+        return cls(**kw)
 
     def to_json(self, **kwargs: Any) -> str:
         """Serialize to a JSON string. Accepts ``json.dumps`` keyword args."""
