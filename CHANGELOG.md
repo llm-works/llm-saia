@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `@dataclass` — `Field(ge=, le=, pattern=, ...)` and validators flow
   through. Zero-dep users pay nothing.
 - `examples/pydantic_scorer.py`: smoke for the Pydantic path.
+- `TaskResult`, `LoopScore`, `VerbTrace`, `Step`, `LLMCall`, `GuardOutcome` and
+  `ToolOutcome` round-trip through JSON-compatible `to_dict()` / `from_dict()`.
+  `from_dict` ignores unknown keys and defaults missing optional ones.
 
 ### Changed
 - `SAIA.complete_structured` and typed verbs now share Complete's inner
