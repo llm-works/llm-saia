@@ -115,6 +115,13 @@ class ToolOutcome:
         return cls(**known_fields(cls, data))
 
 
+def _check_record_type(cls: type[Step] | type[VerbTrace], data: dict[str, Any]) -> None:
+    """Reject a record of the other kind; the Tracer's JSONL stream mixes both."""
+    got = data.get("type", cls.type)
+    if got != cls.type:
+        raise ValueError(f"expected a {cls.type!r} record, got {got!r}")
+
+
 @dataclass
 class Step:
     """One logical step in a verb's execution — one LLM call + its outcome.
@@ -166,11 +173,13 @@ class Step:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Step:
         """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        _check_record_type(cls, data)
         kw = known_fields(cls, data)
-        if "llm_call" in kw:
-            kw["llm_call"] = LLMCall.from_dict(kw["llm_call"])
-        kw["guards"] = [GuardOutcome.from_dict(g) for g in kw.get("guards", [])]
-        kw["tools"] = [ToolOutcome.from_dict(t) for t in kw.get("tools", [])]
+        llm_call = kw.pop("llm_call", None)
+        if llm_call is not None:
+            kw["llm_call"] = LLMCall.from_dict(llm_call)
+        kw["guards"] = [GuardOutcome.from_dict(g) for g in kw.get("guards") or []]
+        kw["tools"] = [ToolOutcome.from_dict(t) for t in kw.get("tools") or []]
         return cls(**kw)
 
 
@@ -233,8 +242,9 @@ class VerbTrace:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> VerbTrace:
         """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        _check_record_type(cls, data)
         kw = known_fields(cls, data)
-        kw["steps"] = [Step.from_dict(s) for s in kw.get("steps", [])]
+        kw["steps"] = [Step.from_dict(s) for s in kw.get("steps") or []]
         return cls(**kw)
 
     def to_json(self, **kwargs: Any) -> str:
@@ -318,7 +328,7 @@ class Tracer:
 
     def write(self, record: Step | VerbTrace) -> None:
         """Write one JSONL record (Step or VerbTrace)."""
-        self._writer.write(json.dumps(asdict(record)) + "\n")
+        self._writer.write(json.dumps(record.to_dict()) + "\n")
         self._writer.flush()
 
     def close(self) -> None:
@@ -349,7 +359,7 @@ class CallbackTracer(Tracer):
 
     def write(self, record: Step | VerbTrace) -> None:
         """Forward serialized record to callback."""
-        self._callback(asdict(record))
+        self._callback(record.to_dict())
 
     def close(self) -> None:
         """No-op — callback tracers have nothing to close."""

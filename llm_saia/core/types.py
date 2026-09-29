@@ -245,8 +245,8 @@ class TaskResult:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for persistence.
 
-        Like :meth:`Message.to_dict`, does not copy ``terminal_data`` or tool
-        call arguments — the returned dict shares them with this result.
+        Like :meth:`ToolCall.to_dict`, does not copy ``terminal_data`` or tool
+        call arguments; the returned dict shares them with this result.
         """
         return {
             "completed": self.completed,
@@ -266,12 +266,15 @@ class TaskResult:
         """Rebuild from :meth:`to_dict` output.
 
         Missing optional keys take their defaults and unknown keys are ignored,
-        so results saved by another SAIA version still load.
+        so results saved by another SAIA version still load. Like
+        :meth:`ToolCall.from_dict`, does not copy ``terminal_data`` or tool
+        call arguments out of *data*.
         """
         kw = known_fields(cls, data)
         kw["history"] = [Message.from_dict(m) for m in data["history"]]
         if kw.get("score") is not None:
             kw["score"] = LoopScore.from_dict(kw["score"])
-        if "trace" in kw:
-            kw["trace"] = VerbTrace.from_dict(kw["trace"])
+        trace = kw.pop("trace", None)
+        if trace is not None:
+            kw["trace"] = VerbTrace.from_dict(trace)
         return cls(**kw)

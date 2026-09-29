@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import fields
 from io import StringIO
 from typing import Any
 
@@ -130,6 +131,11 @@ class TestTaskResultRoundTrip:
         )
         _assert_round_trips(result)
 
+    def test_to_dict_covers_every_field(self) -> None:
+        """to_dict writes a key for every TaskResult field."""
+        result = TaskResult(completed=True, output="", iterations=0, history=[])
+        assert set(result.to_dict()) == {f.name for f in fields(TaskResult)}
+
     def test_minimal(self) -> None:
         """Defaults (no score, empty trace, no terminal data) survive."""
         _assert_round_trips(TaskResult(completed=False, output="", iterations=0, history=[]))
@@ -211,6 +217,26 @@ class TestTolerantFromDict:
         trace = VerbTrace.from_dict({"steps": [{"phase": "attempt"}]})
         assert trace == VerbTrace(steps=[Step(phase="attempt")])
 
+    def test_null_nested_values_take_defaults(self) -> None:
+        """Explicit nulls for nested records load the same as absent keys."""
+        restored = TaskResult.from_dict(
+            {"completed": True, "output": "o", "iterations": 1, "history": [], "trace": None}
+        )
+        assert restored.trace == VerbTrace()
+        trace = VerbTrace.from_dict({"steps": [{"llm_call": None, "guards": None, "tools": None}]})
+        assert trace == VerbTrace(steps=[Step()])
+        assert VerbTrace.from_dict({"steps": None}) == VerbTrace()
+
+    def test_step_rejects_verb_trace_record(self) -> None:
+        """A VerbTrace record does not load as a Step."""
+        with pytest.raises(ValueError, match="'step' record"):
+            Step.from_dict(VerbTrace().to_dict())
+
+    def test_verb_trace_rejects_step_record(self) -> None:
+        """A Step record does not load as a VerbTrace."""
+        with pytest.raises(ValueError, match="'verb_trace' record"):
+            VerbTrace.from_dict(Step().to_dict())
+
 
 class TestTraceRecordDicts:
     """to_dict on trace records keeps the Tracer's JSONL record shape."""
@@ -235,9 +261,12 @@ class TestTraceRecordDicts:
             GuardOutcome(name="g", passed=False, error="e"),
             ToolOutcome(name="t", call_id="c", success=False, error="e"),
             _full_step(),
+            VerbTrace(verb="Complete", steps=[_full_step()]),
+            LoopScore(3, 2, 1, 0, 100, 10),
         ],
-        ids=["llm_call", "guard", "tool", "step"],
+        ids=["llm_call", "guard", "tool", "step", "verb_trace", "loop_score"],
     )
     def test_record_round_trips(self, record: Any) -> None:
-        """Each trace record type round-trips on its own."""
-        assert type(record).from_dict(record.to_dict()) == record
+        """Each record type round-trips on its own, through JSON."""
+        data = json.loads(json.dumps(record.to_dict()))
+        assert type(record).from_dict(data) == record
