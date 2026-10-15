@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +28,13 @@ class OutputGuard:
     Args:
         validator: Function receiving the parsed result (Any type). Returns None
             if valid, error string if invalid. For text validation, use str(result).
+            May be async (return an awaitable), e.g. to check the result with
+            another model call; the result is awaited before the guard decides.
+            Validators of either kind do not receive the guarded verb's
+            ``abort_signal`` or ``pause_check``: a sync validator blocks the event
+            loop until it returns, an async one stops only when its task is
+            cancelled. Model calls a validator makes are not counted in the verb's
+            trace, score or token limits.
         retry_instruction: Static string or callable ``(attempt, result, error) -> str``
             appended to prompt on retry. Callables enable escalating retry tone.
         max_retries: Max retry attempts (must be >= 0). Default 1.
@@ -44,7 +51,7 @@ class OutputGuard:
         ValueError: If max_retries is negative.
     """
 
-    validator: Callable[[Any], str | None]
+    validator: Callable[[Any], str | None | Awaitable[str | None]]
     retry_instruction: str | Callable[[int, Any, str], str]
     max_retries: int = 1
     name: str | None = None

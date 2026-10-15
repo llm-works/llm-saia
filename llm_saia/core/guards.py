@@ -10,6 +10,7 @@ Separated from verb.py to keep the base class manageable.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import (
     TYPE_CHECKING,
@@ -217,7 +218,7 @@ class OutputGuardMixin(VerbLoggingMixin):
         last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
             field_value = getattr(result, field_name, None)
-            error = self._run_validator(guard, field_value)
+            error = await self._run_validator(guard, field_value)
             if error is None:
                 self._log_guard_retry_outcome(last_step_num, _trace, gname)
                 return result
@@ -235,10 +236,13 @@ class OutputGuardMixin(VerbLoggingMixin):
         return result  # Unreachable, satisfies type checker
 
     @staticmethod
-    def _run_validator(guard: OutputGuard, value: Any) -> str | None:
-        """Run guard validator, converting exceptions to error strings."""
+    async def _run_validator(guard: OutputGuard, value: Any) -> str | None:
+        """Run guard validator (sync or async), converting exceptions to error strings."""
         try:
-            return guard.validator(value)
+            error = guard.validator(value)
+            if inspect.isawaitable(error):
+                error = await error
+            return error
         except Exception as e:
             return f"Validator raised {type(e).__name__}: {e}"
 
@@ -288,7 +292,7 @@ class OutputGuardMixin(VerbLoggingMixin):
         self._lg.trace("checking guard", extra={"guard": guard.name})
         last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
-            error = self._run_validator(guard, result)
+            error = await self._run_validator(guard, result)
             if error is None:
                 self._lg.trace("guard passed", extra={"guard": guard.name, "attempt": attempt})
                 self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard")
@@ -354,7 +358,7 @@ class OutputGuardMixin(VerbLoggingMixin):
         self._lg.trace("checking text guard", extra={"guard": guard.name})
         last_step_num: int | None = None
         for attempt in range(1 + guard.max_retries):
-            error = self._run_validator(guard, text)
+            error = await self._run_validator(guard, text)
             if error is None:
                 self._lg.trace("text guard passed", extra={"guard": guard.name, "attempt": attempt})
                 self._log_guard_retry_outcome(last_step_num, _trace, guard.name or "guard")
