@@ -35,7 +35,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ruff mypy appinfra pydantic
+          python -m pip install ruff mypy appinfra pydantic zizmor==1.31.1 actionlint-py==1.7.12.25
+
+      - name: Lint workflows
+        # zizmor policy in .github/zizmor.yml; actionlint runs shellcheck on run: scripts
+        run: |
+          zizmor --offline .github/workflows/
+          actionlint
 
       - name: Check formatting
         run: python -m ruff format --check .
