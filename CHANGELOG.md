@@ -26,9 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decides, with the same retries as a sync validator.
 
 ### Changed
-- `SAIA.complete_structured` and typed verbs run on Complete's loop; the
-  caller's conversation receives only the original prompt and the final
-  response.
+- `SAIA.complete_structured` and typed verbs run on Complete's loop. On
+  success the caller's conversation receives only the original prompt and
+  the final response; a paused run keeps the retry turns so `resume` can
+  continue from them.
 - README `Configuration` section now states explicitly that SAIA has no
   config files — configuration is a `Config` dataclass the caller
   constructs through the builder.
