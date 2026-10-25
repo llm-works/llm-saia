@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-25
+
 ### Added
 - Every public verb — Complete, Ask, Constrain, Instruct, Extract, Verify,
   and every other domain verb, plus `SAIA.complete_structured` — now
@@ -24,10 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decides, with the same retries as a sync validator.
 
 ### Changed
-- `SAIA.complete_structured` and typed verbs now share Complete's inner
-  loop instead of a separate parse-retry mechanism. Parse retries
-  iterate the loop, and the caller's conversation receives (original
-  prompt, final response) only — retry framing stays internal.
+- `SAIA.complete_structured` and typed verbs run on Complete's loop; the
+  caller's conversation receives only the original prompt and the final
+  response.
 - README `Configuration` section now states explicitly that SAIA has no
   config files — configuration is a `Config` dataclass the caller
   constructs through the builder.
@@ -304,7 +305,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/llm-works/llm-saia/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/llm-works/llm-saia/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/llm-works/llm-saia/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/llm-works/llm-saia/compare/v0.5.0...v0.6.0
