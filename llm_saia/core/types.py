@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
@@ -27,6 +27,7 @@ from .conversation import (
     SerializableConversationLike,
     ToolCall,
 )
+from .serialization import known_fields
 from .trace import VerbTrace
 
 _T = TypeVar("_T")
@@ -202,6 +203,15 @@ class LoopScore:
     def __repr__(self) -> str:
         return f"quality={self.quality:.2f} token_eff={self.token_efficiency:.2f}"
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-compatible dict (stored counters only, not derived ratios)."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LoopScore:
+        """Rebuild from :meth:`to_dict` output; unknown keys are ignored."""
+        return cls(**known_fields(cls, data))
+
 
 @dataclass
 class TaskResult:
@@ -231,3 +241,40 @@ class TaskResult:
     terminal_tool: str | None = None
     score: LoopScore | None = None
     trace: VerbTrace = field(default_factory=VerbTrace)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict for persistence.
+
+        Like :meth:`ToolCall.to_dict`, does not copy ``terminal_data`` or tool
+        call arguments; the returned dict shares them with this result.
+        """
+        return {
+            "completed": self.completed,
+            "output": self.output,
+            "iterations": self.iterations,
+            "history": [m.to_dict() for m in self.history],
+            "reason": self.reason,
+            "paused": self.paused,
+            "terminal_data": self.terminal_data,
+            "terminal_tool": self.terminal_tool,
+            "score": self.score.to_dict() if self.score is not None else None,
+            "trace": self.trace.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TaskResult:
+        """Rebuild from :meth:`to_dict` output.
+
+        Missing optional keys take their defaults and unknown keys are ignored,
+        so results saved by another SAIA version still load. Like
+        :meth:`ToolCall.from_dict`, does not copy ``terminal_data`` or tool
+        call arguments out of *data*.
+        """
+        kw = known_fields(cls, data)
+        kw["history"] = [Message.from_dict(m) for m in data["history"]]
+        if kw.get("score") is not None:
+            kw["score"] = LoopScore.from_dict(kw["score"])
+        trace = kw.pop("trace", None)
+        if trace is not None:
+            kw["trace"] = VerbTrace.from_dict(trace)
+        return cls(**kw)

@@ -1,0 +1,16 @@
+# zizmor policy (run in the CI lint job: zizmor --offline .github/workflows/)
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Actions are referenced by tag (e.g. @v7), not commit hash, on purpose:
+        # the workflows change often during active development. Revisit after
+        # the 1.x releases.
+        "*": ref-pin
+
+  # Suggests `gh release create` for softprops/action-gh-release. Kept: the
+  # action updates an existing release on a re-run of the release workflow,
+  # where `gh release create` fails.
+  superfluous-actions:
+    disable: true

@@ -271,14 +271,67 @@ async def main():
 
 ## Cancellation
 
-`Complete` accepts two cancellation triggers: `abort_signal` (an
-`asyncio.Event` checked by the backend during LLM streaming) and `pause_check`
-(an async callback consulted between tool calls within a single batch). A
-third trigger, raising `PauseRequested` from the `on_iteration` callback,
-behaves like `abort_signal` for the questions below. All three return through
-a single path — the loop never raises `PauseRequested` to the caller.
+Every SAIA verb is driven by the same inner loop, so the cooperative surface
+is uniform: `Complete`, `Ask`, `Constrain`, `Instruct`, the domain verbs
+(`extract`, `verify`, `classify`, …), and `SAIA.complete_structured` all
+accept the same four kwargs:
 
-The pinned contract (also enforced by
+- `on_iteration(iteration: int, response: ChatResponse) -> Awaitable[None]`
+  — fires once per backend LLM call. May raise `PauseRequested` to exit
+  the loop early.
+- `abort_signal: asyncio.Event` — signals the backend to fast-cancel the
+  current LLM call (requires backend support).
+- `pause_check() -> Awaitable[bool]` — consulted between tool calls in a
+  single batch. No-op absent tools.
+- `resume: bool` — continues from an existing `conversation` state
+  instead of appending a new prompt as a fresh turn. Requires
+  `conversation` to be supplied.
+
+`abort_signal` and `pause_check` are both cancellation triggers; raising
+`PauseRequested` from `on_iteration` behaves like `abort_signal` for the
+questions below.
+
+The return path is verb-dependent:
+
+- `Complete` catches `PauseRequested` and returns
+  `TaskResult(paused=True, completed=False, reason="paused")`. The pinned
+  contract below applies.
+- Text verbs (`Ask`, `Constrain`, `Instruct`, `Refine`), typed verbs
+  (`Extract`, `Verify`, `Classify`, `Choose`, `Critique_`, `Decompose`,
+  `Find`, `Ground`, `Synthesize`), and `SAIA.complete_structured`
+  re-raise `PauseRequested` to the caller. Their contract (below) mirrors
+  Complete's `on_iteration` semantics but is delivered by exception
+  rather than by a paused return value.
+
+**Non-Complete pause/resume contract.** When a trigger fires on a text
+verb, a typed verb, or `SAIA.complete_structured`, the caller's
+`conversation` object holds every message the loop had committed as of
+that moment. What "committed" means depends on which trigger fired:
+
+- `abort_signal` and `PauseRequested` from `on_iteration` fire before
+  the loop's per-iteration commit step. The iteration's LLM response
+  is **not** in the conversation. The prompt and any earlier committed
+  exchanges (parse-retry framing, failed responses, prior tool
+  exchanges) are present.
+- `pause_check` fires between tools within a single batch. The
+  assistant tool-call message *is* in the conversation, along with real
+  results for tools that had already completed; remaining tools in the
+  batch appear as `"Paused."` tool messages and are never executed.
+
+To persist paused state, callers must supply their own `conversation`
+before the initial call — the loop mutates it in place, and there is
+no returned conversation because `PauseRequested` is raised, not
+returned. (If `conversation` is omitted, the loop creates an internal
+`ListConversation` that is discarded on pause.) Persist the supplied
+conversation as-is (`Message.to_dict()` is JSON-safe). To resume, call
+the same verb again with `resume=True` and that conversation — except
+`Ground`, which rejects `resume=True` (each source needs its own
+prompt) and raises `ValueError`; a paused `Ground` call must be rerun
+from the start. `resume=True` skips prompt seeding; the loop sends the
+conversation as-is to the LLM, receives a fresh response for that
+iteration, and continues. `resume=True` requires `conversation`.
+
+The pinned contract for `Complete` (enforced by
 `tests/unit/test_task.py::TestCancellationContract`):
 
 | Question | `abort_signal` / `on_iteration` | `pause_check` |

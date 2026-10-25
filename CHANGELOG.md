@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-25
+
+### Added
+- Every public verb — Complete, Ask, Constrain, Instruct, Extract, Verify,
+  and every other domain verb, plus `SAIA.complete_structured` — now
+  accepts the cooperative surface (`on_iteration`, `abort_signal`,
+  `pause_check`, `resume`) uniformly. Same kwarg, same meaning everywhere.
+- Optional Pydantic schema support via `pip install 'llm-saia[pydantic]'`.
+  `SAIA.complete_structured` now accepts `pydantic.BaseModel` in addition
+  to `@dataclass` — `Field(ge=, le=, pattern=, ...)` and validators flow
+  through. Zero-dep users pay nothing.
+- `examples/pydantic_scorer.py`: smoke for the Pydantic path.
+- `TaskResult`, `LoopScore`, `VerbTrace`, `Step`, `LLMCall`, `GuardOutcome` and
+  `ToolOutcome` round-trip through JSON-compatible `to_dict()` / `from_dict()`.
+  `from_dict` ignores unknown keys and defaults missing optional ones.
+- `OutputGuard.validator` may be async; its result is awaited before the guard
+  decides, with the same retries as a sync validator.
+
+### Changed
+- `SAIA.complete_structured` and typed verbs run on Complete's loop. On
+  success the caller's conversation receives only the original prompt and
+  the final response; a paused run keeps the retry turns so `resume` can
+  continue from them.
+- README `Configuration` section now states explicitly that SAIA has no
+  config files — configuration is a `Config` dataclass the caller
+  constructs through the builder.
+
 ## [0.6.2] - 2026-08-31
 
 ### Fixed
@@ -279,7 +306,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 93% test coverage
 - CI/CD with GitHub Actions (lint, test, coverage, release)
 
-[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/llm-works/llm-saia/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/llm-works/llm-saia/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/llm-works/llm-saia/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/llm-works/llm-saia/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/llm-works/llm-saia/compare/v0.5.0...v0.6.0

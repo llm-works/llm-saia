@@ -685,6 +685,112 @@ class TestFieldLevelGuards:
         assert backend.call_count == 2
 
 
+def _async_check(error_if: str, error: str) -> Any:
+    """Async validator: returns *error* when *error_if* appears in str(result)."""
+
+    async def check(result: Any) -> str | None:
+        await asyncio.sleep(0)  # Yield to the loop, as a real async check would
+        return error if error_if in str(result) else None
+
+    return check
+
+
+# Module level: field annotations are resolved by get_type_hints, which cannot see test locals.
+_ASYNC_FIELD_GUARD = OutputGuard(validator=_async_check("Bad", "invalid"), retry_instruction="Fix.")
+
+
+class TestAsyncValidators:
+    """Async validators behave like sync ones on every guard kind."""
+
+    async def test_async_validator_passes(self) -> None:
+        """A passing async validator is awaited, not mistaken for an error."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"text": "Good", "score": 1}))
+
+        guard = OutputGuard(validator=_async_check("Bad", "bad"), retry_instruction="Fix it.")
+        result = await Extract(make_config(backend)).with_guard(guard)("test", SimpleResult)
+
+        assert result.value.text == "Good"
+        assert backend.call_count == 1
+
+    async def test_async_validator_retries_result(self) -> None:
+        """A failing async validator retries with its error in the prompt."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"text": "Bad text", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Good text", "score": 2}))
+
+        guard = OutputGuard(
+            validator=_async_check("Bad", "Contains 'Bad'"),
+            retry_instruction="Fix it.",
+            name="async_check",
+        )
+        result = await Extract(make_config(backend)).with_guard(guard)("test", SimpleResult)
+
+        assert result.value.text == "Good text"
+        assert backend.call_count == 2
+        assert "Contains 'Bad'" in backend.last_prompt
+        assert "guard_retry" in [s.phase for s in result.trace.steps]
+
+    async def test_async_validator_exhausts_retries(self) -> None:
+        """OutputGuardError carries the async validator's error."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"text": "Bad 1", "score": 1}))
+        backend.queue_json_response(json.dumps({"text": "Bad 2", "score": 2}))
+
+        guard = OutputGuard(
+            validator=_async_check("Bad", "invalid"),
+            retry_instruction="Try again.",
+            name="async_check",
+        )
+        with pytest.raises(OutputGuardError) as exc_info:
+            await Extract(make_config(backend)).with_guard(guard)("test", SimpleResult)
+
+        assert exc_info.value.error == "invalid"
+        assert exc_info.value.attempts == 2
+
+    async def test_async_validator_exception_becomes_error(self) -> None:
+        """An exception raised while awaiting becomes the guard error."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"text": "x", "score": 1}))
+
+        async def broken(result: Any) -> str | None:
+            raise ValueError("boom")
+
+        guard = OutputGuard(validator=broken, retry_instruction="Try again.", max_retries=0)
+        with pytest.raises(OutputGuardError) as exc_info:
+            await Extract(make_config(backend)).with_guard(guard)("test", SimpleResult)
+
+        assert exc_info.value.error == "Validator raised ValueError: boom"
+
+    async def test_async_validator_on_text(self) -> None:
+        """Text guards await async validators and retry."""
+        backend = SequencedMockBackend()
+        backend.queue_json_response("Bad text")
+        backend.queue_json_response("Good text")
+
+        guard = OutputGuard(validator=_async_check("Bad", "invalid"), retry_instruction="Fix.")
+        result = await Ask(make_config(backend)).with_guard(guard)("artifact", "question")
+
+        assert result.value == "Good text"
+        assert backend.call_count == 2
+
+    async def test_async_validator_on_field(self) -> None:
+        """Field guards await async validators and retry."""
+
+        @dataclass
+        class Article:
+            title: Annotated[str, Guarded(_ASYNC_FIELD_GUARD)]
+
+        backend = SequencedMockBackend()
+        backend.queue_json_response(json.dumps({"title": "Bad title"}))
+        backend.queue_json_response(json.dumps({"title": "Good title"}))
+
+        result = await Extract(make_config(backend))("test", Article)
+
+        assert result.value.title == "Good title"
+        assert backend.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Escalating retry instruction tests
 # ---------------------------------------------------------------------------
