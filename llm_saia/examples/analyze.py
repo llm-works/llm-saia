@@ -38,20 +38,17 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA, ToolDef
+from llm_saia.examples import (
+    READ_FILE_TOOL,
+    get_backend,
+    print_trace_compact,
+    print_trace_full,
+)
 from llm_saia.examples import Colors as C
-from llm_saia.examples import get_backend, print_trace_compact, print_trace_full
 
 # Simple tools for file analysis
 TOOLS = [
-    ToolDef(
-        name="read_file",
-        description="Read contents of a file",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "File path"}},
-            "required": ["path"],
-        },
-    ),
+    READ_FILE_TOOL,
     ToolDef(
         name="done",
         description="Call when analysis is complete",

@@ -355,10 +355,7 @@ _EMOJI_RANGES = [
 
 def _is_emoji(cp: int) -> bool:
     """Check if code point is in emoji ranges."""
-    for start, end in _EMOJI_RANGES:
-        if start <= cp <= end:
-            return True
-    return False
+    return any(start <= cp <= end for start, end in _EMOJI_RANGES)
 
 
 def _has_no_emoji(result: Any) -> str | None:

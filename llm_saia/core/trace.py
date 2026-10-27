@@ -38,7 +38,6 @@ from typing import IO, Any, Generic, TypeVar
 from .serialization import known_fields
 
 _P = TypeVar("_P")
-_CONTENT_PREVIEW_LIMIT = 200
 
 
 def _generate_id() -> str:

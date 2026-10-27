@@ -223,7 +223,7 @@ class VerbLoggingMixin:
                 "msg_count": len(messages),
                 "by_role": role_counts,
                 "last_user_msg": last_user,
-                "recent_tool_results": tool_results if tool_results else None,
+                "recent_tool_results": tool_results or None,
             },
         )
 

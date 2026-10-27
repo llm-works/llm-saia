@@ -14,6 +14,13 @@ INFRA_DEV_CQ_STRICT := true
 # Include SPDX header check in `make check`.
 INFRA_DEV_CQ_SPDX := true
 
+# No ruff rules reported as warnings only: they are enforced in pyproject's select
+INFRA_DEV_CQ_LINT_SELECT :=
+
+# Fail on duplicated code blocks and unused private definitions
+INFRA_DEV_CQ_DUP := strict
+INFRA_DEV_CQ_DEAD := strict
+
 # Test coverage threshold (percentage)
 INFRA_PYTEST_COVERAGE_THRESHOLD := 95
 

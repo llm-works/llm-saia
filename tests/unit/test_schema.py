@@ -273,7 +273,7 @@ class TestPydanticDispatch:
     def test_detector_false_for_non_type(self) -> None:
         assert _is_pydantic_model(42) is False  # type: ignore[arg-type]
         assert _is_pydantic_model("string") is False  # type: ignore[arg-type]
-        assert _is_pydantic_model({"model_json_schema": lambda: {}}) is False  # type: ignore[arg-type]
+        assert _is_pydantic_model({"model_json_schema": dict}) is False  # type: ignore[arg-type]
 
     def test_to_json_schema_pydantic_envelope(self) -> None:
         from pydantic import BaseModel

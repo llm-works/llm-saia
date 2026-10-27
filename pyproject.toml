@@ -74,7 +74,16 @@ select = [
     "C4",     # flake8-comprehensions
     "UP",     # pyupgrade
     "FA",     # flake8-future-annotations
+    "C90",    # mccabe complexity
+    "SIM",    # flake8-simplify
+    "RET",    # flake8-return
+    "PIE",    # flake8-pie
+    "PERF",   # perflint
+    "FURB",   # refurb
 ]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
 
 [tool.mypy]
 python_version = "3.11"

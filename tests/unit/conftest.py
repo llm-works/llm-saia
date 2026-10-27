@@ -114,10 +114,7 @@ class MockBackend(Backend):
         """
         import dataclasses
 
-        if isinstance(schema, str):
-            schema_name = schema
-        else:
-            schema_name = schema.__name__
+        schema_name = schema if isinstance(schema, str) else schema.__name__
 
         if dataclasses.is_dataclass(response):
             response_dict = dataclasses.asdict(response)

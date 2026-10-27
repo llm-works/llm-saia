@@ -42,22 +42,23 @@ class Ground(Verb):
             # the same baseline (no cross-source context leakage).
             baseline = self._fork_conversation(conversation)
             baseline_len = len(baseline.as_messages()) if baseline is not None else 0
-            results: list[Evidence] = []
-            for source in sources:
-                results.append(
-                    await self._ground_one_source(
-                        artifact,
-                        source,
-                        baseline,
-                        baseline_len,
-                        conversation,
-                        trace,
-                        on_iteration,
-                        abort_signal,
-                        pause_check,
-                        resume,
-                    )
+            # Sources run one at a time: each merges into the caller's
+            # conversation in order.
+            results = [
+                await self._ground_one_source(
+                    artifact,
+                    source,
+                    baseline,
+                    baseline_len,
+                    conversation,
+                    trace,
+                    on_iteration,
+                    abort_signal,
+                    pause_check,
+                    resume,
                 )
+                for source in sources
+            ]
             return VerbResult(value=results, trace=trace)
         finally:
             self._emit_verb_trace(trace)

@@ -44,7 +44,7 @@ class Choose(Verb):
             value = await self._complete_structured(
                 prompt,
                 ChooseResult,
-                conversation=conversation,
+                conversation=conversation,  # cq: keep explicit forwarding of the verb kwargs
                 _trace=trace,
                 on_iteration=on_iteration,
                 abort_signal=abort_signal,

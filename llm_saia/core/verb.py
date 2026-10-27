@@ -228,11 +228,7 @@ class Verb(OutputGuardMixin, Configurable):
         """
         call_id = self._generate_id()
         self._log_message_assembly(call_id, messages)
-        resolved_tools = (
-            (self._config.tools if self._config.tools else None)
-            if tools is _SENTINEL
-            else (tools or None)
-        )
+        resolved_tools = (self._config.tools or None) if tools is _SENTINEL else (tools or None)
         if iteration is not None:
             resolved_tools = self._gate_tools(
                 iteration, messages, last_response, resolved_tools, call_id
@@ -274,7 +270,7 @@ class Verb(OutputGuardMixin, Configurable):
                     "blocked": blocked,
                 },
             )
-        return filtered if filtered else None
+        return filtered or None
 
     async def _init_loop(
         self,
@@ -419,9 +415,7 @@ class Verb(OutputGuardMixin, Configurable):
             return True
         if config.timeout_secs > 0 and (time.monotonic() - start_time) >= config.timeout_secs:
             return True
-        if config.max_total_tokens > 0 and total_tokens >= config.max_total_tokens:
-            return True
-        return False
+        return config.max_total_tokens > 0 and total_tokens >= config.max_total_tokens
 
     def _run_iteration_guards(
         self,
@@ -451,7 +445,7 @@ class Verb(OutputGuardMixin, Configurable):
         return Message(
             role=Role.ASSISTANT,
             content=response.content,
-            tool_calls=response.tool_calls if response.tool_calls else None,
+            tool_calls=response.tool_calls or None,
         )
 
     @staticmethod
@@ -483,22 +477,6 @@ class Verb(OutputGuardMixin, Configurable):
         for msg in conversation.as_messages():
             fork.append(msg)
         return fork
-
-    @staticmethod
-    async def _merge_conversation(
-        target: ConversationLike | None,
-        source: ConversationLike | None,
-    ) -> None:
-        """Append new messages from *source* back into *target*.
-
-        Only messages added after the fork point (i.e. those beyond the
-        original length of *target*) are copied.
-        """
-        if target is None or source is None:
-            return
-        base_len = len(target.as_messages())
-        for msg in source.as_messages()[base_len:]:
-            await Verb._append_msg(target, msg)
 
     async def _execute_tools(
         self,
@@ -978,10 +956,7 @@ class Verb(OutputGuardMixin, Configurable):
             is_parse_step = (
                 decision.reason.startswith("parse_") or decision.reason == "schema_parsed"
             )
-            if is_parse_step and strategy.parse_attempts > 1:
-                step_phase = "parse_retry"
-            else:
-                step_phase = phase
+            step_phase = "parse_retry" if is_parse_step and strategy.parse_attempts > 1 else phase
             self._record_step(response, phase=step_phase, _trace=trace)
             if is_parse_step and strategy.last_parse_error is not None and trace.steps:
                 trace.steps[-1].parsed = False
