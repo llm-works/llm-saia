@@ -38,7 +38,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-xdist>=3.5.0",
     "hypothesis>=6.100.0",
-    "ruff>=0.8.0",
+    "ruff>=0.16.0,<1.0.0",  # 0.16 formats code blocks in Markdown, as CI's format check does
     "mypy>=1.13.0",
 ]
 
