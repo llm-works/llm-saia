@@ -37,7 +37,7 @@ class Ask(Verb):
             prompt = f"Given this artifact:\n{artifact}\n\nAnswer this question: {question}"
             value = await self._complete(
                 prompt,
-                conversation=conversation,
+                conversation=conversation,  # cq: keep explicit forwarding of the verb kwargs
                 _trace=trace,
                 on_iteration=on_iteration,
                 abort_signal=abort_signal,

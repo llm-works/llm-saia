@@ -43,20 +43,15 @@ class NullLogger:
 
     def trace(self, msg: str, *, extra: dict[str, Any] | None = None) -> None:
         """No-op."""
-        pass
 
     def debug(self, msg: str, *, extra: dict[str, Any] | None = None) -> None:
         """No-op."""
-        pass
 
     def info(self, msg: str, *, extra: dict[str, Any] | None = None) -> None:
         """No-op."""
-        pass
 
     def warning(self, msg: str, *, extra: dict[str, Any] | None = None) -> None:
         """No-op."""
-        pass
 
     def error(self, msg: str, *, extra: dict[str, Any] | None = None) -> None:
         """No-op."""
-        pass

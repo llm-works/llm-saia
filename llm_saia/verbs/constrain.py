@@ -40,7 +40,7 @@ class Constrain(Verb):
             prompt = f"Rewrite this text to comply with these rules:\n{rules_str}\n\nText:\n{text}"
             value = await self._complete(
                 prompt,
-                conversation=conversation,
+                conversation=conversation,  # cq: keep explicit forwarding of the verb kwargs
                 _trace=trace,
                 on_iteration=on_iteration,
                 abort_signal=abort_signal,

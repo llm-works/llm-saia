@@ -40,29 +40,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA, ToolDef
+from llm_saia.examples import LIST_FILES_TOOL, READ_FILE_TOOL, get_backend
 from llm_saia.examples import Colors as C
-from llm_saia.examples import get_backend
 
 # Define tools the agent can use
 TOOLS = [
-    ToolDef(
-        name="read_file",
-        description="Read contents of a file",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "File path"}},
-            "required": ["path"],
-        },
-    ),
-    ToolDef(
-        name="list_files",
-        description="List files in a directory",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "Directory path"}},
-            "required": ["path"],
-        },
-    ),
+    READ_FILE_TOOL,
+    LIST_FILES_TOOL,
     ToolDef(
         name="done",
         description=(

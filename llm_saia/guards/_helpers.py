@@ -39,10 +39,7 @@ class GuardState:
 
 def ordinal(n: int) -> str:
     """Return ordinal string for a number (1st, 2nd, 3rd, etc.)."""
-    if 11 <= (n % 100) <= 13:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     return f"{n}{suffix}"
 
 
@@ -70,13 +67,14 @@ def validate_schema(data: Any, schema: dict[str, Any]) -> list[str]:
     additionalProperties, or other JSON Schema features. For full validation,
     use a dedicated JSON Schema library like jsonschema.
     """
-    errors: list[str] = []
     if not isinstance(data, dict):
         return [f"expected object, got {type(data).__name__}"]
 
-    for field in schema.get("required", []):
-        if field not in data:
-            errors.append(f"missing required field: {field}")
+    errors = [
+        f"missing required field: {field}"
+        for field in schema.get("required", [])
+        if field not in data
+    ]
 
     properties = schema.get("properties", {})
     for field, value in data.items():

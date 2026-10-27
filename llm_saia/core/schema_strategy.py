@@ -137,7 +137,6 @@ class SchemaTerminatingStrategy(Generic[T]):
 
     def on_iteration_complete(self, decision: LoopDecision, tokens: int) -> None:
         """Strategy has no per-iteration scoring; hook kept for protocol compliance."""
-        return None
 
     # -- internals --
 

@@ -77,9 +77,8 @@ class _ToolExecutor:
             await h._append_msg(
                 messages, Message(role=Role.TOOL, content=str(result), tool_call_id=tc.id)
             )
-            if pause_check is not None and i < len(tool_calls) - 1:
-                if await pause_check():
-                    await self._handle_pause(tool_calls[i + 1 :], messages, i + 1)
+            if pause_check is not None and i < len(tool_calls) - 1 and await pause_check():
+                await self._handle_pause(tool_calls[i + 1 :], messages, i + 1)
 
     async def _handle_pause(
         self, remaining: list[ToolCall], messages: MessageAppendable, executed: int

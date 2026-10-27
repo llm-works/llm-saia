@@ -37,7 +37,7 @@ __all__ = [
     "ChatResponse",
     "ToolDef",
     # Conversation types (re-exported)
-    "AsyncConversationLike",
+    "AsyncConversationLike",  # cq: keep re-export list, repeated from core.conversation
     "ConversationFactory",
     "ConversationLike",
     "ListConversation",

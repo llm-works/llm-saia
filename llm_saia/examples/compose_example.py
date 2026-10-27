@@ -60,7 +60,6 @@ class DemoBackend(Backend):
         abort_signal: asyncio.Event | None = None,
     ) -> ChatResponse:
         """Placeholder chat method."""
-        pass
 
 
 def create_demo_saia() -> SAIA:

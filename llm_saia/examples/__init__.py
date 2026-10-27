@@ -56,25 +56,29 @@ class Colors:
 # Common tool definitions for examples
 # ---------------------------------------------------------------------------
 
+READ_FILE_TOOL = ToolDef(
+    name="read_file",
+    description="Read the contents of a file",
+    parameters={
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "File path to read"}},
+        "required": ["path"],
+    },
+)
+
+LIST_FILES_TOOL = ToolDef(
+    name="list_files",
+    description="List files in a directory",
+    parameters={
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "Directory path"}},
+        "required": ["path"],
+    },
+)
+
 COMMON_TOOLS = [
-    ToolDef(
-        name="read_file",
-        description="Read the contents of a file",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "File path to read"}},
-            "required": ["path"],
-        },
-    ),
-    ToolDef(
-        name="list_files",
-        description="List files in a directory",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "Directory path"}},
-            "required": ["path"],
-        },
-    ),
+    READ_FILE_TOOL,
+    LIST_FILES_TOOL,
     # Terminal tool - signals task completion but is never executed.
     # Must be configured via .terminal("report", output_field="analysis") to mark it
     # as special. When the LLM calls this tool, the controller intercepts it and
@@ -242,10 +246,7 @@ class OpenAIBackend(Backend):
         api_messages: list[dict[str, Any]] = []
         if system:
             api_messages.append({"role": "system", "content": system})
-
-        for msg in messages:
-            api_messages.append(self._convert_message(msg))
-
+        api_messages.extend(self._convert_message(msg) for msg in messages)
         return api_messages
 
     def _convert_message(self, msg: Message) -> dict[str, Any]:
@@ -333,16 +334,14 @@ class OpenAIBackend(Backend):
             raise ValueError(f"API response missing 'message': {choice}")
         usage = data.get("usage", {})
 
-        tool_calls: list[ToolCall] = []
-        if message.get("tool_calls"):
-            for tc in message["tool_calls"]:
-                tool_calls.append(
-                    ToolCall(
-                        id=tc["id"],
-                        name=tc["function"]["name"],
-                        arguments=self._parse_tool_arguments(tc["function"]["arguments"]),
-                    )
-                )
+        tool_calls = [
+            ToolCall(
+                id=tc["id"],
+                name=tc["function"]["name"],
+                arguments=self._parse_tool_arguments(tc["function"]["arguments"]),
+            )
+            for tc in message.get("tool_calls") or []
+        ]
 
         return ChatResponse(
             content=message.get("content") or "",
