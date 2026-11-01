@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
-# ci-skip: requires a live OpenAI-compatible server
+# ci-run: --smoke
 
 """Agent with tool loop: complete() iterates until done
 
@@ -14,7 +14,7 @@ to call tools correctly. Options:
   - Local: 14B+ instruction-tuned models with tool support
 
 Recommended usage: LLM_BACKEND=anthropic ./agent.py
-Requires ANTHROPIC_API_KEY environment variable.
+Requires ANTHROPIC_API_KEY environment variable. ``--smoke`` runs a scripted backend.
 
 Example output:
     [task] Read the Python files in ./examples and briefly describe what each one does
@@ -34,6 +34,7 @@ Example output:
     ...
 """
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -42,7 +43,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA, ToolDef
-from llm_saia.examples import LIST_FILES_TOOL, READ_FILE_TOOL, get_backend
+from llm_saia.examples import LIST_FILES_TOOL, READ_FILE_TOOL, add_smoke_arg, get_backend
 from llm_saia.examples import Colors as C
 
 # Define tools the agent can use
@@ -87,8 +88,8 @@ async def execute_tool(name: str, args: dict[str, Any]) -> str:
             return f"Unknown tool: {name}"
 
 
-async def main() -> None:
-    async with get_backend() as backend:
+async def main(smoke: bool) -> None:
+    async with get_backend(smoke=smoke) as backend:
         saia = (
             SAIA.builder()
             .backend(backend)
@@ -119,7 +120,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    args = add_smoke_arg(argparse.ArgumentParser(description="Agent with tool loop")).parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.smoke))
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
+        sys.exit(1)

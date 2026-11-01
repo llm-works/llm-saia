@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
-# ci-skip: requires a live OpenAI-compatible server
+# ci-run: --smoke
 
 """Example: Use the Complete verb with tools to analyze its own source code.
 
@@ -17,6 +17,7 @@ Usage:
     ./examples/analyze.py           # normal output
     ./examples/analyze.py --trace   # with compact trace
     ./examples/analyze.py --trace --full  # with full JSON trace
+    ./examples/analyze.py --smoke   # scripted backend, no model
 
 Example output:
     [task] Analyze ./examples/analyze.py and summarize what it does
@@ -42,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from llm_saia import SAIA, ToolDef
 from llm_saia.examples import (
     READ_FILE_TOOL,
+    add_smoke_arg,
     get_backend,
     print_trace_compact,
     print_trace_full,
@@ -80,13 +82,13 @@ async def main() -> None:  # cq: exempt
     parser = argparse.ArgumentParser(description="Analyze this script with tracing")
     parser.add_argument("--full", action="store_true", help="Show full JSON trace")
     parser.add_argument("--trace", action="store_true", help="Show trace output")
-    args = parser.parse_args()
+    args = add_smoke_arg(parser).parse_args()
 
     # --full implies --trace
     if args.full:
         args.trace = True
 
-    async with get_backend() as backend:
+    async with get_backend(smoke=args.smoke) as backend:
         builder = (
             SAIA.builder()
             .backend(backend)
