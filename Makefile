@@ -4,28 +4,31 @@
 infra := $(shell appinfra scripts-path)
 
 # Configuration
-INFRA_DEV_PKG_NAME := llm_saia
+APPINFRA_DEV_PKG_NAME := llm_saia
 
 # Code quality strictness
 # - true: Fail on any code quality violations (CI mode)
 # - false: Report violations but don't fail (development mode)
-INFRA_DEV_CQ_STRICT := true
+APPINFRA_DEV_CQ_STRICT := true
 
 # Include SPDX header check in `make check`.
-INFRA_DEV_CQ_SPDX := true
+APPINFRA_DEV_CQ_SPDX := true
 
 # No ruff rules reported as warnings only: they are enforced in pyproject's select
-INFRA_DEV_CQ_LINT_SELECT :=
+APPINFRA_DEV_CQ_LINT_SELECT := false
 
 # Fail on duplicated code blocks and unused private definitions
-INFRA_DEV_CQ_DUP := strict
-INFRA_DEV_CQ_DEAD := strict
+APPINFRA_DEV_CQ_DUP := strict
+APPINFRA_DEV_CQ_DEAD := strict
+
+# Report tests that sit in another suite's directory, or leak process-wide state
+APPINFRA_DEV_TEST_HEALTH := strict
 
 # Test coverage threshold (percentage)
-INFRA_PYTEST_COVERAGE_THRESHOLD := 95
+APPINFRA_PYTEST_COVERAGE_THRESHOLD := 95
 
 # Docstring coverage threshold (percentage)
-INFRA_DEV_DOCSTRING_THRESHOLD := 90
+APPINFRA_DEV_DOCSTRING_THRESHOLD := 90
 
 # Include framework (config first)
 include $(infra)/make/Makefile.config
