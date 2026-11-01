@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-run: --smoke
+
 """Investigate a claim: verify → critique → refine
 
 Usage:
     ./investigate.py "Water boils at 100 degrees Celsius"
     LLM_BACKEND=anthropic ./investigate.py "The sky is green"
+    ./investigate.py --smoke    # scripted backend, no model
 
 Example output:
     Claim: Water boils at 100 degrees Celsius
@@ -23,6 +26,7 @@ Example output:
        Water boils at 100 degrees Celsius at sea level under standard atmospheric pressure.
 """
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -31,13 +35,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA
 from llm_saia.examples import Colors as C
-from llm_saia.examples import get_backend
+from llm_saia.examples import add_smoke_arg, get_backend
 
 DEFAULT_CLAIM = "2 + 2 equals 5"
 
 
-async def main(claim: str) -> None:
-    async with get_backend() as backend:
+async def main(claim: str, smoke: bool) -> None:
+    async with get_backend(smoke=smoke) as backend:
         # 2048 keeps critique's weaknesses array from truncating mid-JSON on smaller/local models.
         saia = (
             SAIA.builder()
@@ -69,8 +73,11 @@ async def main(claim: str) -> None:
 
 
 if __name__ == "__main__":
-    claim = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CLAIM
+    parser = argparse.ArgumentParser(description="Investigate a claim")
+    parser.add_argument("claim", nargs="?", default=DEFAULT_CLAIM, help="Claim to investigate")
+    args = add_smoke_arg(parser).parse_args()
     try:
-        asyncio.run(main(claim))
+        asyncio.run(main(args.claim, args.smoke))
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
+        sys.exit(1)

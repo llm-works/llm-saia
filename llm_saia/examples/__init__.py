@@ -3,7 +3,8 @@
 
 """Shared utilities for SAIA examples.
 
-Provides an OpenAI-compatible backend, a simple stderr logger, and trace helpers.
+Provides an OpenAI-compatible backend, a scripted backend for ``--smoke`` runs,
+a simple stderr logger, and trace helpers.
 Production backends should live in llm-infer/client.
 
 Environment variables:
@@ -16,6 +17,7 @@ Environment variables:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -397,13 +399,80 @@ class OpenAIBackend(Backend):
         await self.close()
 
 
+class SmokeBackend(Backend):
+    """Scripted backend for ``--smoke`` runs: no network, no model.
+
+    A structured call gets a JSON object built from its response schema, a plain call a
+    fixed text. With tools offered, the first turn calls the first tool and every later
+    turn the last one, which the examples configure as the terminal tool: the second
+    terminal call confirms it. A run proves the example's wiring, not any answer.
+    """
+
+    async def chat(
+        self,
+        messages: list[Message],
+        system: str | None = None,
+        tools: list[ToolDef] | None = None,
+        response_schema: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        context: dict[str, Any] | None = None,
+        abort_signal: asyncio.Event | None = None,
+    ) -> ChatResponse:
+        """Answer with a tool call, a schema-shaped JSON object, or a fixed text."""
+        if tools:
+            return self._tool_turn(messages, tools)
+        if response_schema:
+            schema = response_schema.get("schema") or response_schema
+            return ChatResponse(content=json.dumps(_smoke_value(schema)), tool_calls=[])
+        return ChatResponse(content="smoke", tool_calls=[])
+
+    def _tool_turn(self, messages: list[Message], tools: list[ToolDef]) -> ChatResponse:
+        """Call the first tool on the first turn, then the last one."""
+        turn = sum(1 for m in messages if m.role == Role.ASSISTANT and m.tool_calls)
+        tool = tools[0] if turn == 0 and len(tools) > 1 else tools[-1]
+        call = ToolCall(id=f"smoke-{turn}", name=tool.name, arguments=_smoke_value(tool.parameters))
+        return ChatResponse(content="", tool_calls=[call])
+
+
+def _smoke_value(spec: dict[str, Any]) -> Any:
+    """A value of the JSON schema's type: objects and arrays filled in, scalars fixed.
+
+    Booleans are false, so a verification fails and the examples run their critique and
+    refine steps too.
+    """
+    if spec.get("enum"):
+        return spec["enum"][0]
+    match spec.get("type"):
+        case "object":
+            props = spec.get("properties", {})
+            return {name: _smoke_value(sub) for name, sub in props.items()}
+        case "array":
+            return [_smoke_value(spec.get("items") or {}) for _ in range(2)]
+        case "boolean":
+            return False
+        case "integer" | "number":
+            return 0
+        case _:
+            return "smoke"
+
+
+def add_smoke_arg(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Add ``--smoke``: run against SmokeBackend instead of a live model."""
+    parser.add_argument("--smoke", action="store_true", help="Scripted backend; no model contacted")
+    return parser
+
+
 @asynccontextmanager
-async def get_backend(model: str | None = None) -> AsyncGenerator[Backend, None]:
+async def get_backend(
+    model: str | None = None, smoke: bool = False
+) -> AsyncGenerator[Backend, None]:
     """Create a backend based on LLM_BACKEND environment variable.
 
     Args:
         model: Override the model name. If not provided, uses LLM_MODEL env var
                or backend-specific defaults.
+        smoke: Yield a SmokeBackend instead, whatever LLM_BACKEND says.
 
     Yields:
         Backend instance ready for use with SAIA.
@@ -426,7 +495,9 @@ async def get_backend(model: str | None = None) -> AsyncGenerator[Backend, None]
     backend_type = os.environ.get("LLM_BACKEND", "openai").lower()
     model = model or os.environ.get("LLM_MODEL")
 
-    if backend_type == "anthropic":
+    if smoke:
+        yield SmokeBackend()
+    elif backend_type == "anthropic":
         try:
             from appinfra.log import Logger as AppLogger
             from llm_infer.client import Factory, SAIAAdapter

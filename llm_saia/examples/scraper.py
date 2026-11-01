@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-run: --smoke
+
 """Build a web scraper: decompose → instruct → synthesize
 
 Usage:
     LLM_BACKEND=anthropic ./scraper.py
+    ./scraper.py --smoke    # scripted backend, no model
 
 Example output:
     [decompose] breaking down: Build a web scraper
@@ -29,6 +32,7 @@ Example output:
     ...
 """
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -37,13 +41,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA
 from llm_saia.examples import Colors as C
-from llm_saia.examples import get_backend
+from llm_saia.examples import add_smoke_arg, get_backend
 
 TASK = "Build a web scraper"
 
 
-async def main() -> None:
-    async with get_backend() as backend:
+async def main(smoke: bool) -> None:
+    async with get_backend(smoke=smoke) as backend:
         saia = SAIA.builder().backend(backend).build()
 
         # Break into subtasks
@@ -73,7 +77,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    args = add_smoke_arg(argparse.ArgumentParser(description="Build a web scraper")).parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.smoke))
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
+        sys.exit(1)

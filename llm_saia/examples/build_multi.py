@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-run: --smoke
+
 """Two LLMs collaborate: local generates, smart verifies.
 
 This example demonstrates SAIA's power for multi-model orchestration:
@@ -34,6 +36,9 @@ Usage:
 
     # Custom models
     LOCAL_MODEL=llama3 SMART_MODEL=claude-3-opus-20240229 SMART_BACKEND=anthropic ./build_multi.py
+
+    # Scripted backends for both roles, no model
+    ./build_multi.py --smoke
 
 Example output:
     Local: http://localhost:18000/v1 | Smart: anthropic
@@ -70,6 +75,7 @@ Example output:
     ```
 """
 
+import argparse
 import asyncio
 import os
 import sys
@@ -81,15 +87,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA
 from llm_saia.core.backend import Backend
-from llm_saia.examples import DEFAULT_ANTHROPIC_MODEL, OpenAIBackend
+from llm_saia.examples import DEFAULT_ANTHROPIC_MODEL, OpenAIBackend, SmokeBackend, add_smoke_arg
 from llm_saia.examples import Colors as C
 
 TASK = "Build a Python unit converter: km/miles, celsius/fahrenheit, kg/pounds"
 
 
 @asynccontextmanager
-async def get_smart_backend() -> AsyncGenerator[Backend, None]:
-    """Get smart backend based on SMART_BACKEND env var."""
+async def get_local_backend(url: str, smoke: bool) -> AsyncGenerator[Backend, None]:
+    """Get the local backend at url, or a SmokeBackend."""
+    if smoke:
+        yield SmokeBackend()
+        return
+    async with OpenAIBackend(model=os.environ.get("LOCAL_MODEL"), base_url=url) as backend:
+        yield backend
+
+
+@asynccontextmanager
+async def get_smart_backend(smoke: bool) -> AsyncGenerator[Backend, None]:
+    """Get smart backend based on SMART_BACKEND env var, or a SmokeBackend."""
+    if smoke:
+        yield SmokeBackend()
+        return
     backend_type = os.environ.get("SMART_BACKEND", "openai").lower()
     model = os.environ.get("SMART_MODEL")
 
@@ -113,17 +132,16 @@ async def get_smart_backend() -> AsyncGenerator[Backend, None]:
             yield backend
 
 
-async def main() -> None:  # cq: exempt
-    local_model = os.environ.get("LOCAL_MODEL")
+async def main(smoke: bool) -> None:  # cq: exempt
     local_url = os.environ.get("LOCAL_URL", "http://localhost:8000/v1")
     smart_type = os.environ.get("SMART_BACKEND", "openai")
 
-    print(f"Local: {local_url} | Smart: {smart_type}")
+    print("Local: smoke | Smart: smoke" if smoke else f"Local: {local_url} | Smart: {smart_type}")
     print(f"Task: {TASK}\n")
 
     async with (
-        OpenAIBackend(model=local_model, base_url=local_url) as local_backend,
-        get_smart_backend() as smart_backend,
+        get_local_backend(local_url, smoke) as local_backend,
+        get_smart_backend(smoke) as smart_backend,
     ):
         local = SAIA.builder().backend(local_backend).build()
         smart = SAIA.builder().backend(smart_backend).build()
@@ -180,8 +198,10 @@ async def main() -> None:  # cq: exempt
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Two LLMs collaborate")
+    args = add_smoke_arg(parser).parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.smoke))
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
         sys.exit(1)

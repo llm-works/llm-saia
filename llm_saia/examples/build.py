@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-run: --smoke
+
 """Build an app: decompose → instruct → ask (combine)
 
 Usage:
     LLM_BACKEND=anthropic ./build.py
+    ./build.py --smoke    # scripted backend, no model
 
 Example output:
     [decompose] 4 subtasks
@@ -29,6 +32,7 @@ Example output:
     ```
 """
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -37,13 +41,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from llm_saia import SAIA
 from llm_saia.examples import Colors as C
-from llm_saia.examples import get_backend
+from llm_saia.examples import add_smoke_arg, get_backend
 
 TASK = "Build a Python unit converter: km/miles, celsius/fahrenheit, kg/pounds"
 
 
-async def main() -> None:
-    async with get_backend() as backend:
+async def main(smoke: bool) -> None:
+    async with get_backend(smoke=smoke) as backend:
         saia = SAIA.builder().backend(backend).build()
 
         # Break into subtasks
@@ -71,7 +75,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    args = add_smoke_arg(argparse.ArgumentParser(description="Build an app")).parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.smoke))
     except Exception as e:
         print(f"\n{C.RED}[error]{C.RESET} {type(e).__name__}: {e}")
+        sys.exit(1)
