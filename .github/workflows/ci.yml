@@ -35,9 +35,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ruff mypy pydantic zizmor==1.31.1 actionlint-py==1.7.12.25
-          # check: pylint, which the duplicated-code check runs
-          python -m pip install "appinfra[check] @ git+https://github.com/llm-works/appinfra.git@develop"
+          # check: ruff, mypy and pylint, which the duplicated-code check runs
+          python -m pip install pydantic "appinfra[check]>=0.14.0" zizmor==1.31.1 actionlint-py==1.7.12.25
 
       - name: Lint workflows
         # zizmor policy in .github/zizmor.yml; actionlint runs shellcheck on run: scripts
@@ -88,8 +87,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-          # check: the test tooling of appinfra.pytest_suites, which tests/conftest.py loads
-          python -m pip install "appinfra[check] @ git+https://github.com/llm-works/appinfra.git@develop"
 
       - name: Run unit tests
         run: python -m pytest tests/ -m unit -v --tb=short
@@ -204,8 +201,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-          # check: the test tooling of appinfra.pytest_suites, which tests/conftest.py loads
-          python -m pip install "appinfra[check] @ git+https://github.com/llm-works/appinfra.git@develop"
 
       - name: Run tests with coverage
         run: python -m pytest tests/ -m unit --cov=llm_saia --cov-fail-under=95 --cov-report=term

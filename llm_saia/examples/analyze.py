@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-skip: requires a live OpenAI-compatible server
+
 """Example: Use the Complete verb with tools to analyze its own source code.
 
 Demonstrates the agentic tool loop with tracing — the LLM reads files, reasons

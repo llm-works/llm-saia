@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-skip: requires a live OpenAI-compatible server
+
 """Agent with tool loop: complete() iterates until done
 
 Requires a model with robust tool calling support. Small or base models often fail

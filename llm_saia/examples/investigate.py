@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-skip: requires a live OpenAI-compatible server
+
 """Investigate a claim: verify → critique → refine
 
 Usage:

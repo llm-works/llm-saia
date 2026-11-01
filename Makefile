@@ -24,6 +24,9 @@ APPINFRA_DEV_CQ_DEAD := strict
 # Report tests that sit in another suite's directory, or leak process-wide state
 APPINFRA_DEV_TEST_HEALTH := strict
 
+# Run every example script as part of `make check`
+APPINFRA_DEV_CHECK_EXAMPLES := true
+
 # Test coverage threshold (percentage)
 APPINFRA_PYTEST_COVERAGE_THRESHOLD := 95
 

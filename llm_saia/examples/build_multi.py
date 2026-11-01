@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 The llm-saia Authors
 
+# ci-skip: requires two live OpenAI-compatible servers
+
 """Two LLMs collaborate: local generates, smart verifies.
 
 This example demonstrates SAIA's power for multi-model orchestration:
