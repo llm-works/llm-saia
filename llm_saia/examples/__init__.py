@@ -436,7 +436,11 @@ class SmokeBackend(Backend):
 
 
 def _smoke_value(spec: dict[str, Any]) -> Any:
-    """A value of the JSON schema's type: objects and arrays filled in, scalars fixed."""
+    """A value of the JSON schema's type: objects and arrays filled in, scalars fixed.
+
+    Booleans are false, so a verification fails and the examples run their critique and
+    refine steps too.
+    """
     if spec.get("enum"):
         return spec["enum"][0]
     match spec.get("type"):
@@ -446,7 +450,7 @@ def _smoke_value(spec: dict[str, Any]) -> Any:
         case "array":
             return [_smoke_value(spec.get("items") or {}) for _ in range(2)]
         case "boolean":
-            return True
+            return False
         case "integer" | "number":
             return 0
         case _:
