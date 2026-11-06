@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Development: `make check` and CI fail on duplicated code blocks, unused private definitions,
   and the ruff rule groups C90, SIM, RET, PIE, PERF and FURB.
+- Building from source requires setuptools>=77.0.3, the first release with working support for
+  the SPDX `license` string.
 
 ### Fixed
 
