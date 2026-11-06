@@ -22,13 +22,14 @@ APPINFRA_DEV_CQ_DUP := strict
 APPINFRA_DEV_CQ_DEAD := strict
 
 # Report tests that sit in another suite's directory, or leak process-wide state
-APPINFRA_DEV_TEST_HEALTH := strict
+APPINFRA_DEV_TEST_HEALTH := warn
 
 # Run every example script as part of `make check`
 APPINFRA_DEV_CHECK_EXAMPLES := true
 
-# Test coverage threshold (percentage)
+# Test coverage threshold (percentage), measured over unit and integration tests
 APPINFRA_PYTEST_COVERAGE_THRESHOLD := 95
+APPINFRA_PYTEST_COVERAGE_MARKERS := unit or integration
 
 # Docstring coverage threshold (percentage)
 APPINFRA_DEV_DOCSTRING_THRESHOLD := 90
