@@ -483,6 +483,15 @@ class TestCutOffAnswers:
         with pytest.raises(TruncatedResponseError):
             await Extract(_make_config(backend))("Extract person", Person)
 
+    @pytest.mark.asyncio
+    async def test_unknown_finish_reason_cut_after_comma(self) -> None:
+        """An object cut off before its next key counts as cut off too."""
+        backend = SequencedMockBackend()
+        backend.queue_response('{"name": "Alice",')
+
+        with pytest.raises(TruncatedResponseError):
+            await Extract(_make_config(backend))("Extract person", Person)
+
 
 class TestRetryFeedback:
     """Feedback names what went wrong in the failed answer."""

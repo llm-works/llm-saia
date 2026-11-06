@@ -34,6 +34,7 @@ _EARLY_END_MESSAGES: tuple[str, ...] = (
     "Expecting value",
     "Expecting ',' delimiter",
     "Expecting ':' delimiter",
+    "Expecting property name",
 )
 
 _EXCERPT_RADIUS = 60  # characters shown on each side of a syntax error
