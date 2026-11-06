@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer, and `schema_retry` feedback names what went wrong (token limit and repetition,
   syntax error position, field path). An answer cut off at the token limit raises
   `TruncatedResponseError`.
+- `schema_retry(N)` keeps its N retries when tool calls or guard retries come first: the retries
+  are added on top of `max_iterations` instead of counting against it.
 
 ## [0.6.3] - 2026-10-25
 

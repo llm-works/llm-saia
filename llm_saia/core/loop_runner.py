@@ -312,9 +312,7 @@ class _LoopRunner:
                 )
                 return None
             case LoopAction.INSTRUCT if decision.rewind_to is not None:
-                await self._do_rewind_and_inject(
-                    decision.rewind_to, messages, conv, decision.message
-                )
+                await self._do_rewind_and_inject(decision, messages, conv)
                 return None
             case LoopAction.INSTRUCT:
                 await self._do_ack_and_inject(response, messages, conv, decision.message)
@@ -383,21 +381,28 @@ class _LoopRunner:
 
     async def _do_rewind_and_inject(
         self,
-        rewind_to: int,
+        decision: LoopDecision,
         messages: list[Message],
         conv: ConversationLike | None,
-        inject: str | None,
     ) -> None:
-        """Drop everything after ``rewind_to``, the current response included.
+        """Drop everything after ``decision.rewind_to``, the current response included.
 
-        ``conv.as_messages()`` is a view of the conversation's messages, so
-        deleting from it rewinds the conversation itself.
+        The decision's stand-in, if any, takes the response's place as an
+        assistant message, then its message is added. ``conv.as_messages()``
+        is a view of the conversation's messages, so deleting from it rewinds
+        the conversation itself.
         """
+        rewind_to = decision.rewind_to or 0
         del messages[rewind_to:]
         if conv:
             del conv.as_messages()[rewind_to:]
-        if inject:
-            await self._inject(inject, messages, conv)
+        if decision.stand_in:
+            msg = self._make_assistant_message(decision.stand_in)
+            messages.append(msg)
+            if conv:
+                await self._host._append_msg(conv, msg)
+        if decision.message:
+            await self._inject(decision.message, messages, conv)
 
     async def _inject(
         self, text: str, messages: list[Message], conv: ConversationLike | None
@@ -446,6 +451,13 @@ class _LoopRunner:
         from .conversation import Message, Role
 
         return Message(role=Role.USER, content=content)
+
+    @staticmethod
+    def _make_assistant_message(content: str) -> Message:
+        """Create an assistant message."""
+        from .conversation import Message, Role
+
+        return Message(role=Role.ASSISTANT, content=content)
 
     @staticmethod
     def _make_tool_ack(tool_call_id: str) -> Message:

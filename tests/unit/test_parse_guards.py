@@ -393,10 +393,14 @@ _LONG_ANSWER = '{"name": "Alice", "bio": "' + " ".join(f"word{i}" for i in range
 
 
 class TestRetryInput:
-    """A retry starts from the original prompt; failed answers are never resent."""
+    """A retry starts from the original prompt; failed answers are never resent.
+
+    The failed answer's place holds a one-line assistant stand-in, then the
+    feedback follows as a user message, so roles keep alternating.
+    """
 
     @pytest.mark.asyncio
-    async def test_cut_off_retry_sends_prompt_and_feedback_only(self) -> None:
+    async def test_cut_off_retry_sends_prompt_stand_in_and_feedback(self) -> None:
         backend = SequencedMockBackend()
         backend.queue_response(_RUNAWAY, finish_reason="length", output_tokens=1200)
         backend.queue_response('{"name": "Alice", "age": 30}')
@@ -405,9 +409,11 @@ class TestRetryInput:
         await extract("Extract person", Person)
 
         first, retry = backend.calls
-        assert retry[:-1] == first
+        assert retry[:-2] == first
+        assert retry[-2].role == Role.ASSISTANT
+        assert retry[-2].content != _RUNAWAY
+        assert len(retry[-2].content) < 100
         assert retry[-1].role == Role.USER
-        assert all(m.role != Role.ASSISTANT for m in retry)
 
     @pytest.mark.asyncio
     async def test_malformed_answer_is_not_resent(self) -> None:
@@ -419,7 +425,7 @@ class TestRetryInput:
         await extract("Extract person", Person)
 
         first, retry = backend.calls
-        assert retry[:-1] == first
+        assert retry[:-2] == first
         assert all('"Alice" "age"' not in m.content for m in retry[:-1])
 
     @pytest.mark.asyncio
@@ -433,8 +439,8 @@ class TestRetryInput:
         await extract("Extract person", Person)
 
         first, retry1, retry2 = backend.calls
-        assert len(retry1) == len(retry2) == len(first) + 1
-        assert retry2[:-1] == first
+        assert len(retry1) == len(retry2) == len(first) + 2
+        assert retry2[:-1] == retry1[:-1]
         assert retry2[-1].content != retry1[-1].content
 
     @pytest.mark.asyncio
@@ -458,15 +464,14 @@ class TestRetryInput:
             tools=[ToolDef(name="lookup", description="Look up.", parameters={"type": "object"})],
             executor=executor,
         )
-        # Tool rounds and parse attempts share the loop's iteration budget.
-        extract = Extract(config).with_max_iterations(4).with_guard(schema_retry(max_retries=2))
+        extract = Extract(config).with_guard(schema_retry(max_retries=2))
 
         await extract("Extract person", Person)
 
         _, _, after_tool, last = backend.calls
         assert last[: len(after_tool)] == after_tool
-        assert len(last) == len(after_tool) + 1
-        assert last[-1].role == Role.USER
+        assert len(last) == len(after_tool) + 2
+        assert [m.role for m in last[-2:]] == [Role.ASSISTANT, Role.USER]
         assert any(m.role == Role.TOOL for m in last)
         failed = (_RUNAWAY, '{"name": "Alice" "age": 30}')
         assert all(m.content not in failed for m in last)
