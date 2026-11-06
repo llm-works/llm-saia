@@ -767,8 +767,10 @@ class Verb(OutputGuardMixin, Configurable):
         """Merge pause state to outer conv on pause, then raise the failure.
 
         Unlike success (which merges a clean ``prompt + final`` pair), pause
-        preserves intermediate retry framing and failed responses because
+        preserves the pending retry feedback and tool exchanges because
         ``resume=True`` needs them to reconstruct the exact loop position.
+        Failed answers are not among them: each parse retry drops them from
+        the inner conversation.
         """
         if result.paused:
             await self._merge_pause_state(conversation, inner_conv, prior_len)
@@ -814,13 +816,13 @@ class Verb(OutputGuardMixin, Configurable):
     ) -> None:
         """Copy the original prompt + final response from ``inner`` to ``outer``.
 
-        Intermediate parse-retry framing and failed responses stay inside the
-        inner conversation so the caller's durable history reads as
-        "asked X, got Y", not the full attempt-by-attempt exchange.
+        Parse-retry feedback stays inside the inner conversation (failed
+        answers are dropped from it on each retry) so the caller's durable
+        history reads as "asked X, got Y", not the attempt-by-attempt exchange.
 
         Under ``resume=True``, no fresh user prompt was seeded — ``new_msgs[0]``
-        would be an assistant turn (possibly a failed reply or bare tool call),
-        so only the final assistant response is merged.
+        would be an assistant turn or retry feedback, so only the final
+        assistant response is merged.
         """
         if outer is None:
             return
@@ -844,10 +846,12 @@ class Verb(OutputGuardMixin, Configurable):
 
         Complements :meth:`_merge_successful_exchange`: success merges only
         the caller-visible pair ``(prompt, final response)`` for a clean
-        history; pause merges every message the loop added — the prompt,
-        intermediate retry framing, failed parses, tool exchanges — so a
-        subsequent call with ``resume=True`` can reconstruct the exact
-        loop state at pause and continue from there.
+        history; pause merges every message the inner conversation holds
+        after the prior history — the prompt, the pending retry feedback,
+        tool exchanges — so a subsequent call with ``resume=True`` can
+        reconstruct the exact loop state at pause and continue from there.
+        Failed answers are not merged: each parse retry drops them from the
+        inner conversation, so it holds what the model is sent next.
         """
         if outer is None:
             return
