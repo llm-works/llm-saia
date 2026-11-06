@@ -9,11 +9,13 @@ success terminates the loop with a typed value, failure delegates to the
 existing :func:`schema_retry` iteration-guard family for retry feedback and
 issues INSTRUCT until parse succeeds or the retry budget is exhausted.
 
-A retry restarts from the point before the first failed answer: the failed
-answer is dropped and only the feedback is added, so every attempt sends the
-original prompt plus one feedback message. Resending a failed answer would
-grow each attempt by its full length (a cut-off answer is as long as the
-token limit) and anchor the model on the text that failed.
+A retry drops the failed answer and adds only the feedback; a retry that
+follows the previous feedback directly replaces it. Without tool calls every
+attempt therefore sends the original prompt plus one feedback message. Tool
+exchanges made between retries are kept, so the model does not call the tools
+again. Resending a failed answer would grow each attempt by its full length
+(a cut-off answer is as long as the token limit) and anchor the model on the
+text that failed.
 """
 
 from __future__ import annotations
@@ -89,8 +91,8 @@ class SchemaTerminatingStrategy(Generic[T]):
         self.parsed_value: T | None = None
         self.last_parse_error: StructuredOutputError | None = None
         self.parse_attempts: int = 0
-        # Message count before the first failed answer; every retry rewinds here.
-        self._retry_from: int | None = None
+        # Index of the latest parse-retry feedback message, once one was sent.
+        self._feedback_at: int | None = None
 
     @property
     def parse_budget(self) -> int:
@@ -128,15 +130,15 @@ class SchemaTerminatingStrategy(Generic[T]):
             self.parsed_value = self._parse(response)
         except StructuredOutputError as err:
             self.last_parse_error = err
-            if self._retry_from is None:
-                self._retry_from = message_count
-            return self._decide_after_parse_failure(response)
+            return self._decide_after_parse_failure(response, message_count)
         self.last_parse_error = None
         return LoopDecision(
             action=LoopAction.COMPLETE, output=response.content, reason="schema_parsed"
         )
 
-    def _decide_after_parse_failure(self, response: ChatResponse) -> LoopDecision:
+    def _decide_after_parse_failure(
+        self, response: ChatResponse, message_count: int
+    ) -> LoopDecision:
         """Choose between fail-fast, exhausted-budget FAIL, or retry INSTRUCT."""
         if not self._retry or self.parse_attempts >= self._parse_budget:
             reason = "parse_error_exhausted" if self._retry else "parse_error"
@@ -148,12 +150,25 @@ class SchemaTerminatingStrategy(Generic[T]):
                 output=response.content,
                 reason="parse_error_no_feedback",
             )
+        rewind_to = self._rewind_point(message_count)
+        self._feedback_at = rewind_to
         return LoopDecision(
             action=LoopAction.INSTRUCT,
             message=feedback,
             reason="parse_retry",
-            rewind_to=self._retry_from,
+            rewind_to=rewind_to,
         )
+
+    def _rewind_point(self, message_count: int) -> int:
+        """Where the retry cuts the conversation before adding its feedback.
+
+        The failed answer is always dropped. When the previous feedback is the
+        last message, the retry replaces it. When tool exchanges followed it,
+        they are kept: dropping them would make the model call the tools again.
+        """
+        if self._feedback_at is not None and message_count == self._feedback_at + 1:
+            return self._feedback_at
+        return message_count
 
     def on_iteration_complete(self, decision: LoopDecision, tokens: int) -> None:
         """Strategy has no per-iteration scoring; hook kept for protocol compliance."""

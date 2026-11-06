@@ -29,7 +29,6 @@ _CUT_OFF_REASONS = frozenset({"length", "max_tokens"})
 # Decoder messages that mean the document ended early; used to spot a cut-off
 # answer only when the backend reports no finish_reason.
 _EARLY_END_MESSAGES: tuple[str, ...] = (
-    "Unterminated string",
     "Unexpected end of JSON",
     "Expecting value",
     "Expecting ',' delimiter",
@@ -114,12 +113,16 @@ def _is_cut_off(content: str, error: Exception, finish_reason: str | None) -> bo
     """True for an answer cut off at the token limit.
 
     ``finish_reason`` decides when the backend reports one. Without it, a
-    decoder error at the very end of the content stands in for it.
+    decoder error at the very end of the content stands in for it. The decoder
+    raises "Unterminated string" only when the input ends before the closing
+    quote, but points at the opening quote, so that message counts on its own.
     """
     if finish_reason is not None:
         return finish_reason in _CUT_OFF_REASONS
     if not isinstance(error, json.JSONDecodeError) or not content.strip():
         return False
+    if error.msg.startswith("Unterminated string"):
+        return True
     early_end = any(error.msg.startswith(m) for m in _EARLY_END_MESSAGES)
     return early_end and not content[error.pos :].strip()
 

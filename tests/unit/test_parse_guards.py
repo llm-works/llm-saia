@@ -20,7 +20,7 @@ from llm_saia import (
 )
 from llm_saia.core.backend import ChatResponse
 from llm_saia.core.config import Config
-from llm_saia.core.conversation import Message, Role
+from llm_saia.core.conversation import Message, Role, ToolCall
 from llm_saia.core.logger import NullLogger
 from llm_saia.core.types import ToolDef
 from llm_saia.guards import schema_retry
@@ -45,13 +45,17 @@ class SequencedMockBackend(MockBackend):
         return self._sequence_index
 
     def queue_response(
-        self, content: str, finish_reason: str | None = None, output_tokens: int = 0
+        self,
+        content: str,
+        finish_reason: str | None = None,
+        output_tokens: int = 0,
+        tool_calls: list[ToolCall] | None = None,
     ) -> None:
         """Queue a response."""
         self._response_sequence.append(
             ChatResponse(
                 content=content,
-                tool_calls=[],
+                tool_calls=tool_calls or [],
                 finish_reason=finish_reason,
                 output_tokens=output_tokens,
             )
@@ -433,6 +437,41 @@ class TestRetryInput:
         assert retry2[:-1] == first
         assert retry2[-1].content != retry1[-1].content
 
+    @pytest.mark.asyncio
+    async def test_tool_exchange_after_feedback_is_kept(self) -> None:
+        """A tool call made during a retry survives the next retry; failed answers do not."""
+        calls: list[str] = []
+
+        async def executor(name: str, args: dict[str, Any]) -> Any:
+            calls.append(name)
+            return {"found": True}
+
+        backend = SequencedMockBackend()
+        backend.queue_response(_RUNAWAY, finish_reason="length", output_tokens=1200)
+        lookup = ToolCall(id="t1", name="lookup", arguments={})
+        backend.queue_response("", tool_calls=[lookup])
+        backend.queue_response('{"name": "Alice" "age": 30}')
+        backend.queue_response('{"name": "Alice", "age": 30}')
+        config = Config(
+            lg=NullLogger(),
+            backend=backend,
+            tools=[ToolDef(name="lookup", description="Look up.", parameters={"type": "object"})],
+            executor=executor,
+        )
+        # Tool rounds and parse attempts share the loop's iteration budget.
+        extract = Extract(config).with_max_iterations(4).with_guard(schema_retry(max_retries=2))
+
+        await extract("Extract person", Person)
+
+        _, _, after_tool, last = backend.calls
+        assert last[: len(after_tool)] == after_tool
+        assert len(last) == len(after_tool) + 1
+        assert last[-1].role == Role.USER
+        assert any(m.role == Role.TOOL for m in last)
+        failed = (_RUNAWAY, '{"name": "Alice" "age": 30}')
+        assert all(m.content not in failed for m in last)
+        assert calls == ["lookup"]
+
 
 class TestCutOffAnswers:
     """finish_reason marks an answer cut off at the token limit."""
@@ -479,6 +518,15 @@ class TestCutOffAnswers:
     async def test_unknown_finish_reason_falls_back_to_content_check(self) -> None:
         backend = SequencedMockBackend()
         backend.queue_response('{"name": "Alice", "age": 3')
+
+        with pytest.raises(TruncatedResponseError):
+            await Extract(_make_config(backend))("Extract person", Person)
+
+    @pytest.mark.asyncio
+    async def test_unknown_finish_reason_cut_inside_string(self) -> None:
+        """An answer that ends inside a string counts as cut off."""
+        backend = SequencedMockBackend()
+        backend.queue_response('{"name": "Al')
 
         with pytest.raises(TruncatedResponseError):
             await Extract(_make_config(backend))("Extract person", Person)
