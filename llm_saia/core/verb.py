@@ -24,7 +24,7 @@ from .conversation import (
     Role,
     ToolCall,
 )
-from .errors import StructuredOutputError, TruncatedResponseError
+from .errors import StructuredOutputError
 from .guard import IterationContext, IterationGuard
 from .guard_eval import _GuardEvaluator
 from .guards import OutputGuardMixin
@@ -50,14 +50,6 @@ class Verb(OutputGuardMixin, Configurable):
     _PREVIEW_LIMIT = 100
     # Truncation limit for trace logs (high ceiling to prevent pathological cases)
     _TRACE_LIMIT = 50_000
-    # Patterns indicating truncated JSON response
-    _TRUNCATION_INDICATORS: tuple[str, ...] = (
-        "Unterminated string",
-        "Unexpected end of JSON",
-        "Expecting value",
-        "Expecting ',' delimiter",
-        "Expecting ':' delimiter",
-    )
 
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
@@ -86,34 +78,6 @@ class Verb(OutputGuardMixin, Configurable):
     def _get_call_options(self, override: CallOptions | None = None) -> CallOptions:
         """Get effective call options: override > instance default > global default."""
         return override or self._call
-
-    def _structured_output_error(
-        self, error: Exception, content: str, schema_name: str
-    ) -> StructuredOutputError:
-        """Create appropriate error for structured output parse failure."""
-        error_msg = str(error)
-        # Only apply truncation heuristic when parser provides a valid int position
-        pos = getattr(error, "pos", None)
-        if not isinstance(pos, int) or pos < 0 or pos > len(content):
-            pos = None
-        is_truncated = pos is not None and any(
-            ind in error_msg for ind in self._TRUNCATION_INDICATORS
-        )
-        if is_truncated and content[pos:].strip():
-            is_truncated = False
-
-        if is_truncated:
-            return TruncatedResponseError(
-                raw_content=content,
-                schema_name=schema_name,
-                parse_error=error_msg,
-            )
-        return StructuredOutputError(
-            f"LLM returned invalid JSON for {schema_name}: {error_msg}",
-            raw_content=content,
-            schema_name=schema_name,
-            parse_error=error_msg,
-        )
 
     @staticmethod
     def _generate_id() -> str:
@@ -803,8 +767,10 @@ class Verb(OutputGuardMixin, Configurable):
         """Merge pause state to outer conv on pause, then raise the failure.
 
         Unlike success (which merges a clean ``prompt + final`` pair), pause
-        preserves intermediate retry framing and failed responses because
+        preserves the pending retry feedback and tool exchanges because
         ``resume=True`` needs them to reconstruct the exact loop position.
+        Failed answers are not among them: each parse retry drops them from
+        the inner conversation.
         """
         if result.paused:
             await self._merge_pause_state(conversation, inner_conv, prior_len)
@@ -850,13 +816,13 @@ class Verb(OutputGuardMixin, Configurable):
     ) -> None:
         """Copy the original prompt + final response from ``inner`` to ``outer``.
 
-        Intermediate parse-retry framing and failed responses stay inside the
-        inner conversation so the caller's durable history reads as
-        "asked X, got Y", not the full attempt-by-attempt exchange.
+        Parse-retry feedback stays inside the inner conversation (failed
+        answers are dropped from it on each retry) so the caller's durable
+        history reads as "asked X, got Y", not the attempt-by-attempt exchange.
 
         Under ``resume=True``, no fresh user prompt was seeded — ``new_msgs[0]``
-        would be an assistant turn (possibly a failed reply or bare tool call),
-        so only the final assistant response is merged.
+        would be an assistant turn or retry feedback, so only the final
+        assistant response is merged.
         """
         if outer is None:
             return
@@ -880,10 +846,12 @@ class Verb(OutputGuardMixin, Configurable):
 
         Complements :meth:`_merge_successful_exchange`: success merges only
         the caller-visible pair ``(prompt, final response)`` for a clean
-        history; pause merges every message the loop added — the prompt,
-        intermediate retry framing, failed parses, tool exchanges — so a
-        subsequent call with ``resume=True`` can reconstruct the exact
-        loop state at pause and continue from there.
+        history; pause merges every message the inner conversation holds
+        after the prior history — the prompt, the pending retry feedback,
+        tool exchanges — so a subsequent call with ``resume=True`` can
+        reconstruct the exact loop state at pause and continue from there.
+        Failed answers are not merged: each parse retry drops them from the
+        inner conversation, so it holds what the model is sent next.
         """
         if outer is None:
             return

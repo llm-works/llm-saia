@@ -43,6 +43,7 @@ from .core.guard import (
     OutputGuardError,
 )
 from .core.logger import Logger, NullLogger
+from .core.parse_failure import ParseFailure, ParseFailureKind
 from .core.trace import (
     CallbackTracer,
     GuardOutcome,
@@ -89,6 +90,8 @@ __all__ = [
     "BackendError",
     "ConfigurationError",
     "OutputGuardError",
+    "ParseFailure",
+    "ParseFailureKind",
     "PauseRequested",
     "StructuredOutputError",
     "ToolExecutionError",
