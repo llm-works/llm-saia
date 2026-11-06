@@ -579,3 +579,36 @@ class TestParseJsonToDataclass:
 
         with pytest.raises(TypeError, match="Invalid value.*for enum"):
             parse_json_to_dataclass({"priority": "invalid"}, Task)
+
+    def test_parse_error_names_nested_field_path(self) -> None:
+        @dataclass
+        class Item:
+            label: Literal["a", "b"]
+
+        @dataclass
+        class Outer:
+            groups: list[list[Item]]
+
+        with pytest.raises(TypeError, match=r"^groups\[0\]\[1\]\.label: Value 'c' not in Literal"):
+            parse_json_to_dataclass({"groups": [[{"label": "a"}, {"label": "c"}]]}, Outer)
+
+    def test_parse_missing_field_names_it(self) -> None:
+        @dataclass
+        class Inner:
+            value: int
+            note: str = ""
+
+        @dataclass
+        class Outer:
+            inner: Inner
+
+        with pytest.raises(TypeError, match=r"^inner: missing required field 'value'$"):
+            parse_json_to_dataclass({"inner": {}}, Outer)
+
+    def test_parse_top_level_error_has_no_path(self) -> None:
+        @dataclass
+        class Schema:
+            field: str
+
+        with pytest.raises(TypeError, match=r"^Expected dict, got list$"):
+            parse_json_to_dataclass(["x"], Schema)

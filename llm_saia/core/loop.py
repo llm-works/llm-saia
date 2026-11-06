@@ -39,6 +39,10 @@ class LoopDecision:
     terminal_data: dict[str, Any] | None = None
     terminal_tool: str | None = None
     reason: str = ""
+    # For INSTRUCT: cut the loop's messages (and its conversation, which must
+    # hold the same messages) back to this length and send ``message`` without
+    # the current response. Used to retry from an earlier point.
+    rewind_to: int | None = None
 
 
 @dataclass

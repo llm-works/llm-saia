@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from .parse_failure import ParseFailure
+
 
 class Error(Exception):
     """Base exception for all SAIA errors."""
@@ -20,6 +22,8 @@ class StructuredOutputError(Error):
         raw_content: The raw response content that failed to parse.
         schema_name: Name of the expected schema/dataclass.
         parse_error: The underlying parse error message.
+        failure: What went wrong, for retry feedback; ``None`` when the error
+            was not raised by a parse attempt.
     """
 
     def __init__(
@@ -29,11 +33,13 @@ class StructuredOutputError(Error):
         raw_content: str | None = None,
         schema_name: str | None = None,
         parse_error: str | None = None,
+        failure: ParseFailure | None = None,
     ) -> None:
         super().__init__(message)
         self.raw_content = raw_content
         self.schema_name = schema_name
         self.parse_error = parse_error
+        self.failure = failure
 
 
 class TruncatedResponseError(StructuredOutputError):
@@ -50,6 +56,7 @@ class TruncatedResponseError(StructuredOutputError):
         raw_content: str | None = None,
         schema_name: str | None = None,
         parse_error: str | None = None,
+        failure: ParseFailure | None = None,
     ) -> None:
         if message is None:
             message = (
@@ -61,6 +68,7 @@ class TruncatedResponseError(StructuredOutputError):
             raw_content=raw_content,
             schema_name=schema_name,
             parse_error=parse_error,
+            failure=failure,
         )
 
 

@@ -311,6 +311,11 @@ class _LoopRunner:
                     decision, response, messages, conv, pause_check, advisory_fb
                 )
                 return None
+            case LoopAction.INSTRUCT if decision.rewind_to is not None:
+                await self._do_rewind_and_inject(
+                    decision.rewind_to, messages, conv, decision.message
+                )
+                return None
             case LoopAction.INSTRUCT:
                 await self._do_ack_and_inject(response, messages, conv, decision.message)
                 return None
@@ -357,10 +362,7 @@ class _LoopRunner:
                     await h._append_msg(conv, msg)
 
         if advisory_fb:
-            msg = self._make_user_message(advisory_fb)
-            messages.append(msg)
-            if conv:
-                await h._append_msg(conv, msg)
+            await self._inject(advisory_fb, messages, conv)
 
     async def _do_ack_and_inject(
         self,
@@ -377,10 +379,34 @@ class _LoopRunner:
         for tc in response.tool_calls or []:
             await self._ack_tool_to(tc, messages, conv)
         if inject:
-            msg = self._make_user_message(inject)
-            messages.append(msg)
-            if conv:
-                await h._append_msg(conv, msg)
+            await self._inject(inject, messages, conv)
+
+    async def _do_rewind_and_inject(
+        self,
+        rewind_to: int,
+        messages: list[Message],
+        conv: ConversationLike | None,
+        inject: str | None,
+    ) -> None:
+        """Drop everything after ``rewind_to``, the current response included.
+
+        ``conv.as_messages()`` is a view of the conversation's messages, so
+        deleting from it rewinds the conversation itself.
+        """
+        del messages[rewind_to:]
+        if conv:
+            del conv.as_messages()[rewind_to:]
+        if inject:
+            await self._inject(inject, messages, conv)
+
+    async def _inject(
+        self, text: str, messages: list[Message], conv: ConversationLike | None
+    ) -> None:
+        """Append a user message to messages and optionally conv."""
+        msg = self._make_user_message(text)
+        messages.append(msg)
+        if conv:
+            await self._host._append_msg(conv, msg)
 
     async def _ack_tool_to(
         self, tc: ToolCall, messages: list[Message], conv: ConversationLike | None

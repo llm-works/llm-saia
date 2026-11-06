@@ -379,25 +379,48 @@ def parse_json_to_dataclass(data: object, schema: type[T]) -> T:
 
     Returns:
         An instance of the schema type.
+
+    Raises:
+        TypeError: If the data does not fit the schema. Errors below the top
+            level start with the field path, e.g. ``items[2].kind: ...``.
     """
+    return _parse_dataclass(data, schema, "")
+
+
+def _parse_dataclass(data: object, schema: type[T], path: str) -> T:
+    """Parse ``data`` into ``schema``; ``path`` locates it in the document."""
     if not isinstance(data, dict):
-        raise TypeError(f"Expected dict, got {type(data)}")
+        raise TypeError(_at(path, f"Expected dict, got {type(data).__name__}"))
 
     hints = get_type_hints(schema)
     parsed_data: dict[str, Any] = {}
 
     for field in dataclasses.fields(cast(type, schema)):
         if field.name not in data:
+            if field.init and _is_required(field):
+                raise TypeError(_at(path, f"missing required field {field.name!r}"))
             continue
 
         field_type = hints[field.name]
         value = data[field.name]
-        parsed_data[field.name] = _parse_field_value(value, field_type)
+        parsed_data[field.name] = _parse_field_value(
+            value, field_type, f"{path}.{field.name}" if path else field.name
+        )
 
     return schema(**parsed_data)
 
 
-def _parse_field_value(value: Any, field_type: type) -> Any:
+def _is_required(field: dataclasses.Field[Any]) -> bool:
+    """True when the dataclass field has neither a default nor a default factory."""
+    return field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING
+
+
+def _at(path: str, message: str) -> str:
+    """Prefix ``message`` with the field path, when there is one."""
+    return f"{path}: {message}" if path else message
+
+
+def _parse_field_value(value: Any, field_type: type, path: str) -> Any:
     """Parse a field value according to its type hint.
 
     Raises:
@@ -414,48 +437,49 @@ def _parse_field_value(value: Any, field_type: type) -> Any:
     origin = get_origin(field_type)
 
     if origin is Literal:
-        return _parse_literal_field(value, field_type)
+        return _parse_literal_field(value, field_type, path)
     if origin is list:
-        return _parse_list_field(value, field_type)
+        return _parse_list_field(value, field_type, path)
     if isinstance(field_type, type) and issubclass(field_type, enum.Enum):
-        return _parse_enum_field(value, field_type)
+        return _parse_enum_field(value, field_type, path)
     if dataclasses.is_dataclass(field_type):
-        return _parse_dataclass_field(value, field_type)
+        return _parse_dataclass_field(value, field_type, path)
 
     return value
 
 
-def _parse_literal_field(value: Any, field_type: type) -> Any:
+def _parse_literal_field(value: Any, field_type: type, path: str) -> Any:
     """Parse a Literal field, validating value is in allowed set."""
     allowed = get_args(field_type)
     if value not in allowed:
-        raise TypeError(f"Value {value!r} not in Literal{list(allowed)}")
+        raise TypeError(_at(path, f"Value {value!r} not in Literal{list(allowed)}"))
     return value
 
 
-def _parse_enum_field(value: Any, enum_type: type[enum.Enum]) -> enum.Enum:
+def _parse_enum_field(value: Any, enum_type: type[enum.Enum], path: str) -> enum.Enum:
     """Parse an enum field, converting value to enum member."""
     try:
         return enum_type(value)
     except ValueError as e:
-        raise TypeError(f"Invalid value {value!r} for enum {enum_type.__name__}: {e}") from e
+        msg = f"Invalid value {value!r} for enum {enum_type.__name__}: {e}"
+        raise TypeError(_at(path, msg)) from e
 
 
-def _parse_list_field(value: Any, field_type: type) -> list[Any]:
+def _parse_list_field(value: Any, field_type: type, path: str) -> list[Any]:
     """Parse a list field, validating type and recursively parsing items."""
     if not isinstance(value, list):
-        raise TypeError(f"Expected list for field type {field_type}, got {type(value).__name__}")
+        msg = f"Expected list for field type {field_type}, got {type(value).__name__}"
+        raise TypeError(_at(path, msg))
     args = get_args(field_type)
     if not args:
         return value
     item_type = args[0]
-    return [_parse_field_value(item, item_type) for item in value]
+    return [_parse_field_value(item, item_type, f"{path}[{i}]") for i, item in enumerate(value)]
 
 
-def _parse_dataclass_field(value: Any, field_type: type) -> Any:
+def _parse_dataclass_field(value: Any, field_type: type, path: str) -> Any:
     """Parse a nested dataclass field, validating type."""
     if not isinstance(value, dict):
-        raise TypeError(
-            f"Expected dict for dataclass field {field_type.__name__}, got {type(value).__name__}"
-        )
-    return parse_json_to_dataclass(value, field_type)
+        msg = f"Expected dict for dataclass field {field_type.__name__}, got {type(value).__name__}"
+        raise TypeError(_at(path, msg))
+    return _parse_dataclass(value, field_type, path)

@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development: `make check` and CI fail on duplicated code blocks, unused private definitions,
   and the ruff rule groups C90, SIM, RET, PIE, PERF and FURB.
 
+### Fixed
+
+- Structured-output retries restart from the original prompt instead of resending the failed
+  answer, and `schema_retry` feedback names what went wrong (token limit and repetition,
+  syntax error position, field path). An answer cut off at the token limit raises
+  `TruncatedResponseError`.
+
 ## [0.6.3] - 2026-10-25
 
 ### Added
