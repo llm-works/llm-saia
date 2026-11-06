@@ -43,6 +43,9 @@ class LoopDecision:
     # hold the same messages) back to this length and send ``message`` without
     # the current response. Used to retry from an earlier point.
     rewind_to: int | None = None
+    # With rewind_to: an assistant message put where the dropped response was,
+    # so user and assistant turns keep alternating.
+    stand_in: str | None = None
 
 
 @dataclass

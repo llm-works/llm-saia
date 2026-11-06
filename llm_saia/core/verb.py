@@ -862,17 +862,19 @@ class Verb(OutputGuardMixin, Configurable):
     def _bump_iterations_for_parse_budget(
         config: CallOptions, strategy: SchemaTerminatingStrategy[Any]
     ) -> CallOptions:
-        """Ensure the loop budget covers the parse-retry budget.
+        """Add the parse retries on top of the loop's iteration budget.
 
         Parse retries share the loop's iteration counter under the unified
-        engine. Consumers who configure ``schema_retry(max_retries=N)`` still
-        expect N retries even when ``max_iterations`` is lower. Zero
-        (unlimited) is left untouched.
+        engine. ``max_iterations`` budgets the tool rounds and the first
+        answer; ``schema_retry(max_retries=N)`` adds N iterations, so its N
+        retries stay available however many tool rounds or guard retries
+        precede them. Zero (unlimited) is left untouched.
         """
         from dataclasses import replace
 
-        if config.max_iterations > 0 and strategy.parse_budget > config.max_iterations:
-            return replace(config, max_iterations=strategy.parse_budget)
+        retries = strategy.parse_budget - 1
+        if config.max_iterations > 0 and retries > 0:
+            return replace(config, max_iterations=config.max_iterations + retries)
         return config
 
     async def _seed_inner_conv(
