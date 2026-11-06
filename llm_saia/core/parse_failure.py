@@ -110,13 +110,17 @@ def diagnose_schema_error(error: Exception) -> ParseFailure:
 
 
 def _is_cut_off(content: str, error: Exception, finish_reason: str | None) -> bool:
-    """True for an answer cut off at the token limit.
+    """True for an answer cut off at the token limit before its JSON was complete.
 
+    "Extra data" means the JSON was complete and text followed it; when that
+    text ran into the limit, the cut is not what went wrong. Otherwise
     ``finish_reason`` decides when the backend reports one. Without it, a
     decoder error at the very end of the content stands in for it. The decoder
     raises "Unterminated string" only when the input ends before the closing
     quote, but points at the opening quote, so that message counts on its own.
     """
+    if isinstance(error, json.JSONDecodeError) and error.msg == "Extra data":
+        return False
     if finish_reason is not None:
         return finish_reason in _CUT_OFF_REASONS
     if not isinstance(error, json.JSONDecodeError) or not content.strip():

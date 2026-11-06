@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
 
+from .conversation import Role
 from .errors import StructuredOutputError, TruncatedResponseError
 from .guard import IterationContext, IterationGuard
 from .loop import LoopAction, LoopDecision
@@ -96,8 +97,6 @@ class SchemaTerminatingStrategy(Generic[T]):
         self.parsed_value: T | None = None
         self.last_parse_error: StructuredOutputError | None = None
         self.parse_attempts: int = 0
-        # Index of the latest retry's stand-in answer, followed by its feedback.
-        self._retry_at: int | None = None
 
     @property
     def parse_budget(self) -> int:
@@ -123,26 +122,26 @@ class SchemaTerminatingStrategy(Generic[T]):
         # once the model returns a candidate answer.
         if response.tool_calls:
             return LoopDecision(action=LoopAction.EXECUTE_TOOLS, reason="has_tool_calls")
-        return self._decide_after_parse(response, len(messages))
+        return self._decide_after_parse(response, messages)
 
-    def _decide_after_parse(self, response: ChatResponse, message_count: int) -> LoopDecision:
+    def _decide_after_parse(self, response: ChatResponse, messages: list[Message]) -> LoopDecision:
         """Attempt to parse the response and translate the outcome to a decision.
 
-        ``message_count`` is the loop's message count before ``response``.
+        ``messages`` is the conversation sent for ``response``.
         """
         self.parse_attempts += 1
         try:
             self.parsed_value = self._parse(response)
         except StructuredOutputError as err:
             self.last_parse_error = err
-            return self._decide_after_parse_failure(response, message_count)
+            return self._decide_after_parse_failure(response, messages)
         self.last_parse_error = None
         return LoopDecision(
             action=LoopAction.COMPLETE, output=response.content, reason="schema_parsed"
         )
 
     def _decide_after_parse_failure(
-        self, response: ChatResponse, message_count: int
+        self, response: ChatResponse, messages: list[Message]
     ) -> LoopDecision:
         """Choose between fail-fast, exhausted-budget FAIL, or retry INSTRUCT."""
         if not self._retry or self.parse_attempts >= self._parse_budget:
@@ -155,27 +154,33 @@ class SchemaTerminatingStrategy(Generic[T]):
                 output=response.content,
                 reason="parse_error_no_feedback",
             )
-        rewind_to = self._rewind_point(message_count)
-        self._retry_at = rewind_to
         return LoopDecision(
             action=LoopAction.INSTRUCT,
             message=feedback,
             reason="parse_retry",
-            rewind_to=rewind_to,
+            rewind_to=self._rewind_point(messages),
             stand_in=_STAND_IN,
         )
 
-    def _rewind_point(self, message_count: int) -> int:
+    @staticmethod
+    def _rewind_point(messages: list[Message]) -> int:
         """Where the retry cuts the conversation before adding its messages.
 
         The failed answer is always dropped. When the previous retry's
         stand-in and feedback are the last messages, the retry replaces them.
         When tool exchanges followed them, they are kept: dropping them would
-        make the model call the tools again.
+        make the model call the tools again. Reading this from the
+        conversation, not from state kept here, holds across a resumed call.
         """
-        if self._retry_at is not None and message_count == self._retry_at + 2:
-            return self._retry_at
-        return message_count
+        n = len(messages)
+        if (
+            n >= 2
+            and messages[-2].role == Role.ASSISTANT
+            and messages[-2].content == _STAND_IN
+            and messages[-1].role == Role.USER
+        ):
+            return n - 2
+        return n
 
     def on_iteration_complete(self, decision: LoopDecision, tokens: int) -> None:
         """Strategy has no per-iteration scoring; hook kept for protocol compliance."""
