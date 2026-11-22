@@ -54,7 +54,6 @@ class Verb(OutputGuardMixin, Configurable):
     def __init__(self, config: Config):
         """Initialize verb with configuration."""
         self._config = config
-        self._memory: dict[str, Any] = {}  # Verbs don't use memory
         self._lg = config.lg
 
     def _clone(self, config: Config) -> Self:

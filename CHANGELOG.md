@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building from source requires setuptools>=77.0.3, the first release with working support for
   the SPDX `license` string.
 
+### Removed
+
+- `SAIA.store()` / `SAIA.recall()` and `llm_saia.verbs.store` / `recall`. The in-memory dict was
+  shared by every `with_*()` variant of an instance, so callers sharing one SAIA saw each
+  other's entries.
+
 ### Fixed
 
 - Structured-output retries restart from the original prompt instead of resending the failed

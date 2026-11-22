@@ -31,8 +31,6 @@ from llm_saia.verbs import (
     Refine,
     Synthesize,
     Verify,
-    recall,
-    store,
 )
 from llm_saia.verbs.decompose import DecomposeResult
 from tests.unit.conftest import MockBackend
@@ -415,21 +413,3 @@ class TestDecompose:
         assert result.trace.trace_id
         assert result.trace.verb == "Decompose"
         assert len(result.trace.steps) >= 1
-
-
-class TestMemory:
-    def test_store_and_recall(self) -> None:
-        memory: dict[str, object] = {}
-        store(memory, "key1", "value1")
-        store(memory, "other_key", "value2")
-
-        assert recall(memory, "key1") == ["value1"]
-        assert recall(memory, "key") == ["value1", "value2"]
-        assert recall(memory, "nonexistent") == []
-
-    def test_recall_case_insensitive(self) -> None:
-        memory: dict[str, object] = {}
-        store(memory, "MyKey", "value")
-
-        assert recall(memory, "mykey") == ["value"]
-        assert recall(memory, "MYKEY") == ["value"]
