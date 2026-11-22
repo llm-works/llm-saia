@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Development: `make check` and CI fail on duplicated code blocks, unused private definitions,
   and the ruff rule groups C90, SIM, RET, PIE, PERF and FURB.
+- Building from source requires setuptools>=77.0.3, the first release with working support for
+  the SPDX `license` string.
+
+### Removed
+
+- `SAIA.store()` / `SAIA.recall()` and `llm_saia.verbs.store` / `recall`. The in-memory dict was
+  shared by every `with_*()` variant of an instance, so callers sharing one SAIA saw each
+  other's entries.
 
 ### Fixed
 

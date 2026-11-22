@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Self, TypeVar
+from typing import TYPE_CHECKING, Self, TypeVar
 
 from .core.config import DEFAULT_CALL, CallOptions, Config
 from .core.configurable import Configurable
@@ -59,18 +59,17 @@ class SAIA(Configurable):
 
         return SAIABuilder()
 
-    def __init__(self, config: Config, *, _memory: dict[str, Any] | None = None):
+    def __init__(self, config: Config):
         """Initialize SAIA with configuration."""
         # Apply default call options if not specified
         if config.call is None:
             config = replace(config, call=DEFAULT_CALL)
         self._config = config
-        self._memory = _memory if _memory is not None else {}
         self._init_verbs()
 
     def _clone(self, config: Config) -> Self:
-        """Create a new instance with modified config. Preserves memory."""
-        return self.__class__(config, _memory=self._memory)
+        """Create a new instance with modified config."""
+        return self.__class__(config)
 
     def _init_verbs(self) -> None:
         """Initialize verb instances with current config."""
@@ -174,16 +173,6 @@ class SAIA(Configurable):
             pause_check=pause_check,
             resume=resume,
         )
-
-    # --- Memory Verbs ---
-
-    def recall(self, query: str) -> list[Any]:
-        """RECALL: Retrieve values from memory matching query."""
-        return [v for k, v in self._memory.items() if query.lower() in k.lower()]
-
-    def store(self, key: str, value: Any) -> None:
-        """STORE: Save a value to memory."""
-        self._memory[key] = value
 
     # --- Prompt Utilities ---
 

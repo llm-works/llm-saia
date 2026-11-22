@@ -24,7 +24,7 @@ class Configurable(ABC):
     """Interface for fluent per-call configuration overrides.
 
     Provides immutable `with_*()` methods that return new instances with
-    modified configuration. All methods preserve shared state (like memory).
+    modified configuration.
 
     Example:
         >>> result = await saia.with_temperature(1.0).verify(claim)
@@ -32,11 +32,10 @@ class Configurable(ABC):
     """
 
     _config: Config
-    _memory: dict[str, Any]
 
     @abstractmethod
     def _clone(self, config: Config) -> Self:
-        """Create a new instance with the given config. Must preserve shared state."""
+        """Create a new instance with the given config."""
         ...
 
     def _with_config(self, **kwargs: Any) -> Self:

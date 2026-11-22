@@ -21,7 +21,6 @@ class TestSAIA:
     def test_init(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
         assert saia._config.backend is mock_backend
-        assert saia._memory == {}
 
     async def test_ask(self, mock_backend: MockBackend) -> None:
         saia = make_saia(mock_backend)
@@ -128,21 +127,6 @@ class TestSAIA:
         result = await saia.decompose("big task")
 
         assert result.value == ["task1", "task2"]
-
-    def test_store_and_recall(self, mock_backend: MockBackend) -> None:
-        saia = make_saia(mock_backend)
-
-        saia.store("key", "value")
-        result = saia.recall("key")
-
-        assert result == ["value"]
-
-    def test_recall_empty(self, mock_backend: MockBackend) -> None:
-        saia = make_saia(mock_backend)
-
-        result = saia.recall("nonexistent")
-
-        assert result == []
 
     def test_compose_simple(self, mock_backend: MockBackend) -> None:
         """Test basic composition with multiple layers."""

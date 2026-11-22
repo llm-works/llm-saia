@@ -387,13 +387,6 @@ class TestWithRequestId:
         assert tagged.config.call.request_id == "req-1"
         assert saia.config.call.request_id is None
 
-    async def test_with_request_id_shares_memory(self, mock_backend: MockBackend) -> None:
-        """with_request_id shares memory with parent."""
-        saia = make_saia(mock_backend)
-        saia.store("key", "value")
-        tagged = saia.with_request_id("req-1")
-        assert tagged.recall("key") == ["value"]
-
     async def test_with_request_id_propagates_to_complete(self, mock_backend: MockBackend) -> None:
         """request_id from with_request_id reaches Complete result."""
         saia = make_saia(

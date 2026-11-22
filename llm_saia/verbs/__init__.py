@@ -16,7 +16,6 @@ from .extract import Extract
 from .find import Find
 from .ground import Ground
 from .instruct import Instruct
-from .memory import recall, store
 from .refine import Refine
 from .synthesize import Synthesize
 from .verify import Verify
@@ -40,7 +39,4 @@ __all__ = [
     "Refine",
     "Synthesize",
     "Verify",
-    # Memory functions (non-LLM)
-    "recall",
-    "store",
 ]

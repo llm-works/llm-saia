@@ -112,13 +112,6 @@ async def main():
 | `ground` | Anchor claims to source evidence | `list[Evidence]` |
 | `instruct` | Execute open-ended instructions | `str` |
 
-### Memory Verbs
-
-| Verb | Purpose |
-|------|---------|
-| `store` | Save value to memory |
-| `recall` | Retrieve from memory by query |
-
 ## Configuration
 
 SAIA has no config files. Configuration is a `Config` dataclass constructed by the caller through
